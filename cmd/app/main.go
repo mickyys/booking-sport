@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"time"
@@ -17,6 +18,23 @@ import (
 )
 
 func main() {
+	// Logger setup for local development
+	logFile, err := os.OpenFile("app.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err == nil {
+		// Output to both stdout and file
+		multiWriter := io.MultiWriter(os.Stdout, logFile)
+		log.SetOutput(multiWriter)
+		// Configure Gin to also write to both
+		gin.DefaultWriter = multiWriter
+		gin.DefaultErrorWriter = multiWriter
+
+		log.Println("--- Application Start ---")
+		log.Printf("Logging to app.log and stdout\n")
+		// No usar defer logFile.Close() aquí si el proceso es de larga duración y queremos asegurar el flush
+	} else {
+		fmt.Printf("Error opening log file: %v\n", err)
+	}
+
 	// 1. Configurar conexión a MongoDB (usando env o valor por defecto)
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
@@ -91,8 +109,6 @@ func main() {
 		api.GET("/bookings/my-bookings", bookingHandler.GetUserBookings)
 		api.GET("/bookings/confirmed/count", bookingHandler.GetConfirmedCount)
 		api.POST("/bookings/:id/cancel", bookingHandler.CancelBooking)
-		// Aquí puedes agregar rutas protegidas de la misma forma:
-		// api.GET("/protected-resource", resourceHandler.Get)
 	}
 
 	// 6. Iniciar Servidor

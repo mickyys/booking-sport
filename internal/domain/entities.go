@@ -23,6 +23,20 @@ type Contact struct {
 	Email string `bson:"email" json:"email"`
 }
 
+type FintocPaymentConfig struct {
+	SecretKey string `bson:"secret_key" json:"secret_key"`
+}
+
+type FintocWebhookConfig struct {
+	ID        string `bson:"id" json:"id"`
+	SecretKey string `bson:"secret_key" json:"secret_key"`
+}
+
+type FintocConfig struct {
+	Payment FintocPaymentConfig `bson:"payment" json:"payment"`
+	Webhook FintocWebhookConfig `bson:"webhook" json:"webhook"`
+}
+
 type SportCenter struct {
 	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
 	Name        string             `bson:"name" json:"name"`
@@ -30,7 +44,8 @@ type SportCenter struct {
 	Coordinates Coordinates        `bson:"coordinates" json:"coordinates"`
 	Services    []string           `bson:"services" json:"services"`
 	Contact     Contact            `bson:"contact" json:"contact"`
-	Users       []string           `bson:"users" json:"users"` // Usuarios asociados al centro
+	Fintoc      *FintocConfig      `bson:"fintoc,omitempty" json:"-"` // Ocultar datos privados de Fintoc
+	Users       []string           `bson:"users" json:"users"`        // Usuarios asociados al centro
 	CreatedAt   time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt   time.Time          `bson:"updated_at" json:"updated_at"`
 }
@@ -88,6 +103,7 @@ const (
 type Booking struct {
 	ID                    primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
 	CourtID               primitive.ObjectID `bson:"court_id" json:"court_id"`
+	SportCenterID         primitive.ObjectID `bson:"sport_center_id" json:"sport_center_id"`
 	CourtName             string             `bson:"court_name,omitempty" json:"court_name,omitempty"`
 	SportCenterName       string             `bson:"sport_center_name,omitempty" json:"sport_center_name,omitempty"`
 	UserID                string             `bson:"user_id,omitempty" json:"user_id,omitempty"`

@@ -2,11 +2,72 @@ package fintoc
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
+	"strings"
 )
+
+func VerifySignature(payload []byte, signatureHeader string, secret string) bool {
+
+	parts := strings.Split(signatureHeader, ",")
+	var t, v1 string
+	for _, part := range parts {
+		kv := strings.Split(part, "=")
+		if len(kv) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(kv[0])
+		value := strings.TrimSpace(kv[1])
+		if key == "t" {
+			t = value
+		} else if key == "v1" {
+			v1 = value
+		}
+	}
+
+	if t == "" || v1 == "" {
+		log.Printf("[FINTOC] Missing t or v1 in signature header")
+		return false
+	}
+
+	// 2. Re-building the signed message
+	// Re-build the message using: {timestamp}.{raw_body}
+	message := t + "." + string(payload)
+
+	// 3. Generating the signature
+	// Using SHA-256 and the secret
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(message))
+	generatedSignature := hex.EncodeToString(mac.Sum(nil))
+
+	// 4. Comparing the signatures
+	// Use hmac.Equal for a constant-time comparison
+
+	log.Println("v1:", v1)
+	log.Println("Generated Signature:", generatedSignature)
+
+	isValid := hmac.Equal([]byte(v1), []byte(generatedSignature))
+
+	if !isValid {
+		log.Printf("[DEBUG FINTOC] Signature Mismatch!")
+		log.Printf("Timestamp (t): %s", t)
+		log.Printf("Received Signature (v1): %s", v1)
+		log.Printf("Expected Signature: %s", generatedSignature)
+		// Opcional: Log del message construido para depurar discrepancias de body
+		// log.Printf("Signed Message: %s", message)
+	} else {
+		log.Printf("[DEBUG FINTOC] Signature Verified Successfully for t=%s", t)
+	}
+
+	return isValid
+}
 
 type CheckoutSessionRequest struct {
 	Amount        int               `json:"amount"`
@@ -30,9 +91,13 @@ type Client struct {
 }
 
 func NewClient(secretKey string) *Client {
+	baseURL := os.Getenv("FINTOC_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://api.fintoc.com/v1"
+	}
 	return &Client{
 		SecretKey: secretKey,
-		BaseURL:   "https://api.fintoc.com/v1",
+		BaseURL:   baseURL,
 	}
 }
 

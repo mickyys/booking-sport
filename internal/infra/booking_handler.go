@@ -1,8 +1,11 @@
 package infra
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"math"
 	"net/http"
 	"os"
@@ -11,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/hamp/booking-sport/internal/app"
 	"github.com/hamp/booking-sport/internal/domain"
+	"github.com/hamp/booking-sport/pkg/fintoc"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -39,19 +43,66 @@ func (h *BookingHandler) CreateFintocPaymentIntent(c *gin.Context) {
 }
 
 func (h *BookingHandler) FintocWebhook(c *gin.Context) {
+	// 1. Read body to verify signature before unmarshaling
+	bodyBytes, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read request body"})
+		return
+	}
+	// Restore body for ShouldBindJSON later if needed, but we'll use json.Unmarshal
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
 	var event struct {
 		ID   string          `json:"id"`
 		Type string          `json:"type"`
 		Data json.RawMessage `json:"data"`
 	}
 
-	if err := c.ShouldBindJSON(&event); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	if err := json.Unmarshal(bodyBytes, &event); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
 	}
 
+	// 2. Validate Signature if header present
+	signature := c.GetHeader("Fintoc-Signature")
+	if signature != "" {
+		// Extract generic ID from data to find the sport center and its secret
+		var data struct {
+			ID string `json:"id"`
+		}
+		json.Unmarshal(event.Data, &data)
+
+		// We use the ID to find the booking/center (could be checkout session or intent ID)
+		secret, err := h.useCase.GetWebhookSecret(c.Request.Context(), data.ID)
+
+		if err != nil {
+			log.Printf("[FINTOC WEBHOOK] ERROR GETTING SECRET for ID %s: %v\n", data.ID, err)
+		}
+
+		if err == nil {
+			if !fintoc.VerifySignature(bodyBytes, signature, secret) {
+				log.Printf("[FINTOC WEBHOOK] INVALID SIGNATURE for ID: %s\n", data.ID)
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid signature"})
+				return
+			}
+			// Log valid signature with center and amount if possible
+			booking, errB := h.useCase.GetBookingByFintocID(c.Request.Context(), data.ID)
+			if errB == nil && booking != nil {
+				center, _ := h.useCase.GetSportCenterByID(c.Request.Context(), booking.SportCenterID)
+				centerName := "Unknown"
+				if center != nil {
+					centerName = center.Name
+				}
+				log.Printf("[FINTOC WEBHOOK] VALID SIGNATURE - Center: %s, Amount: %.2f, Event: %s, ID: %s\n",
+					centerName, booking.Price, event.Type, data.ID)
+			} else {
+				log.Printf("[FINTOC WEBHOOK] VALID SIGNATURE (Unknown Booking) - Event: %s, ID: %s\n", event.Type, data.ID)
+			}
+		}
+	}
+
 	// Logs para debugging del webhook
-	fmt.Printf("[FINTOC WEBHOOK] Evento recibido: %s\n", event.Type)
+	log.Printf("[FINTOC WEBHOOK] Evento recibido: %s\n", event.Type)
 
 	switch event.Type {
 	case "checkout_session.finished":

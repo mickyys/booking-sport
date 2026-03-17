@@ -81,9 +81,9 @@ func (r *BookingRepository) FindByBookingCode(ctx context.Context, code string) 
 	return &booking, nil
 }
 
-func (r *BookingRepository) UpdateStatus(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paymentID string) error {
+func (r *BookingRepository) UpdateStatus(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus) error {
 	filter := bson.M{"_id": id}
-	update := bson.M{"$set": bson.M{"status": status, "fintoc_payment_id": paymentID}}
+	update := bson.M{"$set": bson.M{"status": status}}
 	_, err := r.collection.UpdateOne(ctx, filter, update)
 	return err
 }

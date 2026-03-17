@@ -43,11 +43,17 @@ func (h *SportCenterHandler) List(c *gin.Context) {
 }
 
 func (h *SportCenterHandler) Create(c *gin.Context) {
-	var center domain.SportCenter
-	if err := c.ShouldBindJSON(&center); err != nil {
+	var body struct {
+		domain.SportCenter
+		Fintoc *domain.FintocConfig `json:"fintoc"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	center := body.SportCenter
+	center.Fintoc = body.Fintoc
+
 	if err := h.useCase.CreateSportCenter(c.Request.Context(), &center); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -63,11 +69,16 @@ func (h *SportCenterHandler) Update(c *gin.Context) {
 		return
 	}
 
-	var center domain.SportCenter
-	if err := c.ShouldBindJSON(&center); err != nil {
+	var body struct {
+		domain.SportCenter
+		Fintoc *domain.FintocConfig `json:"fintoc"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	center := body.SportCenter
+	center.Fintoc = body.Fintoc
 
 	if err := h.useCase.UpdateSportCenter(c.Request.Context(), id, &center); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

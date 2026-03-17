@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -64,10 +65,21 @@ func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking
 	booking.FinalPrice = price
 	booking.Status = domain.BookingStatusPending
 	booking.BookingCode = generateBookingCode()
+	booking.SportCenterID = court.SportCenterID
 	booking.CreatedAt = time.Now()
 	booking.UpdatedAt = time.Now()
 
-	fintocSecret := os.Getenv("FINTOC_SECRET_KEY")
+	// Obtener el centro deportivo para sacar la secret key de Fintoc
+	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
+	if err != nil {
+		return "", fmt.Errorf("sport center not found: %w", err)
+	}
+
+	if center.Fintoc == nil || center.Fintoc.Payment.SecretKey == "" {
+		return "", fmt.Errorf("fintoc payment not configured for this sport center")
+	}
+
+	fintocSecret := center.Fintoc.Payment.SecretKey
 	urlPaymentCallback := os.Getenv("URL_PAYMENT_CALLBACK")
 
 	client := fintoc.NewClient(fintocSecret)
@@ -114,8 +126,23 @@ func (uc *BookingUseCase) HandleFintocCheckoutFinished(ctx context.Context, chec
 }
 
 func (uc *BookingUseCase) GetFintocPaymentStatus(ctx context.Context, paymentIntentID string) (string, error) {
-	fintocSecret := os.Getenv("FINTOC_SECRET_KEY")
-	client := fintoc.NewClient(fintocSecret)
+	// Buscar la reserva para saber a qué centro pertenece
+	booking, err := uc.repo.FindByFintocPaymentIntentID(ctx, paymentIntentID)
+	if err != nil {
+		return "", fmt.Errorf("booking not found for payment intent: %w", err)
+	}
+
+	// Obtener el centro para sacar la secret key
+	center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
+	if err != nil {
+		return "", fmt.Errorf("sport center not found: %w", err)
+	}
+
+	if center.Fintoc == nil || center.Fintoc.Payment.SecretKey == "" {
+		return "", fmt.Errorf("fintoc not configured for this center")
+	}
+
+	client := fintoc.NewClient(center.Fintoc.Payment.SecretKey)
 
 	res, err := client.GetPaymentIntent(paymentIntentID)
 	if err != nil {
@@ -138,8 +165,17 @@ func (uc *BookingUseCase) ValidateFintocPaymentAndGetCode(ctx context.Context, b
 
 	// Si el estado es pendiente, consultamos Fintoc
 	if booking.Status == domain.BookingStatusPending && booking.FintocPaymentID != "" {
-		fintocSecret := os.Getenv("FINTOC_SECRET_KEY")
-		client := fintoc.NewClient(fintocSecret)
+		// Obtener el centro para sacar la secret key
+		center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
+		if err != nil {
+			return booking.BookingCode, fmt.Errorf("sport center not found: %w", err)
+		}
+
+		if center.Fintoc == nil || center.Fintoc.Payment.SecretKey == "" {
+			return booking.BookingCode, fmt.Errorf("fintoc not configured for this center")
+		}
+
+		client := fintoc.NewClient(center.Fintoc.Payment.SecretKey)
 
 		// 1. Consultar la sesión de checkout
 		session, err := client.GetCheckoutSession(booking.FintocPaymentID)
@@ -187,6 +223,49 @@ func (uc *BookingUseCase) HandleFintocRefund(ctx context.Context, paymentIntentI
 	return uc.repo.AddRefund(ctx, paymentIntentID, refund)
 }
 
+func (uc *BookingUseCase) GetWebhookSecret(ctx context.Context, id string) (string, error) {
+	var booking *domain.Booking
+	var err error
+
+	// 1. First try by Checkout Session ID (fintoc_payment_id)
+	log.Printf("GetWebhookSecret - trying to find booking by Checkout Session ID: %s\n", id)
+	booking, err = uc.repo.FindByFintocPaymentID(ctx, id)
+	if err != nil || booking == nil {
+		// 2. Then try by Payment Intent ID (fintoc_payment_intent_id)
+		log.Printf("GetWebhookSecret - trying to find booking by Payment Intent ID: %s\n", id)
+		booking, err = uc.repo.FindByFintocPaymentIntentID(ctx, id)
+	}
+
+	log.Printf("Booking =====> %+v\n", booking)
+	if err != nil || booking == nil {
+		return "", fmt.Errorf("booking not found for webhook validation (ID: %s)", id)
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
+	if err != nil {
+		return "", fmt.Errorf("sport center not found for webhook validation")
+	}
+	log.Printf("Center =====> %+v\n", center)
+	if center.Fintoc == nil || center.Fintoc.Webhook.SecretKey == "" {
+		return "", fmt.Errorf("fintoc webhook secret not configured")
+	}
+
+	log.Printf("Webhook ======> %s\n", center.Fintoc.Webhook.SecretKey)
+	return center.Fintoc.Webhook.SecretKey, nil
+}
+
+func (uc *BookingUseCase) GetBookingByFintocID(ctx context.Context, fintocID string) (*domain.Booking, error) {
+	booking, err := uc.repo.FindByFintocPaymentID(ctx, fintocID)
+	if err != nil || booking == nil {
+		booking, err = uc.repo.FindByFintocPaymentIntentID(ctx, fintocID)
+	}
+	return booking, err
+}
+
+func (uc *BookingUseCase) GetSportCenterByID(ctx context.Context, id primitive.ObjectID) (*domain.SportCenter, error) {
+	return uc.centerRepo.FindByID(ctx, id)
+}
+
 func (uc *BookingUseCase) HandleFintocWebhook(ctx context.Context, id string, status string) error {
 	// Intentamos buscar por PaymentIntentID primero, luego por CheckoutSessionID (para compatibilidad)
 	booking, err := uc.repo.FindByFintocPaymentIntentID(ctx, id)
@@ -207,7 +286,7 @@ func (uc *BookingUseCase) HandleFintocWebhook(ctx context.Context, id string, st
 		newStatus = domain.BookingStatusCancelled
 	}
 
-	err = uc.repo.UpdateStatus(ctx, booking.ID, newStatus, id)
+	err = uc.repo.UpdateStatus(ctx, booking.ID, newStatus)
 	if err != nil {
 		return err
 	}
@@ -244,7 +323,7 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 	}
 
 	// Actualizar estado a cancelado
-	err = uc.repo.UpdateStatus(ctx, id, domain.BookingStatusCancelled, "")
+	err = uc.repo.UpdateStatus(ctx, id, domain.BookingStatusCancelled)
 	if err != nil {
 		return fmt.Errorf("error updating booking status: %w", err)
 	}

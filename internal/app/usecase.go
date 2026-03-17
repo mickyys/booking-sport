@@ -29,7 +29,7 @@ type BookingRepository interface {
 	FindByFintocPaymentID(ctx context.Context, fintocPaymentID string) (*domain.Booking, error)
 	FindByFintocPaymentIntentID(ctx context.Context, paymentIntentID string) (*domain.Booking, error)
 	FindByBookingCode(ctx context.Context, code string) (*domain.Booking, error)
-	UpdateStatus(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paymentID string) error
+	UpdateStatus(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus) error
 	UpdateFintocPaymentIntentID(ctx context.Context, id primitive.ObjectID, paymentIntentID string) error
 	AddRefund(ctx context.Context, paymentIntentID string, refund domain.Refund) error
 	FindByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error)
@@ -115,6 +115,11 @@ func (uc *SportCenterUseCase) UpdateSportCenter(ctx context.Context, id primitiv
 	updatedCenter.ID = existing.ID
 	updatedCenter.CreatedAt = existing.CreatedAt
 	updatedCenter.UpdatedAt = time.Now()
+
+	// Mantener la configuración de Fintoc existente si no se proporciona una nueva
+	if updatedCenter.Fintoc == nil {
+		updatedCenter.Fintoc = existing.Fintoc
+	}
 
 	return uc.repo.Update(ctx, updatedCenter)
 }
