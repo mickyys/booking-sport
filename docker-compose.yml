@@ -1,0 +1,26 @@
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: booking_sport_db
+    command: ["--quiet", "--logpath", "/dev/null"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: booking_sport_backend
+    volumes:
+      - ./:/app
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    depends_on:
+      - mongodb
+
+volumes:
+  mongodb_data:

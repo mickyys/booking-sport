@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../booking-sport-ui"
+		},
+		{
+			"path": "../booking-sport-ui-2"
+		}
+	],
+	"settings": {
+		"liveServer.settings.multiRootWorkspaceName": "booking-sport"
+	}
+}
