@@ -38,6 +38,11 @@ func NewBookingUseCase(repo BookingRepository, courtRepo CourtRepository, center
 	}
 }
 
+// GetUserCancelledBookingsPaged retorna solo las reservas canceladas del usuario
+func (uc *BookingUseCase) GetUserCancelledBookingsPaged(ctx context.Context, userID string, page, limit int) ([]domain.BookingSummary, int64, error) {
+	return uc.repo.FindByUserIDAndStatusPaged(ctx, userID, domain.BookingStatusCancelled, page, limit)
+}
+
 func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking *domain.Booking) (string, error) {
 	court, err := uc.courtRepo.FindByID(ctx, booking.CourtID)
 	if err != nil {
@@ -65,15 +70,19 @@ func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking
 	booking.FinalPrice = price
 	booking.Status = domain.BookingStatusPending
 	booking.BookingCode = generateBookingCode()
+	booking.PaymentMethod = "fintoc"
 	booking.SportCenterID = court.SportCenterID
-	booking.CreatedAt = time.Now()
-	booking.UpdatedAt = time.Now()
 
 	// Obtener el centro deportivo para sacar la secret key de Fintoc
 	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
 	if err != nil {
 		return "", fmt.Errorf("sport center not found: %w", err)
 	}
+
+	booking.SportCenterName = center.Name
+	booking.CourtName = court.Name
+	booking.CreatedAt = time.Now()
+	booking.UpdatedAt = time.Now()
 
 	if center.Fintoc == nil || center.Fintoc.Payment.SecretKey == "" {
 		return "", fmt.Errorf("fintoc payment not configured for this sport center")
@@ -266,6 +275,10 @@ func (uc *BookingUseCase) GetSportCenterByID(ctx context.Context, id primitive.O
 	return uc.centerRepo.FindByID(ctx, id)
 }
 
+func (uc *BookingUseCase) GetCourtByID(ctx context.Context, id primitive.ObjectID) (*domain.Court, error) {
+	return uc.courtRepo.FindByID(ctx, id)
+}
+
 func (uc *BookingUseCase) HandleFintocWebhook(ctx context.Context, id string, status string) error {
 	// Intentamos buscar por PaymentIntentID primero, luego por CheckoutSessionID (para compatibilidad)
 	booking, err := uc.repo.FindByFintocPaymentIntentID(ctx, id)
@@ -307,10 +320,50 @@ func (uc *BookingUseCase) GetConfirmedBookingCount(ctx context.Context, userID s
 	return uc.repo.CountConfirmedByUserID(ctx, userID)
 }
 
+func (uc *BookingUseCase) GetByID(ctx context.Context, id primitive.ObjectID) (*domain.Booking, error) {
+	return uc.repo.FindByID(ctx, id)
+}
+
 func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.ObjectID, userID string) error {
 	booking, err := uc.repo.FindByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("booking not found: %w", err)
+	}
+
+	// Obtener información de la cancha y el centro para calcular políticas
+	court, err := uc.courtRepo.FindByID(ctx, booking.CourtID)
+	if err != nil {
+		return fmt.Errorf("court not found: %w", err)
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
+	if err != nil {
+		return fmt.Errorf("sport center not found: %w", err)
+	}
+
+	// Calcular horas restantes
+	bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, booking.Date.Location())
+	hoursUntilMatch := bookingDateTime.Sub(time.Now()).Hours()
+
+	if hoursUntilMatch <= 0 {
+		return fmt.Errorf("cannot cancel a past or ongoing booking")
+	}
+
+	// Políticas de cancelación
+	configCancellationHours := center.CancellationHours
+	if configCancellationHours == 0 {
+		configCancellationHours = 3
+	}
+	configRetentionPercent := center.RetentionPercent
+	if configRetentionPercent == 0 {
+		configRetentionPercent = 10
+	}
+
+	refundPercentage := 0
+	if hoursUntilMatch >= float64(configCancellationHours) {
+		refundPercentage = 100
+	} else {
+		refundPercentage = 100 - configRetentionPercent
 	}
 
 	// Verificar pertenencia del usuario (si la reserva tiene userID)
@@ -321,6 +374,11 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 	if booking.Status == domain.BookingStatusCancelled {
 		return fmt.Errorf("booking is already cancelled")
 	}
+
+	log.Printf("[CANCEL_BOOKING] Iniciando cancelación de reserva %s con %d%% de reembolso\n", id.Hex(), refundPercentage)
+
+	// TODO: Aquí se podría llamar a la API de Fintoc para procesar el reembolso
+	// usando refundPercentage y booking.FintocPaymentIntentID
 
 	// Actualizar estado a cancelado
 	err = uc.repo.UpdateStatus(ctx, id, domain.BookingStatusCancelled)

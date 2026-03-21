@@ -1,3 +1,5 @@
+// ...existing code...
+
 package mongo
 
 import (
@@ -18,6 +20,76 @@ func NewBookingRepository(db *mongo.Database) *BookingRepository {
 	return &BookingRepository{
 		collection: db.Collection("bookings"),
 	}
+}
+
+// FindByUserIDAndStatusPaged retorna reservas de un usuario filtradas por estado, paginadas
+func (r *BookingRepository) FindByUserIDAndStatusPaged(ctx context.Context, userID string, status domain.BookingStatus, page, limit int) ([]domain.BookingSummary, int64, error) {
+	skip := (page - 1) * limit
+	filter := bson.M{"user_id": userID, "status": status}
+
+	total, err := r.collection.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	pipeline := mongo.Pipeline{
+		bson.D{{Key: "$match", Value: filter}},
+		bson.D{{Key: "$sort", Value: bson.M{"created_at": -1}}},
+		bson.D{{Key: "$skip", Value: int64(skip)}},
+		bson.D{{Key: "$limit", Value: int64(limit)}},
+		bson.D{{Key: "$lookup", Value: bson.M{
+			"from":         "courts",
+			"localField":   "court_id",
+			"foreignField": "_id",
+			"as":           "court_info",
+		}}},
+		bson.D{{Key: "$unwind", Value: bson.M{
+			"path":                       "$court_info",
+			"preserveNullAndEmptyArrays": true,
+		}}},
+		bson.D{{Key: "$lookup", Value: bson.M{
+			"from":         "sport_centers",
+			"localField":   "court_info.sport_center_id",
+			"foreignField": "_id",
+			"as":           "sport_center_info",
+		}}},
+		bson.D{{Key: "$unwind", Value: bson.M{
+			"path":                       "$sport_center_info",
+			"preserveNullAndEmptyArrays": true,
+		}}},
+		bson.D{{Key: "$addFields", Value: bson.M{
+			"sport_center_name":  "$sport_center_info.name",
+			"court_name":         "$court_info.name",
+			"payment_method":     bson.M{"$ifNull": []interface{}{"$payment_method", "fintoc"}},
+			"cancellation_hours": bson.M{"$ifNull": []interface{}{"$sport_center_info.cancellation_hours", 3}},
+			"retention_percent":  bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
+		}}},
+		bson.D{{Key: "$project", Value: bson.M{
+			"id":                 "$_id",
+			"sport_center_name":  1,
+			"date":               1,
+			"hour":               1,
+			"court_name":         1,
+			"status":             1,
+			"price":              1,
+			"final_price":        1,
+			"payment_method":     1,
+			"cancellation_hours": 1,
+			"retention_percent":  1,
+		}}},
+	}
+
+	cursor, err := r.collection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer cursor.Close(ctx)
+
+	bookings := []domain.BookingSummary{}
+	if err := cursor.All(ctx, &bookings); err != nil {
+		return nil, 0, err
+	}
+	return bookings, total, nil
 }
 
 func (r *BookingRepository) Create(ctx context.Context, booking *domain.Booking) error {
@@ -190,19 +262,25 @@ func (r *BookingRepository) FindByUserIDPaged(ctx context.Context, userID string
 			"preserveNullAndEmptyArrays": true,
 		}}},
 		{{"$addFields", bson.M{
-			"sport_center_name": "$sport_center_info.name",
-			"court_name":        "$court_info.name",
+			"sport_center_name":  "$sport_center_info.name",
+			"court_name":         "$court_info.name",
+			"payment_method":     bson.M{"$ifNull": []interface{}{"$payment_method", "fintoc"}},
+			"cancellation_hours": bson.M{"$ifNull": []interface{}{"$sport_center_info.cancellation_hours", 3}},
+			"retention_percent":  bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
 		}}},
 		{{"$project", bson.M{
-			"id":                "$_id",
-			"_id":               1,
-			"sport_center_name": 1,
-			"date":              1,
-			"hour":              1,
-			"court_name":        1,
-			"status":            1,
-			"price":             1,
-			"final_price":       1,
+			"id":                 "$_id",
+			"_id":                1,
+			"sport_center_name":  1,
+			"date":               1,
+			"hour":               1,
+			"court_name":         1,
+			"status":             1,
+			"price":              1,
+			"final_price":        1,
+			"payment_method":     1,
+			"cancellation_hours": 1,
+			"retention_percent":  1,
 		}}},
 	}
 

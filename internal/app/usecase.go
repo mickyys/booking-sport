@@ -36,8 +36,8 @@ type BookingRepository interface {
 	FindByUserID(ctx context.Context, userID string) ([]domain.Booking, error)
 	FindByUserIDPaged(ctx context.Context, userID string, page, limit int, isOld bool) ([]domain.BookingSummary, int64, error)
 	CountConfirmedByUserID(ctx context.Context, userID string) (int64, error)
+	FindByUserIDAndStatusPaged(ctx context.Context, userID string, cancelled domain.BookingStatus, page int, limit int) ([]domain.BookingSummary, int64, error)
 }
-
 type SportCenterUseCase struct {
 	repo        SportCenterRepository
 	courtRepo   CourtRepository

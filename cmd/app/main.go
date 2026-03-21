@@ -106,7 +106,9 @@ func main() {
 	api := r.Group("/api")
 	api.Use(authMiddleware)
 	{
+		api.GET("/bookings/:id", bookingHandler.GetBookingDetail)
 		api.GET("/bookings/my-bookings", bookingHandler.GetUserBookings)
+		api.GET("/bookings/my-cancelled", bookingHandler.GetUserCancelledBookings)
 		api.GET("/bookings/confirmed/count", bookingHandler.GetConfirmedCount)
 		api.POST("/bookings/:id/cancel", bookingHandler.CancelBooking)
 	}

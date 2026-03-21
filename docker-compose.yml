@@ -15,6 +15,7 @@ services:
     container_name: booking_sport_backend
     volumes:
       - ./:/app
+      - /app/tmp
     ports:
       - "8080:8080"
     env_file:

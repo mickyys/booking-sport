@@ -38,16 +38,18 @@ type FintocConfig struct {
 }
 
 type SportCenter struct {
-	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
-	Name        string             `bson:"name" json:"name"`
-	Address     string             `bson:"address" json:"address"`
-	Coordinates Coordinates        `bson:"coordinates" json:"coordinates"`
-	Services    []string           `bson:"services" json:"services"`
-	Contact     Contact            `bson:"contact" json:"contact"`
-	Fintoc      *FintocConfig      `bson:"fintoc,omitempty" json:"-"` // Ocultar datos privados de Fintoc
-	Users       []string           `bson:"users" json:"users"`        // Usuarios asociados al centro
-	CreatedAt   time.Time          `bson:"created_at" json:"created_at"`
-	UpdatedAt   time.Time          `bson:"updated_at" json:"updated_at"`
+	ID                primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	Name              string             `bson:"name" json:"name"`
+	Address           string             `bson:"address" json:"address"`
+	Coordinates       Coordinates        `bson:"coordinates" json:"coordinates"`
+	Services          []string           `bson:"services" json:"services"`
+	Contact           Contact            `bson:"contact" json:"contact"`
+	Fintoc            *FintocConfig      `bson:"fintoc,omitempty" json:"-"` // Ocultar datos privados de Fintoc
+	CancellationHours int                `bson:"cancellation_hours" json:"cancellation_hours"`
+	RetentionPercent  int                `bson:"retention_percent" json:"retention_percent"`
+	Users             []string           `bson:"users" json:"users"` // Usuarios asociados al centro
+	CreatedAt         time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt         time.Time          `bson:"updated_at" json:"updated_at"`
 }
 
 type Court struct {
@@ -83,13 +85,16 @@ type PagedResponse struct {
 }
 
 type BookingSummary struct {
-	ID              primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	Date            time.Time          `bson:"date" json:"date"`
-	Hour            int                `bson:"hour" json:"hour"`
-	SportCenterName string             `bson:"sport_center_name" json:"sport_center_name"`
-	CourtName       string             `bson:"court_name" json:"court_name"`
-	Status          BookingStatus      `bson:"status" json:"status"`
-	Price           float64            `bson:"price" json:"price"`
+	ID                primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Date              time.Time          `bson:"date" json:"date"`
+	Hour              int                `bson:"hour" json:"hour"`
+	SportCenterName   string             `bson:"sport_center_name" json:"sport_center_name"`
+	CourtName         string             `bson:"court_name" json:"court_name"`
+	Status            BookingStatus      `bson:"status" json:"status"`
+	Price             float64            `bson:"price" json:"price"`
+	PaymentMethod     string             `bson:"payment_method" json:"payment_method"`
+	CancellationHours int                `bson:"cancellation_hours" json:"cancellation_hours"`
+	RetentionPercent  int                `bson:"retention_percent" json:"retention_percent"`
 }
 
 type BookingStatus string
@@ -114,6 +119,7 @@ type Booking struct {
 	Price                 float64            `bson:"price" json:"price"`
 	Status                BookingStatus      `bson:"status" json:"status"`
 	BookingCode           string             `bson:"booking_code,omitempty" json:"booking_code,omitempty"`
+	PaymentMethod         string             `bson:"payment_method,omitempty" json:"payment_method,omitempty"`
 	PaymentID             string             `bson:"payment_id,omitempty" json:"payment_id,omitempty"`
 	FintocPaymentID       string             `bson:"fintoc_payment_id,omitempty" json:"fintoc_payment_id,omitempty"`
 	FintocPaymentIntentID string             `bson:"fintoc_payment_intent_id,omitempty" json:"fintoc_payment_intent_id,omitempty"`

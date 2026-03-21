@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hamp/booking-sport/internal/app"
@@ -24,6 +25,34 @@ type BookingHandler struct {
 
 func NewBookingHandler(uc *app.BookingUseCase) *BookingHandler {
 	return &BookingHandler{useCase: uc}
+}
+
+// GetUserCancelledBookings retorna solo las reservas canceladas del usuario autenticado
+func (h *BookingHandler) GetUserCancelledBookings(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in token"})
+		return
+	}
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+
+	bookings, total, err := h.useCase.GetUserCancelledBookingsPaged(c.Request.Context(), userID.(string), page, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	totalPages := int(math.Ceil(float64(total) / float64(limit)))
+
+	c.JSON(http.StatusOK, domain.PagedResponse{
+		Data:       bookings,
+		Total:      total,
+		Page:       page,
+		Limit:      limit,
+		TotalPages: totalPages,
+	})
 }
 
 func (h *BookingHandler) CreateFintocPaymentIntent(c *gin.Context) {
@@ -256,6 +285,96 @@ func (h *BookingHandler) GetUserBookings(c *gin.Context) {
 	})
 }
 
+func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
+	log.Printf(" ========== GetBookingDetail ==========")
+	idStr := c.Param("id")
+	id, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid booking id"})
+		return
+	}
+
+	booking, err := h.useCase.GetByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "booking not found"})
+		return
+	}
+	log.Printf("booking =========> %+v\n", booking)
+	court, err := h.useCase.GetCourtByID(c.Request.Context(), booking.CourtID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get court info"})
+		return
+	}
+
+	log.Printf("court =========> %+v\n", court)
+
+	center, err := h.useCase.GetSportCenterByID(c.Request.Context(), court.SportCenterID)
+	if err != nil {
+		log.Printf("[GET_BOOKING_DETAIL] Error obteniendo centro %s para reserva %s: %v\n", court.SportCenterID.Hex(), booking.ID.Hex(), err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":     "failed to get sport center info",
+			"details":   err.Error(),
+			"center_id": court.SportCenterID.Hex(),
+		})
+		return
+	}
+	// Combina fecha y hora de la reserva
+	bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, booking.Date.Location())
+	hoursUntilMatch := bookingDateTime.Sub(time.Now()).Hours()
+
+	configCancellationHours := center.CancellationHours
+	if configCancellationHours == 0 {
+		configCancellationHours = 3 // default
+	}
+	configRetentionPercent := center.RetentionPercent
+	if configRetentionPercent == 0 {
+		configRetentionPercent = 10 // default
+	}
+
+	canCancel := hoursUntilMatch > 0 && booking.Status == domain.BookingStatusConfirmed
+	refundPercentage := 0
+	if canCancel {
+		if hoursUntilMatch >= float64(configCancellationHours) {
+			refundPercentage = 100
+		} else {
+			refundPercentage = 100 - configRetentionPercent
+		}
+	}
+
+	maxRefundAmount := (booking.Price * float64(refundPercentage)) / 100
+
+	// Nueva estructura de respuesta para evitar exponer IDs sensibles y agregar nombres
+	response := gin.H{
+		"booking_detail": gin.H{
+			"id":                booking.ID,
+			"user_id":           booking.UserID,
+			"court_id":          booking.CourtID,
+			"court_name":        court.Name,
+			"sport_center_id":   court.SportCenterID,
+			"sport_center_name": center.Name,
+			"date":              booking.Date,
+			"hour":              booking.Hour,
+			"price":             booking.Price,
+			"status":            booking.Status,
+			"payment_method":    booking.PaymentMethod,
+			"booking_code":      booking.BookingCode,
+			"created_at":        booking.CreatedAt,
+			"updated_at":        booking.UpdatedAt,
+		},
+		"hours_until_match": hoursUntilMatch,
+		"can_cancel":        canCancel,
+		"refund_percentage": refundPercentage,
+		"amount_paid":       booking.Price,
+		"max_refund_amount": maxRefundAmount,
+		"cancellation_policy": gin.H{
+			"limit_hours":       configCancellationHours,
+			"retention_percent": configRetentionPercent,
+		},
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
 func (h *BookingHandler) CancelBooking(c *gin.Context) {
 	id := c.Param("id")
 	if id == "" {
@@ -275,6 +394,7 @@ func (h *BookingHandler) CancelBooking(c *gin.Context) {
 		return
 	}
 
+	// El porcentaje de reembolso ahora se calcula en el backend
 	err = h.useCase.CancelBooking(c.Request.Context(), bookingID, userID.(string))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
