@@ -388,3 +388,8 @@ func (r *BookingRepository) CountConfirmedByUserID(ctx context.Context, userID s
 	}
 	return r.collection.CountDocuments(ctx, filter)
 }
+
+func (r *BookingRepository) Delete(ctx context.Context, id primitive.ObjectID) error {
+	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": id})
+	return err
+}

@@ -389,3 +389,41 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 
 	return nil
 }
+func (uc *BookingUseCase) DeleteBooking(ctx context.Context, id primitive.ObjectID) error {
+	return uc.repo.Delete(ctx, id)
+}
+
+func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *domain.Booking) error {
+	court, err := uc.courtRepo.FindByID(ctx, booking.CourtID)
+	if err != nil {
+		return fmt.Errorf("court not found: %w", err)
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
+	if err != nil {
+		return fmt.Errorf("sport center not found: %w", err)
+	}
+
+	// For internal bookings, we don't strict check availability if admin wants to force it, 
+	// but let's check it for safety or just set it.
+	price := 0.0
+	for _, s := range court.Schedule {
+		if s.Hour == booking.Hour {
+			price = s.Price
+			break
+		}
+	}
+
+	booking.Price = price
+	booking.FinalPrice = price
+	booking.Status = domain.BookingStatusConfirmed
+	booking.BookingCode = generateBookingCode()
+	booking.PaymentMethod = "internal"
+	booking.SportCenterID = court.SportCenterID
+	booking.SportCenterName = center.Name
+	booking.CourtName = court.Name
+	booking.CreatedAt = time.Now()
+	booking.UpdatedAt = time.Now()
+
+	return uc.repo.Create(ctx, booking)
+}

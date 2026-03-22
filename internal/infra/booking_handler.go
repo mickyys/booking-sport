@@ -418,3 +418,36 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 
 	c.JSON(http.StatusOK, booking)
 }
+
+func (h *BookingHandler) CreateInternalBooking(c *gin.Context) {
+	var booking domain.Booking
+	if err := c.ShouldBindJSON(&booking); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	err := h.useCase.CreateInternalBooking(c.Request.Context(), &booking)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, booking)
+}
+
+func (h *BookingHandler) DeleteBooking(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid booking id"})
+		return
+	}
+
+	err = h.useCase.DeleteBooking(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+}

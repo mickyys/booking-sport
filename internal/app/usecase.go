@@ -39,6 +39,7 @@ type BookingRepository interface {
 	FindByUserIDPaged(ctx context.Context, userID string, page, limit int, isOld bool) ([]domain.BookingSummary, int64, error)
 	CountConfirmedByUserID(ctx context.Context, userID string) (int64, error)
 	FindByUserIDAndStatusPaged(ctx context.Context, userID string, cancelled domain.BookingStatus, page int, limit int) ([]domain.BookingSummary, int64, error)
+	Delete(ctx context.Context, id primitive.ObjectID) error
 }
 type SportCenterUseCase struct {
 	repo        SportCenterRepository
@@ -46,11 +47,18 @@ type SportCenterUseCase struct {
 	userRepo    UserRepository
 	bookingRepo BookingRepository
 }
+type EnrichedCourtSchedule struct {
+	Hour      int                 `json:"hour"`
+	Minutes   int                 `json:"minutes"`
+	Price     float64             `json:"price"`
+	Status    string              `json:"status"`
+	BookingID *primitive.ObjectID `json:"booking_id,omitempty"`
+}
 
 type CourtScheduleResponse struct {
-	ID       primitive.ObjectID     `json:"id"`
-	Name     string                 `json:"name"`
-	Schedule []domain.CourtSchedule `json:"schedule"`
+	ID       primitive.ObjectID      `json:"id"`
+	Name     string                  `json:"name"`
+	Schedule []EnrichedCourtSchedule `json:"schedule"`
 }
 
 func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, centerID primitive.ObjectID, date time.Time, all bool) ([]CourtScheduleResponse, error) {
@@ -66,18 +74,25 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 	for _, court := range courts {
 		// Buscar bookings confirmados para esta cancha y fecha específica
 		bookings, _ := uc.bookingRepo.FindByCourtAndDate(ctx, court.ID, searchDate)
-		bookedHours := make(map[int]bool)
+		bookedHours := make(map[int]*primitive.ObjectID)
 		for _, b := range bookings {
 			if b.Status == domain.BookingStatusConfirmed {
-				bookedHours[b.Hour] = true
+				id := b.ID
+				bookedHours[b.Hour] = &id
 			}
 		}
 
-		schedules := []domain.CourtSchedule{}
+		schedules := []EnrichedCourtSchedule{}
 		for _, s := range court.Schedule {
-			sch := s
-			if bookedHours[s.Hour] {
+			sch := EnrichedCourtSchedule{
+				Hour:    s.Hour,
+				Minutes: s.Minutes,
+				Price:   s.Price,
+				Status:  s.Status,
+			}
+			if bID, exists := bookedHours[s.Hour]; exists {
 				sch.Status = "booked"
+				sch.BookingID = bID
 			}
 
 			if all || sch.Status == "available" {
@@ -86,7 +101,7 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 		}
 
 		if schedules == nil {
-			schedules = []domain.CourtSchedule{}
+			schedules = []EnrichedCourtSchedule{}
 		}
 
 		result = append(result, CourtScheduleResponse{
@@ -420,23 +435,21 @@ func (uc *CourtUseCase) GetSportCenterSchedulesWithBookings(ctx context.Context,
 	for _, court := range courts {
 		// NOTA: Como CourtUseCase no tiene bookingRepo por defecto y no quiero romper dependencias circulares
 		// si fuera necesario, pero aquí usaremos la lógica de marcar como booked.
-		// Para esta implementación, asumimos que CourtUseCase sólo maneja la estructura base.
-
 		schedules := court.Schedule
-		if !all {
-			available := []domain.CourtSchedule{}
-			for _, s := range schedules {
-				if s.Status == "available" {
-					available = append(available, s)
-				}
-			}
-			schedules = available
+		enrichedSchedules := []EnrichedCourtSchedule{}
+		for _, s := range schedules {
+			enrichedSchedules = append(enrichedSchedules, EnrichedCourtSchedule{
+				Hour:    s.Hour,
+				Minutes: s.Minutes,
+				Price:   s.Price,
+				Status:  s.Status,
+			})
 		}
 
 		result = append(result, CourtScheduleResponse{
 			ID:       court.ID,
 			Name:     court.Name,
-			Schedule: schedules,
+			Schedule: enrichedSchedules,
 		})
 	}
 	return result, nil
