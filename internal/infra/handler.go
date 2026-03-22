@@ -171,10 +171,14 @@ func (h *CourtHandler) ConfigureSchedule(c *gin.Context) {
 		return
 	}
 
-	// Validar horarios (6 AM a 24 PM)
+	// Validar horarios (0 a 23 y 0 a 59)
 	for _, s := range schedule {
-		if s.Hour < 6 || s.Hour > 24 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Hour must be between 6 and 24"})
+		if s.Hour < 0 || s.Hour > 23 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Hour must be between 0 and 23"})
+			return
+		}
+		if s.Minutes < 0 || s.Minutes > 59 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Minutes must be between 0 and 59"})
 			return
 		}
 	}

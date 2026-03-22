@@ -37,12 +37,6 @@ type FintocConfig struct {
 	Webhook FintocWebhookConfig `bson:"webhook" json:"webhook"`
 }
 
-type Prices struct {
-	Economic float64 `bson:"economic" json:"economic"`
-	Normal   float64 `bson:"normal" json:"normal"`
-	Prime    float64 `bson:"prime" json:"prime"`
-}
-
 type SportCenter struct {
 	ID                primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
 	Name              string             `bson:"name" json:"name"`
@@ -53,7 +47,6 @@ type SportCenter struct {
 	Fintoc            *FintocConfig      `bson:"fintoc,omitempty" json:"-"` // Ocultar datos privados de Fintoc
 	CancellationHours int                `bson:"cancellation_hours" json:"cancellation_hours"`
 	RetentionPercent  int                `bson:"retention_percent" json:"retention_percent"`
-	Prices            Prices             `bson:"prices" json:"prices"`
 	Users             []string           `bson:"users" json:"users"` // Usuarios asociados al centro
 	CreatedAt         time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt         time.Time          `bson:"updated_at" json:"updated_at"`
@@ -70,10 +63,10 @@ type Court struct {
 }
 
 type CourtSchedule struct {
-	Hour      int     `bson:"hour" json:"hour"`             // 6 - 24
-	PriceType string  `bson:"price_type" json:"price_type"` // "economic", "normal", "prime"
-	Price     float64 `bson:"price" json:"price"`           // Valor por hora
-	Status    string  `bson:"status" json:"status"`         // "available", "booked", "closed"
+	Hour    int     `bson:"hour" json:"hour"`       // 0 - 23
+	Minutes int     `bson:"minutes" json:"minutes"` // 0 - 59
+	Price   float64 `bson:"price" json:"price"`     // Valor por hora
+	Status  string  `bson:"status" json:"status"`   // "available", "booked", "closed"
 }
 
 type User struct {

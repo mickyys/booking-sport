@@ -324,20 +324,6 @@ func (uc *CourtUseCase) ConfigureSchedule(ctx context.Context, courtID primitive
 		return fmt.Errorf("user is not authorized to configure schedule for this court")
 	}
 
-	// Calculate prices based on PriceType
-	for i, s := range schedule {
-		var price float64
-		switch s.PriceType {
-		case "economic":
-			price = center.Prices.Economic
-		case "prime":
-			price = center.Prices.Prime
-		default:
-			price = center.Prices.Normal
-		}
-		schedule[i].Price = price
-	}
-
 	court.Schedule = schedule
 	court.UpdatedAt = time.Now()
 	return uc.repo.Update(ctx, court)
