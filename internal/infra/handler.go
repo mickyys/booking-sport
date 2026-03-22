@@ -153,6 +153,18 @@ func (h *CourtHandler) ConfigureSchedule(c *gin.Context) {
 		return
 	}
 
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in context"})
+		return
+	}
+
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid User ID type"})
+		return
+	}
+
 	var schedule []domain.CourtSchedule
 	if err := c.ShouldBindJSON(&schedule); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -167,7 +179,7 @@ func (h *CourtHandler) ConfigureSchedule(c *gin.Context) {
 		}
 	}
 
-	if err := h.useCase.ConfigureSchedule(c.Request.Context(), courtID, schedule); err != nil {
+	if err := h.useCase.ConfigureSchedule(c.Request.Context(), courtID, schedule, userIDStr); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -200,6 +212,137 @@ func (h *CourtHandler) GetSchedule(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, schedule)
+}
+
+func (h *CourtHandler) GetAdminCourts(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in context"})
+		return
+	}
+
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid User ID type"})
+		return
+	}
+
+	response, err := h.useCase.GetCourtsByAdminUser(c.Request.Context(), userIDStr)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+func (h *CourtHandler) CreateAdminCourt(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in context"})
+		return
+	}
+
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid User ID type"})
+		return
+	}
+
+	var body struct {
+		SportCenterID primitive.ObjectID `json:"sport_center_id"`
+		Name          string             `json:"name"`
+		Description   string             `json:"description"`
+	}
+
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	court := &domain.Court{
+		SportCenterID: body.SportCenterID,
+		Name:          body.Name,
+		Description:   body.Description,
+	}
+
+	if err := h.useCase.CreateAdminCourt(c.Request.Context(), court, userIDStr); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, court)
+}
+
+func (h *CourtHandler) UpdateAdminCourt(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in context"})
+		return
+	}
+
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid User ID type"})
+		return
+	}
+
+	idStr := c.Param("id")
+	courtID, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid court ID format"})
+		return
+	}
+
+	var body struct {
+		Name          string `json:"name"`
+		Description   string `json:"description"`
+	}
+
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	updatedCourt := &domain.Court{
+		Name:        body.Name,
+		Description: body.Description,
+	}
+
+	if err := h.useCase.UpdateAdminCourt(c.Request.Context(), courtID, updatedCourt, userIDStr); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Court updated successfully"})
+}
+
+func (h *CourtHandler) DeleteAdminCourt(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in context"})
+		return
+	}
+
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid User ID type"})
+		return
+	}
+
+	idStr := c.Param("id")
+	courtID, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid court ID format"})
+		return
+	}
+
+	if err := h.useCase.DeleteAdminCourt(c.Request.Context(), courtID, userIDStr); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Court deleted successfully"})
 }
 
 func (h *SportCenterHandler) GetSchedules(c *gin.Context) {

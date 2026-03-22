@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/hamp/booking-sport/internal/domain"
@@ -14,6 +15,7 @@ type SportCenterRepository interface {
 	FindByID(ctx context.Context, id primitive.ObjectID) (*domain.SportCenter, error)
 	FindAll(ctx context.Context) ([]domain.SportCenter, error)
 	FindPaged(ctx context.Context, page, limit int) ([]domain.SportCenter, int64, error)
+	FindByUserID(ctx context.Context, userID string) ([]domain.SportCenter, error)
 }
 
 type UserRepository interface {
@@ -168,6 +170,7 @@ func NewUserUseCase(repo UserRepository) *UserUseCase {
 type CourtRepository interface {
 	Create(ctx context.Context, court *domain.Court) error
 	Update(ctx context.Context, court *domain.Court) error
+	Delete(ctx context.Context, id primitive.ObjectID) error
 	FindByID(ctx context.Context, id primitive.ObjectID) (*domain.Court, error)
 	FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.Court, error)
 	FindAllPaged(ctx context.Context, page, limit int) ([]domain.Court, int64, error)
@@ -192,6 +195,82 @@ func (uc *CourtUseCase) CreateCourt(ctx context.Context, court *domain.Court) er
 	court.CreatedAt = time.Now()
 	court.UpdatedAt = time.Now()
 	return uc.repo.Create(ctx, court)
+}
+
+func (uc *CourtUseCase) CreateAdminCourt(ctx context.Context, court *domain.Court, userID string) error {
+	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
+	if err != nil {
+		return err
+	}
+	
+	isOwner := false
+	for _, user := range center.Users {
+		if user == userID {
+			isOwner = true
+			break
+		}
+	}
+	if !isOwner {
+		return fmt.Errorf("user is not authorized to create court for this sport center")
+	}
+
+	court.CreatedAt = time.Now()
+	court.UpdatedAt = time.Now()
+	return uc.repo.Create(ctx, court)
+}
+
+func (uc *CourtUseCase) UpdateAdminCourt(ctx context.Context, courtID primitive.ObjectID, updatedCourt *domain.Court, userID string) error {
+	existing, err := uc.repo.FindByID(ctx, courtID)
+	if err != nil {
+		return err
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, existing.SportCenterID)
+	if err != nil {
+		return err
+	}
+
+	isOwner := false
+	for _, user := range center.Users {
+		if user == userID {
+			isOwner = true
+			break
+		}
+	}
+	if !isOwner {
+		return fmt.Errorf("user is not authorized to update court for this sport center")
+	}
+
+	existing.Name = updatedCourt.Name
+	existing.Description = updatedCourt.Description
+	existing.UpdatedAt = time.Now()
+	
+	return uc.repo.Update(ctx, existing)
+}
+
+func (uc *CourtUseCase) DeleteAdminCourt(ctx context.Context, courtID primitive.ObjectID, userID string) error {
+	existing, err := uc.repo.FindByID(ctx, courtID)
+	if err != nil {
+		return err
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, existing.SportCenterID)
+	if err != nil {
+		return err
+	}
+
+	isOwner := false
+	for _, user := range center.Users {
+		if user == userID {
+			isOwner = true
+			break
+		}
+	}
+	if !isOwner {
+		return fmt.Errorf("user is not authorized to delete court for this sport center")
+	}
+
+	return uc.repo.Delete(ctx, courtID)
 }
 
 func (uc *CourtUseCase) ListCourtsPaged(ctx context.Context, page, limit int) (*domain.PagedResponse, error) {
@@ -222,10 +301,41 @@ func (uc *CourtUseCase) ListCourtsPaged(ctx context.Context, page, limit int) (*
 	}, nil
 }
 
-func (uc *CourtUseCase) ConfigureSchedule(ctx context.Context, courtID primitive.ObjectID, schedule []domain.CourtSchedule) error {
+func (uc *CourtUseCase) ConfigureSchedule(ctx context.Context, courtID primitive.ObjectID, schedule []domain.CourtSchedule, userID string) error {
 	court, err := uc.repo.FindByID(ctx, courtID)
 	if err != nil {
 		return err
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
+	if err != nil {
+		return err
+	}
+
+	// Verify permissions
+	isOwner := false
+	for _, u := range center.Users {
+		if u == userID {
+			isOwner = true
+			break
+		}
+	}
+	if !isOwner {
+		return fmt.Errorf("user is not authorized to configure schedule for this court")
+	}
+
+	// Calculate prices based on PriceType
+	for i, s := range schedule {
+		var price float64
+		switch s.PriceType {
+		case "economic":
+			price = center.Prices.Economic
+		case "prime":
+			price = center.Prices.Prime
+		default:
+			price = center.Prices.Normal
+		}
+		schedule[i].Price = price
 	}
 
 	court.Schedule = schedule
@@ -281,6 +391,35 @@ func (uc *CourtUseCase) GetSportCenterSchedules(ctx context.Context, centerID pr
 			schedules = available
 		}
 		result[court.Name] = schedules
+	}
+	return result, nil
+}
+
+type CenterCourtsResponse struct {
+	SportCenter domain.SportCenter `json:"sport_center"`
+	Courts      []domain.Court     `json:"courts"`
+}
+
+func (uc *CourtUseCase) GetCourtsByAdminUser(ctx context.Context, userID string) ([]CenterCourtsResponse, error) {
+	// Find centers for this user
+	centers, err := uc.centerRepo.FindByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := []CenterCourtsResponse{}
+	for _, center := range centers {
+		courts, err := uc.repo.FindByCenterID(ctx, center.ID)
+		if err != nil {
+			return nil, err
+		}
+		if courts == nil {
+			courts = []domain.Court{}
+		}
+		result = append(result, CenterCourtsResponse{
+			SportCenter: center,
+			Courts:      courts,
+		})
 	}
 	return result, nil
 }

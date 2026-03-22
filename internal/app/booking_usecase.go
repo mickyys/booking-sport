@@ -343,11 +343,12 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 
 	// Calcular horas restantes
 	bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, booking.Date.Location())
-	hoursUntilMatch := bookingDateTime.Sub(time.Now()).Hours()
 
-	if hoursUntilMatch <= 0 {
+	if time.Until(bookingDateTime) <= 0 {
 		return fmt.Errorf("cannot cancel a past or ongoing booking")
 	}
+
+	hoursUntilMatch := time.Until(bookingDateTime).Hours()
 
 	// Políticas de cancelación
 	configCancellationHours := center.CancellationHours

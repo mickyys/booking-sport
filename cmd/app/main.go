@@ -94,7 +94,6 @@ func main() {
 	r.GET("/api/sport-centers/:id/schedules", sportCenterHandler.GetSchedules)
 	r.GET("/api/courts", courtHandler.List)
 	r.POST("/api/courts", courtHandler.CreateCourt)
-	r.PUT("/api/courts/:id/schedule", courtHandler.ConfigureSchedule)
 	r.GET("/api/courts/:id/schedule", courtHandler.GetSchedule)
 	r.POST("/api/bookings/fintoc", bookingHandler.CreateFintocPaymentIntent)
 	r.POST("/api/bookings/fintoc/webhook", bookingHandler.FintocWebhook)
@@ -111,7 +110,14 @@ func main() {
 		api.GET("/bookings/my-cancelled", bookingHandler.GetUserCancelledBookings)
 		api.GET("/bookings/confirmed/count", bookingHandler.GetConfirmedCount)
 		api.POST("/bookings/:id/cancel", bookingHandler.CancelBooking)
+		api.GET("/admin/courts", courtHandler.GetAdminCourts)
+		api.POST("/admin/courts", courtHandler.CreateAdminCourt)
+		api.PUT("/admin/courts/:id", courtHandler.UpdateAdminCourt)
+		api.DELETE("/admin/courts/:id", courtHandler.DeleteAdminCourt)
+		api.PUT("/admin/courts/:id/schedule", courtHandler.ConfigureSchedule)
+		api.PUT("/admin/sport-centers/:id", sportCenterHandler.Update)
 	}
+
 
 	// 6. Iniciar Servidor
 	port := os.Getenv("PORT")

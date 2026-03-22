@@ -319,8 +319,7 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 		return
 	}
 	// Combina fecha y hora de la reserva
-	bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, booking.Date.Location())
-	hoursUntilMatch := bookingDateTime.Sub(time.Now()).Hours()
+	hoursUntilMatch := time.Until(booking.Date.Add(time.Hour * time.Duration(booking.Hour))).Hours()
 
 	configCancellationHours := center.CancellationHours
 	if configCancellationHours == 0 {

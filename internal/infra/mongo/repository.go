@@ -90,6 +90,26 @@ func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int) 
 	return centers, total, nil
 }
 
+func (r *SportCenterRepository) FindByUserID(ctx context.Context, userID string) ([]domain.SportCenter, error) {
+	// MongoDB find where "users" array contains userID
+	cursor, err := r.collection.Find(ctx, bson.M{"users": userID})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var centers []domain.SportCenter
+	if err = cursor.All(ctx, &centers); err != nil {
+		return nil, err
+	}
+	
+	if centers == nil {
+		centers = []domain.SportCenter{}
+	}
+	
+	return centers, nil
+}
+
 func (r *SportCenterRepository) Update(ctx context.Context, center *domain.SportCenter) error {
 	_, err := r.collection.ReplaceOne(ctx, bson.M{"_id": center.ID}, center)
 	return err
@@ -140,6 +160,11 @@ func (r *CourtRepository) FindByID(ctx context.Context, id primitive.ObjectID) (
 
 func (r *CourtRepository) Update(ctx context.Context, court *domain.Court) error {
 	_, err := r.collection.ReplaceOne(ctx, bson.M{"_id": court.ID}, court)
+	return err
+}
+
+func (r *CourtRepository) Delete(ctx context.Context, id primitive.ObjectID) error {
+	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": id})
 	return err
 }
 
