@@ -93,9 +93,21 @@ type BookingSummary struct {
 	CourtName         string             `bson:"court_name" json:"court_name"`
 	Status            BookingStatus      `bson:"status" json:"status"`
 	Price             float64            `bson:"price" json:"price"`
+	UserName          string             `bson:"user_name,omitempty" json:"user_name,omitempty"`
+	IsGuest           bool               `json:"is_guest"`
 	PaymentMethod     string             `bson:"payment_method" json:"payment_method"`
+	CancelledBy       string             `bson:"cancelled_by,omitempty" json:"cancelled_by,omitempty"`
 	CancellationHours int                `bson:"cancellation_hours" json:"cancellation_hours"`
 	RetentionPercent  int                `bson:"retention_percent" json:"retention_percent"`
+}
+
+type AdminDashboardData struct {
+	TodayBookingsCount int              `json:"today_bookings_count"`
+	TodayRevenue       float64          `json:"today_revenue"`
+	TotalRevenue       float64          `json:"total_revenue"`
+	CancelledCount     int              `json:"cancelled_count"`
+	RecentBookings     []BookingSummary `json:"recent_bookings"`
+	TotalRecentCount   int64            `json:"total_recent_count"`
 }
 
 type BookingStatus string
@@ -125,6 +137,10 @@ type Booking struct {
 	FintocPaymentID       string             `bson:"fintoc_payment_id,omitempty" json:"fintoc_payment_id,omitempty"`
 	FintocPaymentIntentID string             `bson:"fintoc_payment_intent_id,omitempty" json:"fintoc_payment_intent_id,omitempty"`
 	Refunds               []Refund           `bson:"refunds,omitempty" json:"refunds,omitempty"`
+	CancelledBy           string             `bson:"cancelled_by,omitempty" json:"cancelled_by,omitempty"`
+	CancellationReason    string             `bson:"cancellation_reason,omitempty" json:"cancellation_reason,omitempty"`
+	CustomerName          string             `bson:"customer_name,omitempty" json:"customer_name,omitempty"`
+	CustomerPhone         string             `bson:"customer_phone,omitempty" json:"customer_phone,omitempty"`
 	CreatedAt             time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt             time.Time          `bson:"updated_at" json:"updated_at"`
 }

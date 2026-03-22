@@ -53,6 +53,13 @@ func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking
 	found := false
 	for _, s := range court.Schedule {
 		if s.Hour == booking.Hour {
+			// Check if slot has already passed
+			loc, _ := time.LoadLocation("America/Santiago")
+			bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, loc)
+			if bookingDateTime.Before(time.Now().In(loc)) {
+				return "", fmt.Errorf("cannot book a past slot")
+			}
+
 			if s.Status != "available" {
 				return "", fmt.Errorf("hour %d is not available", booking.Hour)
 			}
@@ -96,6 +103,8 @@ func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking
 	email := "cliente@email.com"
 	if booking.GuestDetails != nil {
 		email = booking.GuestDetails.Email
+		booking.CustomerName = booking.GuestDetails.Name
+		booking.CustomerPhone = booking.GuestDetails.Phone
 	}
 
 	// successURL apunta al backend para validar y redirigir
@@ -341,14 +350,27 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 		return fmt.Errorf("sport center not found: %w", err)
 	}
 
-	// Calcular horas restantes
-	bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, booking.Date.Location())
-
-	if time.Until(bookingDateTime) <= 0 {
-		return fmt.Errorf("cannot cancel a past or ongoing booking")
+	// Verificar si el usuario es administrador del centro
+	isAdmin := false
+	for _, u := range center.Users {
+		if u == userID {
+			isAdmin = true
+			break
+		}
 	}
 
+	// Calcular horas restantes (negativo si ya pasó)
+	bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, booking.Date.Location())
 	hoursUntilMatch := time.Until(bookingDateTime).Hours()
+
+	if hoursUntilMatch <= 0 {
+		// Los admins pueden cancelar hasta 48 horas pasadas
+		if isAdmin && hoursUntilMatch >= -48 {
+			// Okay
+		} else {
+			return fmt.Errorf("cannot cancel a past or ongoing booking")
+		}
+	}
 
 	// Políticas de cancelación
 	configCancellationHours := center.CancellationHours
@@ -367,9 +389,14 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 		refundPercentage = 100 - configRetentionPercent
 	}
 
-	// Verificar pertenencia del usuario (si la reserva tiene userID)
-	if booking.UserID != "" && booking.UserID != userID {
+	// Verificar pertenencia del usuario (si la reserva tiene userID y no es admin)
+	if !isAdmin && booking.UserID != "" && booking.UserID != userID {
 		return fmt.Errorf("unauthorized to cancel this booking")
+	}
+
+	// Si es administrador o el método de pago es "flow", el reembolso es 100% independiente del horario
+	if isAdmin || booking.PaymentMethod == "flow" {
+		refundPercentage = 100
 	}
 
 	if booking.Status == domain.BookingStatusCancelled {
@@ -381,8 +408,13 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 	// TODO: Aquí se podría llamar a la API de Fintoc para procesar el reembolso
 	// usando refundPercentage y booking.FintocPaymentIntentID
 
-	// Actualizar estado a cancelado
-	err = uc.repo.UpdateStatus(ctx, id, domain.BookingStatusCancelled)
+	cancelledBy := "user"
+	if isAdmin {
+		cancelledBy = "admin"
+	}
+
+	// Actualizar estado a cancelado con detalles
+	err = uc.repo.UpdateCancellation(ctx, id, domain.BookingStatusCancelled, cancelledBy, "Cancelación por "+cancelledBy)
 	if err != nil {
 		return fmt.Errorf("error updating booking status: %w", err)
 	}
@@ -409,6 +441,12 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 	price := 0.0
 	for _, s := range court.Schedule {
 		if s.Hour == booking.Hour {
+			// Check if slot has already passed
+			loc, _ := time.LoadLocation("America/Santiago")
+			bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, loc)
+			if bookingDateTime.Before(time.Now().In(loc)) {
+				return fmt.Errorf("cannot book a past slot")
+			}
 			price = s.Price
 			break
 		}
@@ -425,5 +463,32 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 	booking.CreatedAt = time.Now()
 	booking.UpdatedAt = time.Now()
 
+	if booking.GuestDetails != nil {
+		booking.CustomerName = booking.GuestDetails.Name
+		booking.CustomerPhone = booking.GuestDetails.Phone
+	}
+
 	return uc.repo.Create(ctx, booking)
+}
+
+func (uc *BookingUseCase) GetAdminDashboard(ctx context.Context, userID string, page, limit int, dateStr, name string) (*domain.AdminDashboardData, error) {
+	// 1. Get sport centers managed by this user
+	centers, err := uc.centerRepo.FindByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(centers) == 0 {
+		return &domain.AdminDashboardData{
+			RecentBookings: []domain.BookingSummary{},
+		}, nil
+	}
+
+	centerIDs := make([]primitive.ObjectID, len(centers))
+	for i, c := range centers {
+		centerIDs[i] = c.ID
+	}
+
+	// 2. Get dashboard data from repo
+	return uc.repo.GetDashboardData(ctx, centerIDs, page, limit, dateStr, name)
 }

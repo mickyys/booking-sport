@@ -32,6 +32,7 @@ type BookingRepository interface {
 	FindByFintocPaymentIntentID(ctx context.Context, paymentIntentID string) (*domain.Booking, error)
 	FindByBookingCode(ctx context.Context, code string) (*domain.Booking, error)
 	UpdateStatus(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus) error
+	UpdateCancellation(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, cancelledBy string, reason string) error
 	UpdateFintocPaymentIntentID(ctx context.Context, id primitive.ObjectID, paymentIntentID string) error
 	AddRefund(ctx context.Context, paymentIntentID string, refund domain.Refund) error
 	FindByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error)
@@ -40,6 +41,7 @@ type BookingRepository interface {
 	CountConfirmedByUserID(ctx context.Context, userID string) (int64, error)
 	FindByUserIDAndStatusPaged(ctx context.Context, userID string, cancelled domain.BookingStatus, page int, limit int) ([]domain.BookingSummary, int64, error)
 	Delete(ctx context.Context, id primitive.ObjectID) error
+	GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name string) (*domain.AdminDashboardData, error)
 }
 type SportCenterUseCase struct {
 	repo        SportCenterRepository
@@ -82,6 +84,8 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 			}
 		}
 
+		loc, _ := time.LoadLocation("America/Santiago")
+		nowInLoc := time.Now().In(loc)
 		schedules := []EnrichedCourtSchedule{}
 		for _, s := range court.Schedule {
 			sch := EnrichedCourtSchedule{
@@ -90,12 +94,20 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 				Price:   s.Price,
 				Status:  s.Status,
 			}
+
+			// Check if slot has already passed
+			// Forcing Chile timezone comparison to match the user's local experience
+			slotTime := time.Date(date.Year(), date.Month(), date.Day(), s.Hour, s.Minutes, 0, 0, loc)
+			if slotTime.Before(nowInLoc) && sch.Status == "available" {
+				sch.Status = "passed"
+			}
+
 			if bID, exists := bookedHours[s.Hour]; exists {
 				sch.Status = "booked"
 				sch.BookingID = bID
 			}
 
-			if all || sch.Status == "available" {
+			if all || (sch.Status == "available") {
 				schedules = append(schedules, sch)
 			}
 		}
@@ -359,12 +371,22 @@ func (uc *CourtUseCase) GetCourtSchedule(ctx context.Context, courtID primitive.
 		}
 	}
 
+	loc, _ := time.LoadLocation("America/Santiago")
+	nowInLoc := time.Now().In(loc)
 	result := []domain.CourtSchedule{}
 	for _, s := range court.Schedule {
 		sch := s
 		if bookedHours[s.Hour] {
 			sch.Status = "booked"
 		}
+
+		// Check if slot has already passed
+		// Forcing Chile timezone comparison to match the user's local experience
+		slotTime := time.Date(date.Year(), date.Month(), date.Day(), s.Hour, s.Minutes, 0, 0, loc)
+		if slotTime.Before(nowInLoc) && sch.Status == "available" {
+			sch.Status = "passed"
+		}
+
 		if all || sch.Status == "available" {
 			result = append(result, sch)
 		}

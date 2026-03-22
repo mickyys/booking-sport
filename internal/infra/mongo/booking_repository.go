@@ -160,6 +160,18 @@ func (r *BookingRepository) UpdateStatus(ctx context.Context, id primitive.Objec
 	return err
 }
 
+func (r *BookingRepository) UpdateCancellation(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, cancelledBy string, reason string) error {
+	filter := bson.M{"_id": id}
+	update := bson.M{"$set": bson.M{
+		"status":              status,
+		"cancelled_by":        cancelledBy,
+		"cancellation_reason": reason,
+		"updated_at":          time.Now(),
+	}}
+	_, err := r.collection.UpdateOne(ctx, filter, update)
+	return err
+}
+
 func (r *BookingRepository) UpdateFintocPaymentIntentID(ctx context.Context, id primitive.ObjectID, paymentIntentID string) error {
 	filter := bson.M{"_id": id}
 	update := bson.M{"$set": bson.M{"fintoc_payment_intent_id": paymentIntentID}}
@@ -392,4 +404,167 @@ func (r *BookingRepository) CountConfirmedByUserID(ctx context.Context, userID s
 func (r *BookingRepository) Delete(ctx context.Context, id primitive.ObjectID) error {
 	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": id})
 	return err
+}
+
+func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name string) (*domain.AdminDashboardData, error) {
+	now := time.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	todayEnd := todayStart.Add(24 * time.Hour)
+
+	// Get stats
+
+	// 1. Today's Bookings Count
+	todayFilter := bson.M{
+		"sport_center_id": bson.M{"$in": sportCenterIDs},
+		"date":            bson.M{"$gte": todayStart, "$lt": todayEnd},
+		"status":          domain.BookingStatusConfirmed,
+	}
+	todayCount, _ := r.collection.CountDocuments(ctx, todayFilter)
+
+	// 2. Today's Revenue
+	pipelineTodayRevenue := mongo.Pipeline{
+		{{Key: "$match", Value: todayFilter}},
+		{{Key: "$group", Value: bson.M{
+			"_id":           nil,
+			"today_revenue": bson.M{"$sum": "$price"},
+		}}},
+	}
+	cursorRevenue, _ := r.collection.Aggregate(ctx, pipelineTodayRevenue)
+	var todayRevenueResult []bson.M
+	cursorRevenue.All(ctx, &todayRevenueResult)
+	todayRevenue := 0.0
+	if len(todayRevenueResult) > 0 {
+		switch v := todayRevenueResult[0]["today_revenue"].(type) {
+		case float64:
+			todayRevenue = v
+		case int32:
+			todayRevenue = float64(v)
+		case int64:
+			todayRevenue = float64(v)
+		}
+	}
+
+	// 3. Total Revenue (Confirmed)
+	pipelineTotalRevenue := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{
+			"sport_center_id": bson.M{"$in": sportCenterIDs},
+			"status":          domain.BookingStatusConfirmed,
+		}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":           nil,
+			"total_revenue": bson.M{"$sum": "$price"},
+		}}},
+	}
+	cursorTotal, _ := r.collection.Aggregate(ctx, pipelineTotalRevenue)
+	var totalRevenueResult []bson.M
+	cursorTotal.All(ctx, &totalRevenueResult)
+	totalRevenue := 0.0
+	if len(totalRevenueResult) > 0 {
+		switch v := totalRevenueResult[0]["total_revenue"].(type) {
+		case float64:
+			totalRevenue = v
+		case int32:
+			totalRevenue = float64(v)
+		case int64:
+			totalRevenue = float64(v)
+		}
+	}
+
+	// 4. Cancelled Count
+	cancelledFilter := bson.M{
+		"sport_center_id": bson.M{"$in": sportCenterIDs},
+		"status":          domain.BookingStatusCancelled,
+	}
+	cancelledCount, _ := r.collection.CountDocuments(ctx, cancelledFilter)
+
+	// 5. Recent Bookings with filters and pagination
+	recentMatch := bson.M{"sport_center_id": bson.M{"$in": sportCenterIDs}}
+	if dateStr != "" {
+		t, err := time.Parse("2006-01-02", dateStr)
+		if err == nil {
+			start := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+			end := start.Add(24 * time.Hour)
+			recentMatch["date"] = bson.M{"$gte": start, "$lt": end}
+		}
+	}
+	if name != "" {
+		recentMatch["$or"] = []bson.M{
+			{"customer_name": bson.M{"$regex": name, "$options": "i"}},
+			{"guest_details.name": bson.M{"$regex": name, "$options": "i"}},
+		}
+	}
+
+	totalRecentCount, _ := r.collection.CountDocuments(ctx, recentMatch)
+
+	pipelineRecent := mongo.Pipeline{
+		{{Key: "$match", Value: recentMatch}},
+		{{Key: "$sort", Value: bson.M{"created_at": -1}}},
+		{{Key: "$skip", Value: int64((page - 1) * limit)}},
+		{{Key: "$limit", Value: int64(limit)}},
+		{{Key: "$lookup", Value: bson.M{
+			"from":         "courts",
+			"localField":   "court_id",
+			"foreignField": "_id",
+			"as":           "court_info",
+		}}},
+		{{Key: "$unwind", Value: bson.M{
+			"path":                       "$court_info",
+			"preserveNullAndEmptyArrays": true,
+		}}},
+		{{Key: "$lookup", Value: bson.M{
+			"from":         "sport_centers",
+			"localField":   "court_info.sport_center_id",
+			"foreignField": "_id",
+			"as":           "sport_center_info",
+		}}},
+		{{Key: "$unwind", Value: bson.M{
+			"path":                       "$sport_center_info",
+			"preserveNullAndEmptyArrays": true,
+		}}},
+		{{Key: "$addFields", Value: bson.M{
+			"sport_center_name":  "$sport_center_info.name",
+			"court_name":         "$court_info.name",
+			"user_name":          bson.M{"$ifNull": []interface{}{"$customer_name", "$guest_details.name", "Usuario"}},
+			"is_guest":           bson.M{"$cond": []interface{}{bson.M{"$ne": []interface{}{"$guest_details", nil}}, true, false}},
+			"payment_method":     bson.M{"$ifNull": []interface{}{"$payment_method", "fintoc"}},
+			"cancelled_by":       bson.M{"$ifNull": []interface{}{"$cancelled_by", ""}},
+			"cancellation_hours": bson.M{"$ifNull": []interface{}{"$sport_center_info.cancellation_hours", 3}},
+			"retention_percent":  bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
+		}}},
+		{{Key: "$project", Value: bson.M{
+			"id":                 "$_id",
+			"sport_center_name":  1,
+			"date":               1,
+			"hour":               1,
+			"court_name":         1,
+			"status":             1,
+			"price":              1,
+			"user_name":          1,
+			"is_guest":           1,
+			"payment_method":     1,
+			"cancelled_by":       1,
+			"cancellation_hours": 1,
+			"retention_percent":  1,
+		}}},
+	}
+
+	cursorRecent, err := r.collection.Aggregate(ctx, pipelineRecent)
+	if err != nil {
+		return nil, err
+	}
+	defer cursorRecent.Close(ctx)
+
+	var recentBookings []domain.BookingSummary
+	if err := cursorRecent.All(ctx, &recentBookings); err != nil {
+		return nil, err
+	}
+
+	return &domain.AdminDashboardData{
+		TodayBookingsCount: int(todayCount),
+		TodayRevenue:       todayRevenue,
+		TotalRevenue:       totalRevenue,
+		CancelledCount:     int(cancelledCount),
+		RecentBookings:     recentBookings,
+		TotalRecentCount:   totalRecentCount,
+	}, nil
 }

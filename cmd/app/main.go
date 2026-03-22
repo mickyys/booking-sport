@@ -110,6 +110,7 @@ func main() {
 		api.GET("/bookings/my-cancelled", bookingHandler.GetUserCancelledBookings)
 		api.GET("/bookings/confirmed/count", bookingHandler.GetConfirmedCount)
 		api.POST("/bookings/:id/cancel", bookingHandler.CancelBooking)
+		api.GET("/admin/dashboard", bookingHandler.GetAdminDashboard)
 		api.GET("/admin/courts", courtHandler.GetAdminCourts)
 		api.POST("/admin/courts", courtHandler.CreateAdminCourt)
 		api.PUT("/admin/courts/:id", courtHandler.UpdateAdminCourt)
