@@ -39,6 +39,7 @@ type FintocConfig struct {
 
 type SportCenter struct {
 	ID                primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	Slug              string             `bson:"slug" json:"slug"`
 	Name              string             `bson:"name" json:"name"`
 	Address           string             `bson:"address" json:"address"`
 	Coordinates       Coordinates        `bson:"coordinates" json:"coordinates"`

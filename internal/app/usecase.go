@@ -13,6 +13,7 @@ type SportCenterRepository interface {
 	Create(ctx context.Context, center *domain.SportCenter) error
 	Update(ctx context.Context, center *domain.SportCenter) error
 	FindByID(ctx context.Context, id primitive.ObjectID) (*domain.SportCenter, error)
+	FindBySlug(ctx context.Context, slug string) (*domain.SportCenter, error)
 	FindAll(ctx context.Context) ([]domain.SportCenter, error)
 	FindPaged(ctx context.Context, page, limit int) ([]domain.SportCenter, int64, error)
 	FindByUserID(ctx context.Context, userID string) ([]domain.SportCenter, error)
@@ -61,6 +62,10 @@ type CourtScheduleResponse struct {
 	ID       primitive.ObjectID      `json:"id"`
 	Name     string                  `json:"name"`
 	Schedule []EnrichedCourtSchedule `json:"schedule"`
+}
+
+func (uc *SportCenterUseCase) FindBySlug(ctx context.Context, slug string) (*domain.SportCenter, error) {
+	return uc.repo.FindBySlug(ctx, slug)
 }
 
 func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, centerID primitive.ObjectID, date time.Time, all bool) ([]CourtScheduleResponse, error) {
@@ -130,6 +135,12 @@ func NewSportCenterUseCase(repo SportCenterRepository, courtRepo CourtRepository
 }
 
 func (uc *SportCenterUseCase) CreateSportCenter(ctx context.Context, center *domain.SportCenter) error {
+	if center.Slug != "" {
+		existing, _ := uc.repo.FindBySlug(ctx, center.Slug)
+		if existing != nil {
+			return fmt.Errorf("el subdominio '%s' ya está en uso", center.Slug)
+		}
+	}
 	center.CreatedAt = time.Now()
 	center.UpdatedAt = time.Now()
 	return uc.repo.Create(ctx, center)

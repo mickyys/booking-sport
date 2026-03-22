@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -73,7 +74,13 @@ func main() {
 
 	// Configurar CORS
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:3000"}, // Añadir orígenes permitidos
+		AllowOriginFunc: func(origin string) bool {
+			// Permitir localhost:5173, localhost:3000 y sus subdominios
+			return origin == "http://localhost:5173" ||
+				origin == "http://localhost:3000" ||
+				strings.HasSuffix(origin, ".localhost:3000") ||
+				strings.HasSuffix(origin, ".reservaloya.cl")
+		},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
@@ -89,6 +96,7 @@ func main() {
 
 	// Rutas Públicas
 	r.GET("/api/sport-centers", sportCenterHandler.List)
+	r.GET("/api/sport-centers/slug/:slug", sportCenterHandler.GetBySlug)
 	r.POST("/api/sport-centers", sportCenterHandler.Create)
 	r.PUT("/api/sport-centers/:id", sportCenterHandler.Update)
 	r.GET("/api/sport-centers/:id/schedules", sportCenterHandler.GetSchedules)
@@ -120,7 +128,6 @@ func main() {
 		api.POST("/admin/bookings/internal", bookingHandler.CreateInternalBooking)
 		api.DELETE("/admin/bookings/:id", bookingHandler.DeleteBooking)
 	}
-
 
 	// 6. Iniciar Servidor
 	port := os.Getenv("PORT")

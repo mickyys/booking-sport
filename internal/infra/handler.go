@@ -42,6 +42,16 @@ func (h *SportCenterHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+func (h *SportCenterHandler) GetBySlug(c *gin.Context) {
+	slug := c.Param("slug")
+	center, err := h.useCase.FindBySlug(c.Request.Context(), slug)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Sport center not found"})
+		return
+	}
+	c.JSON(http.StatusOK, center)
+}
+
 func (h *SportCenterHandler) Create(c *gin.Context) {
 	var body struct {
 		domain.SportCenter

@@ -48,6 +48,15 @@ func (r *SportCenterRepository) FindByID(ctx context.Context, id primitive.Objec
 	return &center, nil
 }
 
+func (r *SportCenterRepository) FindBySlug(ctx context.Context, slug string) (*domain.SportCenter, error) {
+	var center domain.SportCenter
+	err := r.collection.FindOne(ctx, bson.M{"slug": slug}).Decode(&center)
+	if err != nil {
+		return nil, err
+	}
+	return &center, nil
+}
+
 func (r *SportCenterRepository) FindAll(ctx context.Context) ([]domain.SportCenter, error) {
 	cursor, err := r.collection.Find(ctx, bson.M{})
 	if err != nil {

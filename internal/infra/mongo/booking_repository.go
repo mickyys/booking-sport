@@ -249,38 +249,38 @@ func (r *BookingRepository) FindByUserIDPaged(ctx context.Context, userID string
 	}
 
 	pipeline := mongo.Pipeline{
-		{{"$match", filter}},
-		{{"$sort", bson.M{"created_at": -1}}},
-		{{"$skip", int64(skip)}},
-		{{"$limit", int64(limit)}},
-		{{"$lookup", bson.M{
+		{{Key: "$match", Value: filter}},
+		{{Key: "$sort", Value: bson.M{"created_at": -1}}},
+		{{Key: "$skip", Value: int64(skip)}},
+		{{Key: "$limit", Value: int64(limit)}},
+		{{Key: "$lookup", Value: bson.M{
 			"from":         "courts",
 			"localField":   "court_id",
 			"foreignField": "_id",
 			"as":           "court_info",
 		}}},
-		{{"$unwind", bson.M{
+		{{Key: "$unwind", Value: bson.M{
 			"path":                       "$court_info",
 			"preserveNullAndEmptyArrays": true,
 		}}},
-		{{"$lookup", bson.M{
+		{{Key: "$lookup", Value: bson.M{
 			"from":         "sport_centers",
 			"localField":   "court_info.sport_center_id",
 			"foreignField": "_id",
 			"as":           "sport_center_info",
 		}}},
-		{{"$unwind", bson.M{
+		{{Key: "$unwind", Value: bson.M{
 			"path":                       "$sport_center_info",
 			"preserveNullAndEmptyArrays": true,
 		}}},
-		{{"$addFields", bson.M{
+		{{Key: "$addFields", Value: bson.M{
 			"sport_center_name":  "$sport_center_info.name",
 			"court_name":         "$court_info.name",
 			"payment_method":     bson.M{"$ifNull": []interface{}{"$payment_method", "fintoc"}},
 			"cancellation_hours": bson.M{"$ifNull": []interface{}{"$sport_center_info.cancellation_hours", 3}},
 			"retention_percent":  bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
 		}}},
-		{{"$project", bson.M{
+		{{Key: "$project", Value: bson.M{
 			"id":                 "$_id",
 			"_id":                1,
 			"sport_center_name":  1,
@@ -313,33 +313,33 @@ func (r *BookingRepository) FindByUserID(ctx context.Context, userID string) ([]
 	filter := bson.M{"user_id": userID}
 
 	pipeline := mongo.Pipeline{
-		{{"$match", filter}},
-		{{"$sort", bson.M{"created_at": -1}}},
-		{{"$lookup", bson.M{
+		{{Key: "$match", Value: filter}},
+		{{Key: "$sort", Value: bson.M{"created_at": -1}}},
+		{{Key: "$lookup", Value: bson.M{
 			"from":         "courts",
 			"localField":   "court_id",
 			"foreignField": "_id",
 			"as":           "court_info",
 		}}},
-		{{"$unwind", bson.M{
+		{{Key: "$unwind", Value: bson.M{
 			"path":                       "$court_info",
 			"preserveNullAndEmptyArrays": true,
 		}}},
-		{{"$lookup", bson.M{
+		{{Key: "$lookup", Value: bson.M{
 			"from":         "sport_centers",
 			"localField":   "court_info.sport_center_id",
 			"foreignField": "_id",
 			"as":           "sport_center_info",
 		}}},
-		{{"$unwind", bson.M{
+		{{Key: "$unwind", Value: bson.M{
 			"path":                       "$sport_center_info",
 			"preserveNullAndEmptyArrays": true,
 		}}},
-		{{"$addFields", bson.M{
+		{{Key: "$addFields", Value: bson.M{
 			"sport_center_name": "$sport_center_info.name",
 			"court_name":        "$court_info.name",
 		}}},
-		{{"$project", bson.M{
+		{{Key: "$project", Value: bson.M{
 			"id":                "$_id",
 			"_id":               1,
 			"sport_center_name": 1,
