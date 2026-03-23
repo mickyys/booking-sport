@@ -53,23 +53,28 @@ func main() {
 
 	db := client.Database("sport_booking")
 
-	// 2. Inicializar Repositorios
+	// 2. Crear índices de MongoDB
+	if err := mongo.EnsureIndexes(ctx, db); err != nil {
+		log.Printf("Warning: Error creando índices de MongoDB: %v", err)
+	}
+
+	// 3. Inicializar Repositorios
 	sportCenterRepo := mongo.NewSportCenterRepository(db)
 	courtRepo := mongo.NewCourtRepository(db)
 	userRepo := mongo.NewUserRepository(db)
 	bookingRepo := mongo.NewBookingRepository(db)
 
-	// 3. Inicializar Casos de Uso (Application Layer)
+	// 4. Inicializar Casos de Uso (Application Layer)
 	sportCenterUC := app.NewSportCenterUseCase(sportCenterRepo, courtRepo, userRepo, bookingRepo)
 	courtUC := app.NewCourtUseCase(courtRepo, sportCenterRepo, bookingRepo)
 	bookingUC := app.NewBookingUseCase(bookingRepo, courtRepo, sportCenterRepo, userRepo)
 
-	// 4. Inicializar Manejadores (Presentation Layer)
+	// 5. Inicializar Manejadores (Presentation Layer)
 	sportCenterHandler := infra.NewSportCenterHandler(sportCenterUC)
 	courtHandler := infra.NewCourtHandler(courtUC)
 	bookingHandler := infra.NewBookingHandler(bookingUC)
 
-	// 5. Configurar Rutas
+	// 6. Configurar Rutas
 	r := gin.Default()
 
 	// Configurar CORS
@@ -130,7 +135,7 @@ func main() {
 		api.DELETE("/admin/bookings/:id", bookingHandler.DeleteBooking)
 	}
 
-	// 6. Iniciar Servidor
+	// 7. Iniciar Servidor
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
