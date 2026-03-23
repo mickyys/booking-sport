@@ -236,7 +236,7 @@ func (h *BookingHandler) FintocReturn(c *gin.Context) {
 	}
 
 	// Redirigir al front con el código único de la reserva
-	redirectURL := fmt.Sprintf("%s/booking?code=%s", url, code)
+	redirectURL := fmt.Sprintf("%s/booking/status?code=%s", url, code)
 	c.Redirect(http.StatusFound, redirectURL)
 }
 
