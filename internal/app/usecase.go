@@ -54,8 +54,9 @@ type EnrichedCourtSchedule struct {
 	Hour      int                 `json:"hour"`
 	Minutes   int                 `json:"minutes"`
 	Price     float64             `json:"price"`
-	Status    string              `json:"status"`
-	BookingID *primitive.ObjectID `json:"booking_id,omitempty"`
+	Status          string              `json:"status"`
+	PaymentRequired bool                `json:"payment_required"`
+	BookingID       *primitive.ObjectID `json:"booking_id,omitempty"`
 }
 
 type CourtScheduleResponse struct {
@@ -97,7 +98,8 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 				Hour:    s.Hour,
 				Minutes: s.Minutes,
 				Price:   s.Price,
-				Status:  s.Status,
+				Status:          s.Status,
+				PaymentRequired: s.PaymentRequired,
 			}
 
 			// Check if slot has already passed
@@ -475,7 +477,8 @@ func (uc *CourtUseCase) GetSportCenterSchedulesWithBookings(ctx context.Context,
 				Hour:    s.Hour,
 				Minutes: s.Minutes,
 				Price:   s.Price,
-				Status:  s.Status,
+				Status:          s.Status,
+				PaymentRequired: s.PaymentRequired,
 			})
 		}
 

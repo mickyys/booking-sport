@@ -63,6 +63,11 @@ func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking
 			if s.Status != "available" {
 				return "", fmt.Errorf("hour %d is not available", booking.Hour)
 			}
+
+			if !s.PaymentRequired {
+				return "", fmt.Errorf("payment not required for this slot, use standard booking")
+			}
+
 			price = s.Price
 			found = true
 			break
@@ -457,6 +462,54 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 	booking.Status = domain.BookingStatusConfirmed
 	booking.BookingCode = generateBookingCode()
 	booking.PaymentMethod = "internal"
+	booking.SportCenterID = court.SportCenterID
+	booking.SportCenterName = center.Name
+	booking.CourtName = court.Name
+	booking.CreatedAt = time.Now()
+	booking.UpdatedAt = time.Now()
+
+	if booking.GuestDetails != nil {
+		booking.CustomerName = booking.GuestDetails.Name
+		booking.CustomerPhone = booking.GuestDetails.Phone
+	}
+
+	return uc.repo.Create(ctx, booking)
+}
+
+func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) error {
+	court, err := uc.courtRepo.FindByID(ctx, booking.CourtID)
+	if err != nil {
+		return fmt.Errorf("court not found: %w", err)
+	}
+
+	found := false
+	for _, s := range court.Schedule {
+		if s.Hour == booking.Hour {
+			if s.Status != "available" {
+				return fmt.Errorf("hour %d is not available", booking.Hour)
+			}
+			if s.PaymentRequired {
+				return fmt.Errorf("payment required for this slot")
+			}
+			booking.Price = s.Price
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("hour %d not found in schedule", booking.Hour)
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
+	if err != nil {
+		return fmt.Errorf("sport center not found: %w", err)
+	}
+
+	booking.FinalPrice = booking.Price
+	booking.Status = domain.BookingStatusConfirmed
+	booking.BookingCode = generateBookingCode()
+	booking.PaymentMethod = "venue" // O "presencial"
 	booking.SportCenterID = court.SportCenterID
 	booking.SportCenterName = center.Name
 	booking.CourtName = court.Name

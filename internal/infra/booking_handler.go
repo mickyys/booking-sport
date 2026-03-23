@@ -435,6 +435,27 @@ func (h *BookingHandler) CreateInternalBooking(c *gin.Context) {
 	c.JSON(http.StatusCreated, booking)
 }
 
+func (h *BookingHandler) CreateBooking(c *gin.Context) {
+	var booking domain.Booking
+	if err := c.ShouldBindJSON(&booking); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Si hay un usuario autenticado (opcional), lo asociamos
+	if userID, exists := c.Get("user_id"); exists {
+		booking.UserID = userID.(string)
+	}
+
+	err := h.useCase.Create(c.Request.Context(), &booking)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, booking)
+}
+
 func (h *BookingHandler) DeleteBooking(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := primitive.ObjectIDFromHex(idStr)

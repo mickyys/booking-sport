@@ -108,6 +108,7 @@ func main() {
 	r.GET("/api/bookings/fintoc/return", bookingHandler.FintocReturn)
 	r.GET("/api/bookings/fintoc/:id", bookingHandler.GetFintocPaymentIntentStatus)
 	r.GET("/api/bookings/code/:code", bookingHandler.GetByBookingCode)
+	r.POST("/api/bookings", bookingHandler.CreateBooking)
 
 	// Rutas Protegidas
 	api := r.Group("/api")
