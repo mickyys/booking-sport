@@ -27,14 +27,16 @@ type BookingUseCase struct {
 	courtRepo  CourtRepository
 	centerRepo SportCenterRepository
 	userRepo   UserRepository
+	mailer     Mailer
 }
 
-func NewBookingUseCase(repo BookingRepository, courtRepo CourtRepository, centerRepo SportCenterRepository, userRepo UserRepository) *BookingUseCase {
+func NewBookingUseCase(repo BookingRepository, courtRepo CourtRepository, centerRepo SportCenterRepository, userRepo UserRepository, mailer Mailer) *BookingUseCase {
 	return &BookingUseCase{
 		repo:       repo,
 		courtRepo:  courtRepo,
 		centerRepo: centerRepo,
 		userRepo:   userRepo,
+		mailer:     mailer,
 	}
 }
 
@@ -221,7 +223,17 @@ func (uc *BookingUseCase) ValidateFintocPaymentAndGetCode(ctx context.Context, b
 				booking.Status = domain.BookingStatusConfirmed
 				booking.FintocPaymentIntentID = paymentIntentID
 				booking.UpdatedAt = time.Now()
-				_ = uc.repo.Update(ctx, booking)
+				if err := uc.repo.Update(ctx, booking); err != nil {
+					return booking.BookingCode, fmt.Errorf("error updating booking: %w", err)
+				}
+				// Enviar correo de confirmación (si está configurado)
+				if uc.mailer != nil {
+					go func() {
+						if err := uc.mailer.SendBookingConfirmation(context.Background(), booking); err != nil {
+							log.Printf("[MAIL ERROR] sending booking confirmation: %v\n", err)
+						}
+					}()
+				}
 				return booking.BookingCode, nil
 			}
 		}
@@ -316,6 +328,15 @@ func (uc *BookingUseCase) HandleFintocWebhook(ctx context.Context, id string, st
 	err = uc.repo.UpdateStatus(ctx, booking.ID, newStatus)
 	if err != nil {
 		return err
+	}
+
+	// Si se confirmó la reserva, enviar correo de confirmación
+	if newStatus == domain.BookingStatusConfirmed && uc.mailer != nil {
+		go func(b *domain.Booking) {
+			if err := uc.mailer.SendBookingConfirmation(context.Background(), b); err != nil {
+				log.Printf("[MAIL ERROR] sending booking confirmation: %v\n", err)
+			}
+		}(booking)
 	}
 
 	return nil
@@ -441,7 +462,7 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 		return fmt.Errorf("sport center not found: %w", err)
 	}
 
-	// For internal bookings, we don't strict check availability if admin wants to force it, 
+	// For internal bookings, we don't strict check availability if admin wants to force it,
 	// but let's check it for safety or just set it.
 	price := 0.0
 	for _, s := range court.Schedule {
@@ -473,7 +494,19 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 		booking.CustomerPhone = booking.GuestDetails.Phone
 	}
 
-	return uc.repo.Create(ctx, booking)
+	if err := uc.repo.Create(ctx, booking); err != nil {
+		return err
+	}
+
+	if uc.mailer != nil {
+		go func(b *domain.Booking) {
+			if err := uc.mailer.SendBookingConfirmation(context.Background(), b); err != nil {
+				log.Printf("[MAIL ERROR] sending booking confirmation: %v\n", err)
+			}
+		}(booking)
+	}
+
+	return nil
 }
 
 func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) error {
@@ -521,7 +554,19 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 		booking.CustomerPhone = booking.GuestDetails.Phone
 	}
 
-	return uc.repo.Create(ctx, booking)
+	if err := uc.repo.Create(ctx, booking); err != nil {
+		return err
+	}
+
+	if uc.mailer != nil {
+		go func(b *domain.Booking) {
+			if err := uc.mailer.SendBookingConfirmation(context.Background(), b); err != nil {
+				log.Printf("[MAIL ERROR] sending booking confirmation: %v\n", err)
+			}
+		}(booking)
+	}
+
+	return nil
 }
 
 func (uc *BookingUseCase) GetAdminDashboard(ctx context.Context, userID string, page, limit int, dateStr, name string) (*domain.AdminDashboardData, error) {

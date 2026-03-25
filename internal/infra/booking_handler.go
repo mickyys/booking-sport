@@ -419,6 +419,31 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 	c.JSON(http.StatusOK, booking)
 }
 
+// CancelByBookingCode permite cancelar una reserva usando el booking_code (pública)
+func (h *BookingHandler) CancelByBookingCode(c *gin.Context) {
+	code := c.Param("code")
+	if code == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "booking code is required"})
+		return
+	}
+
+	booking, err := h.useCase.GetByBookingCode(c.Request.Context(), code)
+	if err != nil || booking == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "booking not found"})
+		return
+	}
+
+	// Para cancelación pública, pasamos userID vacío. El usecase validará si la reserva
+	// puede ser cancelada por invitado (por ejemplo, cuando booking.UserID == "").
+	err = h.useCase.CancelBooking(c.Request.Context(), booking.ID, "")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
+}
+
 func (h *BookingHandler) CreateInternalBooking(c *gin.Context) {
 	var booking domain.Booking
 	if err := c.ShouldBindJSON(&booking); err != nil {

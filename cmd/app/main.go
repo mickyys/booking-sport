@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/hamp/booking-sport/internal/app"
 	"github.com/hamp/booking-sport/internal/infra"
+	mg "github.com/hamp/booking-sport/internal/infra/mailgun"
 	"github.com/hamp/booking-sport/internal/infra/mongo"
 	"github.com/hamp/booking-sport/pkg/auth"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -67,7 +68,21 @@ func main() {
 	// 4. Inicializar Casos de Uso (Application Layer)
 	sportCenterUC := app.NewSportCenterUseCase(sportCenterRepo, courtRepo, userRepo, bookingRepo)
 	courtUC := app.NewCourtUseCase(courtRepo, sportCenterRepo, bookingRepo)
-	bookingUC := app.NewBookingUseCase(bookingRepo, courtRepo, sportCenterRepo, userRepo)
+	// Inicializar Mailer (Mailgun) si está configurado
+	var bookingMailer app.Mailer
+	mailgunAPIKey := os.Getenv("MAILGUN_API_KEY")
+	mailgunDomain := os.Getenv("MAILGUN_DOMAIN")
+	mailgunFrom := os.Getenv("MAILGUN_FROM")
+	mailgunTemplate := os.Getenv("MAILGUN_TEMPLATE_CONFIRMATION")
+	if mailgunAPIKey != "" && mailgunDomain != "" && mailgunFrom != "" {
+		mgMailer := mg.NewMailgunMailer(mailgunAPIKey, mailgunDomain, mailgunFrom, mailgunTemplate)
+		bookingMailer = mgMailer
+		log.Println("Mailgun mailer initialized")
+	} else {
+		log.Println("Mailgun not configured (MAILGUN_API_KEY/DOMAIN/FROM missing). Emails disabled.")
+	}
+
+	bookingUC := app.NewBookingUseCase(bookingRepo, courtRepo, sportCenterRepo, userRepo, bookingMailer)
 
 	// 5. Inicializar Manejadores (Presentation Layer)
 	sportCenterHandler := infra.NewSportCenterHandler(sportCenterUC)
@@ -113,6 +128,7 @@ func main() {
 	r.GET("/api/bookings/fintoc/return", bookingHandler.FintocReturn)
 	r.GET("/api/bookings/fintoc/:id", bookingHandler.GetFintocPaymentIntentStatus)
 	r.GET("/api/bookings/code/:code", bookingHandler.GetByBookingCode)
+	r.POST("/api/bookings/code/:code/cancel", bookingHandler.CancelByBookingCode)
 	r.POST("/api/bookings", bookingHandler.CreateBooking)
 
 	// Rutas Protegidas

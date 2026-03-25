@@ -44,6 +44,11 @@ type BookingRepository interface {
 	Delete(ctx context.Context, id primitive.ObjectID) error
 	GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name string) (*domain.AdminDashboardData, error)
 }
+
+// Mailer envía correos transaccionales (p. ej. confirmación de reserva)
+type Mailer interface {
+	SendBookingConfirmation(ctx context.Context, booking *domain.Booking) error
+}
 type SportCenterUseCase struct {
 	repo        SportCenterRepository
 	courtRepo   CourtRepository
@@ -51,9 +56,9 @@ type SportCenterUseCase struct {
 	bookingRepo BookingRepository
 }
 type EnrichedCourtSchedule struct {
-	Hour      int                 `json:"hour"`
-	Minutes   int                 `json:"minutes"`
-	Price     float64             `json:"price"`
+	Hour            int                 `json:"hour"`
+	Minutes         int                 `json:"minutes"`
+	Price           float64             `json:"price"`
 	Status          string              `json:"status"`
 	PaymentRequired bool                `json:"payment_required"`
 	BookingID       *primitive.ObjectID `json:"booking_id,omitempty"`
@@ -95,9 +100,9 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 		schedules := []EnrichedCourtSchedule{}
 		for _, s := range court.Schedule {
 			sch := EnrichedCourtSchedule{
-				Hour:    s.Hour,
-				Minutes: s.Minutes,
-				Price:   s.Price,
+				Hour:            s.Hour,
+				Minutes:         s.Minutes,
+				Price:           s.Price,
 				Status:          s.Status,
 				PaymentRequired: s.PaymentRequired,
 			}
@@ -242,7 +247,7 @@ func (uc *CourtUseCase) CreateAdminCourt(ctx context.Context, court *domain.Cour
 	if err != nil {
 		return err
 	}
-	
+
 	isOwner := false
 	for _, user := range center.Users {
 		if user == userID {
@@ -284,7 +289,7 @@ func (uc *CourtUseCase) UpdateAdminCourt(ctx context.Context, courtID primitive.
 	existing.Name = updatedCourt.Name
 	existing.Description = updatedCourt.Description
 	existing.UpdatedAt = time.Now()
-	
+
 	return uc.repo.Update(ctx, existing)
 }
 
@@ -474,9 +479,9 @@ func (uc *CourtUseCase) GetSportCenterSchedulesWithBookings(ctx context.Context,
 		enrichedSchedules := []EnrichedCourtSchedule{}
 		for _, s := range schedules {
 			enrichedSchedules = append(enrichedSchedules, EnrichedCourtSchedule{
-				Hour:    s.Hour,
-				Minutes: s.Minutes,
-				Price:   s.Price,
+				Hour:            s.Hour,
+				Minutes:         s.Minutes,
+				Price:           s.Price,
 				Status:          s.Status,
 				PaymentRequired: s.PaymentRequired,
 			})
