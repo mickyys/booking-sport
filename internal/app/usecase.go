@@ -48,6 +48,7 @@ type BookingRepository interface {
 // Mailer envía correos transaccionales (p. ej. confirmación de reserva)
 type Mailer interface {
 	SendBookingConfirmation(ctx context.Context, booking *domain.Booking) error
+	SendBookingCancellation(ctx context.Context, booking *domain.Booking) error
 }
 type SportCenterUseCase struct {
 	repo        SportCenterRepository

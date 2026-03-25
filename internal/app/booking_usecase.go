@@ -445,6 +445,15 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 		return fmt.Errorf("error updating booking status: %w", err)
 	}
 
+	// Enviar correo de confirmación de cancelación si está configurado
+	if uc.mailer != nil {
+		go func(b *domain.Booking) {
+			if err := uc.mailer.SendBookingCancellation(context.Background(), b); err != nil {
+				log.Printf("[MAIL ERROR] sending cancellation confirmation: %v\n", err)
+			}
+		}(booking)
+	}
+
 	return nil
 }
 func (uc *BookingUseCase) DeleteBooking(ctx context.Context, id primitive.ObjectID) error {
@@ -554,11 +563,16 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 		booking.CustomerPhone = booking.GuestDetails.Phone
 	}
 
+	log.Println("booking para crear: ", booking)
 	if err := uc.repo.Create(ctx, booking); err != nil {
 		return err
 	}
 
+	log.Println("booking para creado: ", booking)
+	log.Println("booking uc.mailer: ", uc.mailer)
+
 	if uc.mailer != nil {
+		log.Printf("[CREATE BOOKING] Enviando correo de confirmación para reserva %s\n", booking.ID.Hex())
 		go func(b *domain.Booking) {
 			if err := uc.mailer.SendBookingConfirmation(context.Background(), b); err != nil {
 				log.Printf("[MAIL ERROR] sending booking confirmation: %v\n", err)

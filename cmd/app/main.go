@@ -74,12 +74,12 @@ func main() {
 	mailgunDomain := os.Getenv("MAILGUN_DOMAIN")
 	mailgunFrom := os.Getenv("MAILGUN_FROM")
 	mailgunTemplate := os.Getenv("MAILGUN_TEMPLATE_CONFIRMATION")
+	mailgunTemplateCancel := os.Getenv("MAILGUN_TEMPLATE_CANCEL")
+
 	if mailgunAPIKey != "" && mailgunDomain != "" && mailgunFrom != "" {
-		mgMailer := mg.NewMailgunMailer(mailgunAPIKey, mailgunDomain, mailgunFrom, mailgunTemplate)
+		mgMailer := mg.NewMailgunMailer(mailgunAPIKey, mailgunDomain, mailgunFrom, mailgunTemplate, mailgunTemplateCancel)
 		bookingMailer = mgMailer
 		log.Println("Mailgun mailer initialized")
-	} else {
-		log.Println("Mailgun not configured (MAILGUN_API_KEY/DOMAIN/FROM missing). Emails disabled.")
 	}
 
 	bookingUC := app.NewBookingUseCase(bookingRepo, courtRepo, sportCenterRepo, userRepo, bookingMailer)
