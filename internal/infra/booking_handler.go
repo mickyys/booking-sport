@@ -416,7 +416,71 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, booking)
+	// Build same response structure as GetBookingDetail
+	court, err := h.useCase.GetCourtByID(c.Request.Context(), booking.CourtID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get court info"})
+		return
+	}
+
+	center, err := h.useCase.GetSportCenterByID(c.Request.Context(), court.SportCenterID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get sport center info"})
+		return
+	}
+
+	hoursUntilMatch := time.Until(booking.Date.Add(time.Hour * time.Duration(booking.Hour))).Hours()
+
+	configCancellationHours := center.CancellationHours
+	if configCancellationHours == 0 {
+		configCancellationHours = 3
+	}
+	configRetentionPercent := center.RetentionPercent
+	if configRetentionPercent == 0 {
+		configRetentionPercent = 10
+	}
+
+	canCancel := hoursUntilMatch > 0 && booking.Status == domain.BookingStatusConfirmed
+	refundPercentage := 0
+	if canCancel {
+		if hoursUntilMatch >= float64(configCancellationHours) {
+			refundPercentage = 100
+		} else {
+			refundPercentage = 100 - configRetentionPercent
+		}
+	}
+
+	maxRefundAmount := (booking.Price * float64(refundPercentage)) / 100
+
+	response := gin.H{
+		"booking_detail": gin.H{
+			"id":                booking.ID,
+			"user_id":           booking.UserID,
+			"court_id":          booking.CourtID,
+			"court_name":        court.Name,
+			"sport_center_id":   court.SportCenterID,
+			"sport_center_name": center.Name,
+			"date":              booking.Date,
+			"hour":              booking.Hour,
+			"price":             booking.Price,
+			"status":            booking.Status,
+			"payment_method":    booking.PaymentMethod,
+			"booking_code":      booking.BookingCode,
+			"created_at":        booking.CreatedAt,
+			"updated_at":        booking.UpdatedAt,
+		},
+		"hours_until_match": hoursUntilMatch,
+		"can_cancel":        canCancel,
+		"refund_percentage": refundPercentage,
+		"amount_paid":       booking.Price,
+		"max_refund_amount": maxRefundAmount,
+		"cancellation_policy": gin.H{
+			"limit_hours":       configCancellationHours,
+			"retention_percent": configRetentionPercent,
+		},
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // CancelByBookingCode permite cancelar una reserva usando el booking_code (pública)
