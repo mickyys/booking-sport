@@ -49,7 +49,12 @@ func (h *SportCenterHandler) GetBySlug(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Sport center not found"})
 		return
 	}
-	c.JSON(http.StatusOK, center)
+	cancellationPolicy := gin.H{
+		"hours":             center.CancellationHours,
+		"retention_percent": center.RetentionPercent,
+	}
+
+	c.JSON(http.StatusOK, gin.H{"center": center, "cancellation_policy": cancellationPolicy})
 }
 
 func (h *SportCenterHandler) Create(c *gin.Context) {
@@ -68,7 +73,12 @@ func (h *SportCenterHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusCreated, center)
+	cancellationPolicy := gin.H{
+		"hours":             center.CancellationHours,
+		"retention_percent": center.RetentionPercent,
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"center": center, "cancellation_policy": cancellationPolicy})
 }
 
 func (h *SportCenterHandler) Update(c *gin.Context) {
@@ -95,7 +105,12 @@ func (h *SportCenterHandler) Update(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, center)
+	cancellationPolicy := gin.H{
+		"hours":             center.CancellationHours,
+		"retention_percent": center.RetentionPercent,
+	}
+
+	c.JSON(http.StatusOK, gin.H{"center": center, "cancellation_policy": cancellationPolicy})
 }
 
 type CourtHandler struct {
@@ -309,8 +324,8 @@ func (h *CourtHandler) UpdateAdminCourt(c *gin.Context) {
 	}
 
 	var body struct {
-		Name          string `json:"name"`
-		Description   string `json:"description"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
 	}
 
 	if err := c.ShouldBindJSON(&body); err != nil {

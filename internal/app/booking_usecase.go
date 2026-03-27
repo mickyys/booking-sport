@@ -66,8 +66,8 @@ func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking
 				return "", fmt.Errorf("hour %d is not available", booking.Hour)
 			}
 
-			if !s.PaymentRequired {
-				return "", fmt.Errorf("payment not required for this slot, use standard booking")
+			if !s.PaymentRequired && !s.PaymentOptional {
+				return "", fmt.Errorf("payment not enabled for this slot, use standard booking")
 			}
 
 			price = s.Price

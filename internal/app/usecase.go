@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/hamp/booking-sport/internal/domain"
@@ -62,6 +63,7 @@ type EnrichedCourtSchedule struct {
 	Price           float64             `json:"price"`
 	Status          string              `json:"status"`
 	PaymentRequired bool                `json:"payment_required"`
+	PaymentOptional bool                `json:"payment_optional"`
 	BookingID       *primitive.ObjectID `json:"booking_id,omitempty"`
 }
 
@@ -106,6 +108,7 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 				Price:           s.Price,
 				Status:          s.Status,
 				PaymentRequired: s.PaymentRequired,
+				PaymentOptional: s.PaymentOptional,
 			}
 
 			// Check if slot has already passed
@@ -455,6 +458,7 @@ func (uc *CourtUseCase) GetCourtsByAdminUser(ctx context.Context, userID string)
 		if err != nil {
 			return nil, err
 		}
+		log.Printf("data courts ========> %v", courts)
 		if courts == nil {
 			courts = []domain.Court{}
 		}
@@ -485,6 +489,7 @@ func (uc *CourtUseCase) GetSportCenterSchedulesWithBookings(ctx context.Context,
 				Price:           s.Price,
 				Status:          s.Status,
 				PaymentRequired: s.PaymentRequired,
+				PaymentOptional: s.PaymentOptional,
 			})
 		}
 

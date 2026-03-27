@@ -64,11 +64,12 @@ type Court struct {
 }
 
 type CourtSchedule struct {
-	Hour            int     `bson:"hour" json:"hour"`             // 0 - 23
-	Minutes         int     `bson:"minutes" json:"minutes"`       // 0 - 59
-	Price           float64 `bson:"price" json:"price"`           // Valor por hora
-	Status          string  `bson:"status" json:"status"`         // "available", "booked", "closed"
+	Hour            int     `bson:"hour" json:"hour"`       // 0 - 23
+	Minutes         int     `bson:"minutes" json:"minutes"` // 0 - 59
+	Price           float64 `bson:"price" json:"price"`     // Valor por hora
+	Status          string  `bson:"status" json:"status"`   // "available", "booked", "closed"
 	PaymentRequired bool    `bson:"payment_required" json:"payment_required"`
+	PaymentOptional bool    `bson:"payment_optional" json:"payment_optional"`
 }
 
 type User struct {
