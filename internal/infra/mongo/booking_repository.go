@@ -4,6 +4,7 @@ package mongo
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/hamp/booking-sport/internal/domain"
@@ -480,11 +481,24 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 	// 5. Recent Bookings with filters and pagination
 	recentMatch := bson.M{"sport_center_id": bson.M{"$in": sportCenterIDs}}
 	if dateStr != "" {
-		t, err := time.Parse("2006-01-02", dateStr)
-		if err == nil {
-			start := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
-			end := start.Add(24 * time.Hour)
-			recentMatch["date"] = bson.M{"$gte": start, "$lt": end}
+		// Support either single date `YYYY-MM-DD` or range `YYYY-MM-DD|YYYY-MM-DD`
+		if strings.Contains(dateStr, "|") {
+			parts := strings.SplitN(dateStr, "|", 2)
+			startT, err1 := time.Parse("2006-01-02", parts[0])
+			endT, err2 := time.Parse("2006-01-02", parts[1])
+			if err1 == nil && err2 == nil {
+				start := time.Date(startT.Year(), startT.Month(), startT.Day(), 0, 0, 0, 0, time.UTC)
+				// make end exclusive by adding one day
+				end := time.Date(endT.Year(), endT.Month(), endT.Day(), 0, 0, 0, 0, time.UTC).Add(24 * time.Hour)
+				recentMatch["date"] = bson.M{"$gte": start, "$lt": end}
+			}
+		} else {
+			t, err := time.Parse("2006-01-02", dateStr)
+			if err == nil {
+				start := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+				end := start.Add(24 * time.Hour)
+				recentMatch["date"] = bson.M{"$gte": start, "$lt": end}
+			}
 		}
 	}
 	if name != "" {
