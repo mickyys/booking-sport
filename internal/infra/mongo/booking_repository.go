@@ -204,6 +204,31 @@ func (r *BookingRepository) FindByCourtAndDate(ctx context.Context, courtID prim
 	return bookings, nil
 }
 
+func (r *BookingRepository) FindBySportCenterAndDate(ctx context.Context, centerID primitive.ObjectID, date time.Time) ([]domain.Booking, error) {
+	// Normalizar fecha al inicio del día
+	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	endDate := startDate.Add(24 * time.Hour)
+
+	cursor, err := r.collection.Find(ctx, bson.M{
+		"sport_center_id": centerID,
+		"date": bson.M{
+			"$gte": startDate,
+			"$lt":  endDate,
+		},
+		"status": domain.BookingStatusConfirmed,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var bookings []domain.Booking
+	if err := cursor.All(ctx, &bookings); err != nil {
+		return nil, err
+	}
+	return bookings, nil
+}
+
 func (r *BookingRepository) FindByUserIDPaged(ctx context.Context, userID string, page, limit int, isOld bool) ([]domain.BookingSummary, int64, error) {
 	skip := (page - 1) * limit
 	filter := bson.M{"user_id": userID}
