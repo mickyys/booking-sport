@@ -41,9 +41,9 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 		return fmt.Errorf("no recipient email for booking %s", booking.BookingCode)
 	}
 
-	// Formatear hora: preferimos la hora completa de booking.Date (incluye minutos).
-	timeStr := booking.Date.Format("15:04")
-	// Añadir sufijo " hrs" tal como se solicita (ej. "16:00 hrs" o "16:30 hrs").
+	// Formatear hora usando únicamente `booking.Hour` (sin minutos).
+	timeStr := fmt.Sprintf("%02d:00", booking.Hour)
+	// Añadir sufijo " hrs" tal como se solicita (ej. "16:00 hrs").
 	timeWithSuffix := fmt.Sprintf("%s hrs", timeStr)
 
 	subject := fmt.Sprintf("Reserva confirmada - %s", booking.SportCenterName)
@@ -103,7 +103,7 @@ func (m *MailgunMailer) SendBookingCancellation(ctx context.Context, booking *do
 		return fmt.Errorf("no recipient email for booking %s", booking.BookingCode)
 	}
 
-	timeStr := booking.Date.Format("15:04")
+	timeStr := fmt.Sprintf("%02d:00", booking.Hour)
 	timeWithSuffix := fmt.Sprintf("%s hrs", timeStr)
 
 	subject := fmt.Sprintf("Reserva cancelada - %s", booking.SportCenterName)
