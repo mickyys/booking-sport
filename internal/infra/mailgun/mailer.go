@@ -55,12 +55,17 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 
 		cancelURL := fmt.Sprintf("%s/booking/cancel?code=%s", frontendURL, booking.BookingCode)
 
+		// Formatear hora: preferimos la hora completa de booking.Date (incluye minutos).
+		timeStr := booking.Date.Format("15:04")
+		// Añadir sufijo " hrs" tal como se solicita (ej. "16:00 hrs" o "16:30 hrs").
+		timeWithSuffix := fmt.Sprintf("%s hrs", timeStr)
+
 		vars := map[string]interface{}{
 			"booking_code":  booking.BookingCode,
 			"center_name":   booking.SportCenterName,
 			"court_name":    booking.CourtName,
 			"date":          booking.Date.Format("02-01-2006"),
-			"hour":          booking.Hour,
+			"hour":          timeWithSuffix,
 			"price":         booking.FinalPrice,
 			"customer_name": booking.CustomerName,
 			"link_cancel":   cancelURL,
@@ -72,7 +77,8 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 		}
 	} else {
 		// fallback simple body
-		body := fmt.Sprintf("Tu reserva %s en %s (cancha %s) para %s a las %02d:00 ha sido confirmada.", booking.BookingCode, booking.SportCenterName, booking.CourtName, booking.Date.Format("2006-01-02"), booking.Hour)
+		// Usar booking.Date para formatear minutos si existen
+		body := fmt.Sprintf("Tu reserva %s en %s (cancha %s) para %s a las %s ha sido confirmada.", booking.BookingCode, booking.SportCenterName, booking.CourtName, booking.Date.Format("2006-01-02"), timeWithSuffix)
 		message.SetHtml(body)
 	}
 
@@ -107,12 +113,15 @@ func (m *MailgunMailer) SendBookingCancellation(ctx context.Context, booking *do
 			frontendURL = "http://localhost:5173"
 		}
 
+		timeStr := booking.Date.Format("15:04")
+		timeWithSuffix := fmt.Sprintf("%s hrs", timeStr)
+
 		vars := map[string]interface{}{
 			"booking_code":  booking.BookingCode,
 			"center_name":   booking.SportCenterName,
 			"court_name":    booking.CourtName,
 			"date":          booking.Date.Format("02-01-2006"),
-			"hour":          booking.Hour,
+			"hour":          timeWithSuffix,
 			"price":         booking.FinalPrice,
 			"customer_name": booking.CustomerName,
 		}
@@ -122,7 +131,7 @@ func (m *MailgunMailer) SendBookingCancellation(ctx context.Context, booking *do
 			log.Printf("[MAILGUN] error marshaling template variables (cancel): %v\n", err)
 		}
 	} else {
-		body := fmt.Sprintf("Tu reserva %s en %s (cancha %s) para %s a las %02d:00 ha sido cancelada.", booking.BookingCode, booking.SportCenterName, booking.CourtName, booking.Date.Format("2006-01-02"), booking.Hour)
+		body := fmt.Sprintf("Tu reserva %s en %s (cancha %s) para %s a las %s ha sido cancelada.", booking.BookingCode, booking.SportCenterName, booking.CourtName, booking.Date.Format("2006-01-02"), timeWithSuffix)
 		message.SetHtml(body)
 	}
 
