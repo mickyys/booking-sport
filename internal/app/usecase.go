@@ -38,6 +38,7 @@ type BookingRepository interface {
 	UpdateFintocPaymentIntentID(ctx context.Context, id primitive.ObjectID, paymentIntentID string) error
 	AddRefund(ctx context.Context, paymentIntentID string, refund domain.Refund) error
 	FindByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error)
+	FindBySportCenterAndDate(ctx context.Context, centerID primitive.ObjectID, date time.Time) ([]domain.Booking, error)
 	FindByUserID(ctx context.Context, userID string) ([]domain.Booking, error)
 	FindByUserIDPaged(ctx context.Context, userID string, page, limit int, isOld bool) ([]domain.BookingSummary, int64, error)
 	CountConfirmedByUserID(ctx context.Context, userID string) (int64, error)
@@ -86,20 +87,29 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 	// Normalizar la fecha al inicio del día (00:00:00)
 	searchDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 
+	// Buscar TODOS los bookings confirmados para este centro y fecha específica en una sola consulta
+	allBookings, _ := uc.bookingRepo.FindBySportCenterAndDate(ctx, centerID, searchDate)
+
+	// Agrupar bookings por CourtID para acceso rápido
+	bookingsByCourt := make(map[primitive.ObjectID]map[int]*primitive.ObjectID)
+	for _, b := range allBookings {
+		if bookingsByCourt[b.CourtID] == nil {
+			bookingsByCourt[b.CourtID] = make(map[int]*primitive.ObjectID)
+		}
+		id := b.ID
+		bookingsByCourt[b.CourtID][b.Hour] = &id
+	}
+
+	loc, _ := time.LoadLocation("America/Santiago")
+	nowInLoc := time.Now().In(loc)
+
 	result := []CourtScheduleResponse{}
 	for _, court := range courts {
-		// Buscar bookings confirmados para esta cancha y fecha específica
-		bookings, _ := uc.bookingRepo.FindByCourtAndDate(ctx, court.ID, searchDate)
-		bookedHours := make(map[int]*primitive.ObjectID)
-		for _, b := range bookings {
-			if b.Status == domain.BookingStatusConfirmed {
-				id := b.ID
-				bookedHours[b.Hour] = &id
-			}
+		bookedHours := bookingsByCourt[court.ID]
+		if bookedHours == nil {
+			bookedHours = make(map[int]*primitive.ObjectID)
 		}
 
-		loc, _ := time.LoadLocation("America/Santiago")
-		nowInLoc := time.Now().In(loc)
 		schedules := []EnrichedCourtSchedule{}
 		for _, s := range court.Schedule {
 			sch := EnrichedCourtSchedule{
