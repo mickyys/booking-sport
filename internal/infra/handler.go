@@ -40,19 +40,27 @@ func (h *SportCenterHandler) List(c *gin.Context) {
 	var date *time.Time
 	if dateStr != "" {
 		parsedDate, err := time.Parse("2006-01-02", dateStr)
-		if err == nil {
-			// Normalize to UTC midnight
-			utcDate := time.Date(parsedDate.Year(), parsedDate.Month(), parsedDate.Day(), 0, 0, 0, 0, time.UTC)
-			date = &utcDate
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date format, expected YYYY-MM-DD"})
+			return
 		}
+		// Normalize to UTC midnight
+		utcDate := time.Date(parsedDate.Year(), parsedDate.Month(), parsedDate.Day(), 0, 0, 0, 0, time.UTC)
+		date = &utcDate
 	}
 
 	var hour *int
 	if hourStr != "" {
 		hInt, err := strconv.Atoi(hourStr)
-		if err == nil {
-			hour = &hInt
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid hour format, expected integer hour (e.g. 6)"})
+			return
 		}
+		if hInt < 0 || hInt > 23 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "hour must be between 0 and 23"})
+			return
+		}
+		hour = &hInt
 	}
 
 	// If hour is provided but date is not, default to today in America/Santiago
@@ -421,10 +429,19 @@ func (h *CourtHandler) DeleteAdminCourt(c *gin.Context) {
 
 func (h *SportCenterHandler) GetSchedules(c *gin.Context) {
 	idStr := c.Param("id")
-	centerID, err := primitive.ObjectIDFromHex(idStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid sport center ID format"})
-		return
+	var centerID primitive.ObjectID
+	// Try parse as ObjectID first; if fails, treat as slug and resolve
+	oid, err := primitive.ObjectIDFromHex(idStr)
+	if err == nil {
+		centerID = oid
+	} else {
+		// treat idStr as slug
+		center, findErr := h.useCase.FindBySlug(c.Request.Context(), idStr)
+		if findErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid sport center identifier"})
+			return
+		}
+		centerID = center.ID
 	}
 
 	dateStr := c.Query("date")

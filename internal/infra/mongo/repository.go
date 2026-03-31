@@ -46,6 +46,9 @@ func (r *SportCenterRepository) FindByID(ctx context.Context, id primitive.Objec
 	if err != nil {
 		return nil, err
 	}
+	// Rellenar contador de canchas
+	count, _ := r.db.Collection("courts").CountDocuments(ctx, bson.M{"sport_center_id": center.ID})
+	center.Courts = int(count)
 	return &center, nil
 }
 
@@ -55,6 +58,9 @@ func (r *SportCenterRepository) FindBySlug(ctx context.Context, slug string) (*d
 	if err != nil {
 		return nil, err
 	}
+	// Rellenar contador de canchas
+	count, _ := r.db.Collection("courts").CountDocuments(ctx, bson.M{"sport_center_id": center.ID})
+	center.Courts = int(count)
 	return &center, nil
 }
 
@@ -68,6 +74,11 @@ func (r *SportCenterRepository) FindAll(ctx context.Context) ([]domain.SportCent
 	var centers []domain.SportCenter
 	if err = cursor.All(ctx, &centers); err != nil {
 		return nil, err
+	}
+	// Rellenar contador de canchas para cada centro (uso CountDocuments)
+	for i := range centers {
+		cnt, _ := r.db.Collection("courts").CountDocuments(ctx, bson.M{"sport_center_id": centers[i].ID})
+		centers[i].Courts = int(cnt)
 	}
 	return centers, nil
 }
@@ -200,6 +211,12 @@ func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, 
 		centers = []domain.SportCenter{}
 	}
 
+	// Rellenar contador de canchas para cada centro
+	for i := range centers {
+		cnt, _ := r.db.Collection("courts").CountDocuments(ctx, bson.M{"sport_center_id": centers[i].ID})
+		centers[i].Courts = int(cnt)
+	}
+
 	return centers, total, nil
 }
 
@@ -215,11 +232,17 @@ func (r *SportCenterRepository) FindByUserID(ctx context.Context, userID string)
 	if err = cursor.All(ctx, &centers); err != nil {
 		return nil, err
 	}
-	
+
 	if centers == nil {
 		centers = []domain.SportCenter{}
 	}
-	
+
+	// Rellenar contador de canchas
+	for i := range centers {
+		cnt, _ := r.db.Collection("courts").CountDocuments(ctx, bson.M{"sport_center_id": centers[i].ID})
+		centers[i].Courts = int(cnt)
+	}
+
 	return centers, nil
 }
 

@@ -38,20 +38,22 @@ type FintocConfig struct {
 }
 
 type SportCenter struct {
-	ID                primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
-	Slug              string             `bson:"slug" json:"slug"`
-	Name              string             `bson:"name" json:"name"`
-	City              string             `bson:"city" json:"city"`
-	Address           string             `bson:"address" json:"address"`
-	Coordinates       Coordinates        `bson:"coordinates" json:"coordinates"`
-	Services          []string           `bson:"services" json:"services"`
-	Contact           Contact            `bson:"contact" json:"contact"`
-	Fintoc            *FintocConfig      `bson:"fintoc,omitempty" json:"-"` // Ocultar datos privados de Fintoc
-	CancellationHours int                `bson:"cancellation_hours" json:"cancellation_hours"`
-	RetentionPercent  int                `bson:"retention_percent" json:"retention_percent"`
-	Users             []string           `bson:"users" json:"users"` // Usuarios asociados al centro
-	CreatedAt         time.Time          `bson:"created_at" json:"created_at"`
-	UpdatedAt         time.Time          `bson:"updated_at" json:"updated_at"`
+	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	Slug        string             `bson:"slug" json:"slug"`
+	Name        string             `bson:"name" json:"name"`
+	City        string             `bson:"city" json:"city"`
+	Address     string             `bson:"address" json:"address"`
+	Coordinates Coordinates        `bson:"coordinates" json:"coordinates"`
+	Services    []string           `bson:"services" json:"services"`
+	Contact     Contact            `bson:"contact" json:"contact"`
+	// Courts: cantidad de canchas asociadas al centro (campo calculado por el repositorio)
+	Courts            int           `bson:"courts_count,omitempty" json:"courts"`
+	Fintoc            *FintocConfig `bson:"fintoc,omitempty" json:"-"` // Ocultar datos privados de Fintoc
+	CancellationHours int           `bson:"cancellation_hours" json:"cancellation_hours"`
+	RetentionPercent  int           `bson:"retention_percent" json:"retention_percent"`
+	Users             []string      `bson:"users" json:"users"` // Usuarios asociados al centro
+	CreatedAt         time.Time     `bson:"created_at" json:"created_at"`
+	UpdatedAt         time.Time     `bson:"updated_at" json:"updated_at"`
 }
 
 type Court struct {
