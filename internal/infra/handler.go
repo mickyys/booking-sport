@@ -22,6 +22,10 @@ func NewSportCenterHandler(uc *app.SportCenterUseCase) *SportCenterHandler {
 func (h *SportCenterHandler) List(c *gin.Context) {
 	pageStr := c.Query("page")
 	limitStr := c.Query("limit")
+	name := c.Query("name")
+	city := c.Query("city")
+	dateStr := c.Query("date")
+	hourStr := c.Query("hour")
 
 	page, _ := strconv.Atoi(pageStr)
 	limit, _ := strconv.Atoi(limitStr)
@@ -33,7 +37,38 @@ func (h *SportCenterHandler) List(c *gin.Context) {
 		limit = 10
 	}
 
-	response, err := h.useCase.ListSportCentersPaged(c.Request.Context(), page, limit)
+	var date *time.Time
+	if dateStr != "" {
+		parsedDate, err := time.Parse("2006-01-02", dateStr)
+		if err == nil {
+			// Normalize to UTC midnight
+			utcDate := time.Date(parsedDate.Year(), parsedDate.Month(), parsedDate.Day(), 0, 0, 0, 0, time.UTC)
+			date = &utcDate
+		}
+	}
+
+	var hour *int
+	if hourStr != "" {
+		hInt, err := strconv.Atoi(hourStr)
+		if err == nil {
+			hour = &hInt
+		}
+	}
+
+	// If hour is provided but date is not, default to today in America/Santiago
+	if hour != nil && date == nil {
+		loc, err := time.LoadLocation("America/Santiago")
+		if err != nil {
+			// Fallback to UTC if timezone db is missing
+			loc = time.UTC
+		}
+		now := time.Now().In(loc)
+		// We set the date to UTC midnight for consistency with MongoDB storage
+		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		date = &today
+	}
+
+	response, err := h.useCase.ListSportCentersPaged(c.Request.Context(), page, limit, name, city, date, hour)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
