@@ -16,8 +16,9 @@ type SportCenterRepository interface {
 	FindByID(ctx context.Context, id primitive.ObjectID) (*domain.SportCenter, error)
 	FindBySlug(ctx context.Context, slug string) (*domain.SportCenter, error)
 	FindAll(ctx context.Context) ([]domain.SportCenter, error)
-	FindPaged(ctx context.Context, page, limit int) ([]domain.SportCenter, int64, error)
+	FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int) ([]domain.SportCenter, int64, error)
 	FindByUserID(ctx context.Context, userID string) ([]domain.SportCenter, error)
+	GetCities(ctx context.Context) ([]string, error)
 }
 
 type UserRepository interface {
@@ -189,7 +190,18 @@ func (uc *SportCenterUseCase) ListSportCenters(ctx context.Context) ([]domain.Sp
 	return uc.repo.FindAll(ctx)
 }
 
-func (uc *SportCenterUseCase) ListSportCentersPaged(ctx context.Context, page, limit int) (*domain.PagedResponse, error) {
+func (uc *SportCenterUseCase) ListCities(ctx context.Context) ([]string, error) {
+	cities, err := uc.repo.GetCities(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if cities == nil {
+		cities = []string{}
+	}
+	return cities, nil
+}
+
+func (uc *SportCenterUseCase) ListSportCentersPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int) (*domain.PagedResponse, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -197,7 +209,7 @@ func (uc *SportCenterUseCase) ListSportCentersPaged(ctx context.Context, page, l
 		limit = 10
 	}
 
-	centers, total, err := uc.repo.FindPaged(ctx, page, limit)
+	centers, total, err := uc.repo.FindPaged(ctx, page, limit, name, city, date, hour)
 	if err != nil {
 		return nil, err
 	}

@@ -116,6 +116,7 @@ func main() {
 
 	// Rutas Públicas
 	r.GET("/api/sport-centers", sportCenterHandler.List)
+	r.GET("/api/cities", sportCenterHandler.ListCities)
 	r.GET("/api/sport-centers/slug/:slug", sportCenterHandler.GetBySlug)
 	r.POST("/api/sport-centers", sportCenterHandler.Create)
 	r.PUT("/api/sport-centers/:id", sportCenterHandler.Update)
