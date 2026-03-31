@@ -228,6 +228,22 @@ func (r *SportCenterRepository) Update(ctx context.Context, center *domain.Sport
 	return err
 }
 
+func (r *SportCenterRepository) GetCities(ctx context.Context) ([]string, error) {
+	// Filter out empty cities
+	values, err := r.collection.Distinct(ctx, "city", bson.M{"city": bson.M{"$ne": ""}})
+	if err != nil {
+		return nil, err
+	}
+
+	cities := make([]string, 0, len(values))
+	for _, v := range values {
+		if s, ok := v.(string); ok {
+			cities = append(cities, s)
+		}
+	}
+	return cities, nil
+}
+
 type CourtRepository struct {
 	db         *mongodb.Database
 	collection *mongodb.Collection

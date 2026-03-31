@@ -77,6 +77,16 @@ func (h *SportCenterHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+func (h *SportCenterHandler) ListCities(c *gin.Context) {
+	cities, err := h.useCase.ListCities(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"cities": cities})
+}
+
 func (h *SportCenterHandler) GetBySlug(c *gin.Context) {
 	slug := c.Param("slug")
 	center, err := h.useCase.FindBySlug(c.Request.Context(), slug)

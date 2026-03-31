@@ -48,6 +48,10 @@ func ensureSportCenterIndexes(ctx context.Context, db *mongo.Database) error {
 			Keys:    bson.D{{Key: "users", Value: 1}},
 			Options: options.Index().SetName("idx_sport_centers_users"),
 		},
+		{
+			Keys:    bson.D{{Key: "city", Value: 1}},
+			Options: options.Index().SetName("idx_sport_centers_city"),
+		},
 	}
 
 	_, err := collection.Indexes().CreateMany(ctx, indexes)
