@@ -579,8 +579,9 @@ func (h *BookingHandler) GetAdminDashboard(c *gin.Context) {
 	date := c.Query("date")
 	name := c.Query("name")
 	code := c.Query("code")
+	status := c.Query("status")
 
-	data, err := h.useCase.GetAdminDashboard(c.Request.Context(), userIDStr, page, limit, date, name, code)
+	data, err := h.useCase.GetAdminDashboard(c.Request.Context(), userIDStr, page, limit, date, name, code, status)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

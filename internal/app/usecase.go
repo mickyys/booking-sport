@@ -50,7 +50,7 @@ type BookingRepository interface {
 	CountConfirmedByUserID(ctx context.Context, userID string) (int64, error)
 	FindByUserIDAndStatusPaged(ctx context.Context, userID string, cancelled domain.BookingStatus, page int, limit int) ([]domain.BookingSummary, int64, error)
 	Delete(ctx context.Context, id primitive.ObjectID) error
-	GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name string, code string) (*domain.AdminDashboardData, error)
+	GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name string, code string, status string) (*domain.AdminDashboardData, error)
 }
 
 // Mailer envía correos transaccionales (p. ej. confirmación de reserva)

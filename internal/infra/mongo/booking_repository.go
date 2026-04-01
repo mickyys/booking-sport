@@ -469,7 +469,7 @@ func (r *BookingRepository) Delete(ctx context.Context, id primitive.ObjectID) e
 	return err
 }
 
-func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name, code string) (*domain.AdminDashboardData, error) {
+func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name, code, status string) (*domain.AdminDashboardData, error) {
 	now := time.Now()
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	todayEnd := todayStart.Add(24 * time.Hour)
@@ -571,6 +571,9 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 	}
 	if code != "" {
 		recentMatch["booking_code"] = bson.M{"$regex": code, "$options": "i"}
+	}
+	if status != "" {
+		recentMatch["status"] = status
 	}
 
 	totalRecentCount, _ := r.collection.CountDocuments(ctx, recentMatch)

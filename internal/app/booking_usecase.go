@@ -839,7 +839,7 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 	return nil
 }
 
-func (uc *BookingUseCase) GetAdminDashboard(ctx context.Context, userID string, page, limit int, dateStr, name, code string) (*domain.AdminDashboardData, error) {
+func (uc *BookingUseCase) GetAdminDashboard(ctx context.Context, userID string, page, limit int, dateStr, name, code, status string) (*domain.AdminDashboardData, error) {
 	// 1. Get sport centers managed by this user
 	centers, err := uc.centerRepo.FindByUserID(ctx, userID)
 	if err != nil {
@@ -858,5 +858,5 @@ func (uc *BookingUseCase) GetAdminDashboard(ctx context.Context, userID string, 
 	}
 
 	// 2. Get dashboard data from repo
-	return uc.repo.GetDashboardData(ctx, centerIDs, page, limit, dateStr, name, code)
+	return uc.repo.GetDashboardData(ctx, centerIDs, page, limit, dateStr, name, code, status)
 }
