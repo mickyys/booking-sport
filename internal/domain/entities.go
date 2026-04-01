@@ -104,6 +104,7 @@ type BookingSummary struct {
 	CourtName         string             `bson:"court_name" json:"court_name"`
 	Status            BookingStatus      `bson:"status" json:"status"`
 	Price             float64            `bson:"price" json:"price"`
+	BookingCode       string             `bson:"booking_code" json:"booking_code"`
 	UserName          string             `bson:"user_name,omitempty" json:"user_name,omitempty"`
 	IsGuest           bool               `json:"is_guest"`
 	PaymentMethod     string             `bson:"payment_method" json:"payment_method"`
