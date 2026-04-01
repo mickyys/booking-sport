@@ -105,6 +105,10 @@ func ensureBookingIndexes(ctx context.Context, db *mongo.Database) error {
 			Options: options.Index().SetName("idx_bookings_preference_id"),
 		},
 		{
+			Keys:    bson.D{{Key: "mp_preference_id", Value: 1}},
+			Options: options.Index().SetName("idx_bookings_mp_preference_id"),
+		},
+		{
 			Keys: bson.D{
 				{Key: "court_id", Value: 1},
 				{Key: "date", Value: 1},

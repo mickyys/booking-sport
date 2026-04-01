@@ -180,6 +180,31 @@ func (r *BookingRepository) UpdateFintocPaymentIntentID(ctx context.Context, id 
 	return err
 }
 
+func (r *BookingRepository) FindByMPPreferenceID(ctx context.Context, preferenceID string) (*domain.Booking, error) {
+	var booking domain.Booking
+	err := r.collection.FindOne(ctx, bson.M{"mp_preference_id": preferenceID}).Decode(&booking)
+	if err != nil {
+		return nil, err
+	}
+	return &booking, nil
+}
+
+func (r *BookingRepository) FindByMPPaymentID(ctx context.Context, paymentID string) (*domain.Booking, error) {
+	var booking domain.Booking
+	err := r.collection.FindOne(ctx, bson.M{"mp_payment_id": paymentID}).Decode(&booking)
+	if err != nil {
+		return nil, err
+	}
+	return &booking, nil
+}
+
+func (r *BookingRepository) UpdateMPPaymentID(ctx context.Context, id primitive.ObjectID, mpPaymentID string) error {
+	filter := bson.M{"_id": id}
+	update := bson.M{"$set": bson.M{"mp_payment_id": mpPaymentID}}
+	_, err := r.collection.UpdateOne(ctx, filter, update)
+	return err
+}
+
 func (r *BookingRepository) FindByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error) {
 	// Normalizar fecha al inicio del día
 	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
@@ -395,6 +420,18 @@ func (r *BookingRepository) AddRefund(ctx context.Context, paymentIntentID strin
 	filter := bson.M{"fintoc_payment_intent_id": paymentIntentID}
 
 	// Agregamos el refund al array y restamos el monto del final_price
+	update := bson.M{
+		"$push": bson.M{"refunds": refund},
+		"$inc":  bson.M{"final_price": -float64(refund.Amount)},
+	}
+
+	_, err := r.collection.UpdateOne(ctx, filter, update)
+	return err
+}
+
+func (r *BookingRepository) AddRefundByBookingID(ctx context.Context, bookingID primitive.ObjectID, refund domain.Refund) error {
+	filter := bson.M{"_id": bookingID}
+
 	update := bson.M{
 		"$push": bson.M{"refunds": refund},
 		"$inc":  bson.M{"final_price": -float64(refund.Amount)},

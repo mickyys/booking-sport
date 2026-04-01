@@ -37,6 +37,10 @@ type FintocConfig struct {
 	Webhook FintocWebhookConfig `bson:"webhook" json:"webhook"`
 }
 
+type MercadoPagoConfig struct {
+	AccessToken string `bson:"access_token" json:"access_token"`
+}
+
 type SportCenter struct {
 	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
 	Slug        string             `bson:"slug" json:"slug"`
@@ -47,13 +51,14 @@ type SportCenter struct {
 	Services    []string           `bson:"services" json:"services"`
 	Contact     Contact            `bson:"contact" json:"contact"`
 	// Courts: cantidad de canchas asociadas al centro (campo calculado por el repositorio)
-	Courts            int           `bson:"courts_count,omitempty" json:"courts"`
-	Fintoc            *FintocConfig `bson:"fintoc,omitempty" json:"-"` // Ocultar datos privados de Fintoc
-	CancellationHours int           `bson:"cancellation_hours" json:"cancellation_hours"`
-	RetentionPercent  int           `bson:"retention_percent" json:"retention_percent"`
-	Users             []string      `bson:"users" json:"users"` // Usuarios asociados al centro
-	CreatedAt         time.Time     `bson:"created_at" json:"created_at"`
-	UpdatedAt         time.Time     `bson:"updated_at" json:"updated_at"`
+	Courts            int                `bson:"courts_count,omitempty" json:"courts"`
+	Fintoc            *FintocConfig      `bson:"fintoc,omitempty" json:"-"`
+	MercadoPago       *MercadoPagoConfig `bson:"mercadopago,omitempty" json:"-"`
+	CancellationHours int                `bson:"cancellation_hours" json:"cancellation_hours"`
+	RetentionPercent  int                `bson:"retention_percent" json:"retention_percent"`
+	Users             []string           `bson:"users" json:"users"` // Usuarios asociados al centro
+	CreatedAt         time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt         time.Time          `bson:"updated_at" json:"updated_at"`
 }
 
 type Court struct {
@@ -142,6 +147,8 @@ type Booking struct {
 	PaymentID             string             `bson:"payment_id,omitempty" json:"payment_id,omitempty"`
 	FintocPaymentID       string             `bson:"fintoc_payment_id,omitempty" json:"fintoc_payment_id,omitempty"`
 	FintocPaymentIntentID string             `bson:"fintoc_payment_intent_id,omitempty" json:"fintoc_payment_intent_id,omitempty"`
+	MPPreferenceID        string             `bson:"mp_preference_id,omitempty" json:"mp_preference_id,omitempty"`
+	MPPaymentID           string             `bson:"mp_payment_id,omitempty" json:"mp_payment_id,omitempty"`
 	Refunds               []Refund           `bson:"refunds,omitempty" json:"refunds,omitempty"`
 	CancelledBy           string             `bson:"cancelled_by,omitempty" json:"cancelled_by,omitempty"`
 	CancellationReason    string             `bson:"cancellation_reason,omitempty" json:"cancellation_reason,omitempty"`

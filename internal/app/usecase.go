@@ -33,11 +33,15 @@ type BookingRepository interface {
 	FindByPreferenceID(ctx context.Context, preferenceID string) (*domain.Booking, error)
 	FindByFintocPaymentID(ctx context.Context, fintocPaymentID string) (*domain.Booking, error)
 	FindByFintocPaymentIntentID(ctx context.Context, paymentIntentID string) (*domain.Booking, error)
+	FindByMPPreferenceID(ctx context.Context, preferenceID string) (*domain.Booking, error)
+	FindByMPPaymentID(ctx context.Context, paymentID string) (*domain.Booking, error)
 	FindByBookingCode(ctx context.Context, code string) (*domain.Booking, error)
 	UpdateStatus(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus) error
 	UpdateCancellation(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, cancelledBy string, reason string) error
 	UpdateFintocPaymentIntentID(ctx context.Context, id primitive.ObjectID, paymentIntentID string) error
+	UpdateMPPaymentID(ctx context.Context, id primitive.ObjectID, mpPaymentID string) error
 	AddRefund(ctx context.Context, paymentIntentID string, refund domain.Refund) error
+	AddRefundByBookingID(ctx context.Context, bookingID primitive.ObjectID, refund domain.Refund) error
 	FindByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error)
 	FindBySportCenterAndDate(ctx context.Context, centerID primitive.ObjectID, date time.Time) ([]domain.Booking, error)
 	FindByUserID(ctx context.Context, userID string) ([]domain.Booking, error)

@@ -588,3 +588,104 @@ func (h *BookingHandler) GetAdminDashboard(c *gin.Context) {
 
 	c.JSON(http.StatusOK, data)
 }
+
+// ==================== MercadoPago Handlers ====================
+
+func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
+	var booking domain.Booking
+	if err := c.ShouldBindJSON(&booking); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	initPoint, err := h.useCase.CreateMercadoPagoPayment(c.Request.Context(), &booking)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"init_point": initPoint})
+}
+
+func (h *BookingHandler) MercadoPagoWebhook(c *gin.Context) {
+	// MercadoPago sends webhook notifications
+	// Query param: type=payment, data.id=<payment_id>
+	// Or JSON body: { "action": "payment.updated", "data": { "id": "123" } }
+
+	var event struct {
+		Action string `json:"action"`
+		Type   string `json:"type"`
+		Data   struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+
+	if err := c.ShouldBindJSON(&event); err != nil {
+		// Try query params as fallback (IPN style)
+		topic := c.Query("topic")
+		id := c.Query("id")
+		if topic == "payment" && id != "" {
+			err := h.useCase.HandleMercadoPagoWebhook(c.Request.Context(), id)
+			if err != nil {
+				log.Printf("[MP WEBHOOK ERROR] %v\n", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"status": "received"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ignored"})
+		return
+	}
+
+	// Only process payment-related events
+	if event.Type == "payment" || event.Action == "payment.created" || event.Action == "payment.updated" {
+		if event.Data.ID != "" {
+			err := h.useCase.HandleMercadoPagoWebhook(c.Request.Context(), event.Data.ID)
+			if err != nil {
+				log.Printf("[MP WEBHOOK ERROR] %v\n", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "received"})
+}
+
+func (h *BookingHandler) MercadoPagoReturn(c *gin.Context) {
+	url := os.Getenv("URL_FRONTEND")
+	bookingCode := c.Query("code")
+	paymentID := c.Query("payment_id")
+	log.Printf("[MP RETURN] code=%s payment_id=%s\n", bookingCode, paymentID)
+
+	if bookingCode == "" {
+		// Try external_reference as fallback
+		bookingCode = c.Query("external_reference")
+	}
+
+	if bookingCode == "" {
+		c.Redirect(http.StatusFound, url+"/booking/failure?error=missing_code")
+		return
+	}
+
+	// Si tenemos payment_id, guardarlo en la reserva antes de procesar el webhook
+	if paymentID != "" {
+		if err := h.useCase.StoreMPPaymentID(c.Request.Context(), bookingCode, paymentID); err != nil {
+			log.Printf("[MP RETURN] Error storing payment_id %s for code %s: %v\n", paymentID, bookingCode, err)
+		}
+		if err := h.useCase.HandleMercadoPagoWebhook(c.Request.Context(), paymentID); err != nil {
+			log.Printf("[MP RETURN] Error processing payment %s: %v\n", paymentID, err)
+		}
+	}
+
+	code, err := h.useCase.ValidateMercadoPagoPaymentAndGetCode(c.Request.Context(), bookingCode)
+	if err != nil {
+		log.Printf("[MP RETURN] Error validating payment for code %s: %v\n", bookingCode, err)
+		c.Redirect(http.StatusFound, url+"/booking/failure?error=validation_failed")
+		return
+	}
+
+	redirectURL := fmt.Sprintf("%s/booking/status?code=%s", url, code)
+	c.Redirect(http.StatusFound, redirectURL)
+}

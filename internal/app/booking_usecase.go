@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/hamp/booking-sport/internal/domain"
 	"github.com/hamp/booking-sport/pkg/fintoc"
+	"github.com/hamp/booking-sport/pkg/mercadopago"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -243,8 +245,228 @@ func (uc *BookingUseCase) ValidateFintocPaymentAndGetCode(ctx context.Context, b
 	return booking.BookingCode, nil
 }
 
+// ==================== MercadoPago Payment Methods ====================
+
+func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking *domain.Booking) (string, error) {
+	court, err := uc.courtRepo.FindByID(ctx, booking.CourtID)
+	if err != nil {
+		return "", fmt.Errorf("court not found: %w", err)
+	}
+
+	price := 0.0
+	found := false
+	for _, s := range court.Schedule {
+		if s.Hour == booking.Hour {
+			loc, _ := time.LoadLocation("America/Santiago")
+			bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, loc)
+			if bookingDateTime.Before(time.Now().In(loc)) {
+				return "", fmt.Errorf("cannot book a past slot")
+			}
+
+			if s.Status != "available" {
+				return "", fmt.Errorf("hour %d is not available", booking.Hour)
+			}
+
+			if !s.PaymentRequired && !s.PaymentOptional {
+				return "", fmt.Errorf("payment not enabled for this slot, use standard booking")
+			}
+
+			price = s.Price
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return "", fmt.Errorf("hour %d not found in schedule", booking.Hour)
+	}
+
+	booking.Price = price
+	booking.FinalPrice = price
+	booking.Status = domain.BookingStatusPending
+	booking.BookingCode = generateBookingCode()
+	booking.PaymentMethod = "mercadopago"
+	booking.SportCenterID = court.SportCenterID
+
+	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
+	if err != nil {
+		return "", fmt.Errorf("sport center not found: %w", err)
+	}
+
+	booking.SportCenterName = center.Name
+	booking.CourtName = court.Name
+	booking.CreatedAt = time.Now()
+	booking.UpdatedAt = time.Now()
+
+	if center.MercadoPago == nil || center.MercadoPago.AccessToken == "" {
+		return "", fmt.Errorf("mercadopago not configured for this sport center")
+	}
+
+	email := "cliente@email.com"
+	if booking.GuestDetails != nil {
+		email = booking.GuestDetails.Email
+		booking.CustomerName = booking.GuestDetails.Name
+		booking.CustomerPhone = booking.GuestDetails.Phone
+	}
+
+	client := mercadopago.NewClient(center.MercadoPago.AccessToken)
+
+	urlFrontend := os.Getenv("URL_FRONTEND")
+	notificationURL := os.Getenv("URL_MP_WEBHOOK")
+	urlPaymentCallback := os.Getenv("URL_MP_CALLBACK")
+
+	successURL := fmt.Sprintf("%s?code=%s", urlPaymentCallback, booking.BookingCode)
+	failureURL := fmt.Sprintf("%s/booking/failure", urlFrontend)
+	pendingURL := fmt.Sprintf("%s?code=%s", urlPaymentCallback, booking.BookingCode)
+
+	title := fmt.Sprintf("Reserva %s - %s", court.Name, center.Name)
+	externalRef := booking.BookingCode
+
+	result, err := client.CreatePreference(ctx, title, price, email, externalRef, successURL, failureURL, pendingURL, notificationURL)
+	if err != nil {
+		return "", fmt.Errorf("error creating mercadopago preference: %w", err)
+	}
+
+	booking.MPPreferenceID = result.ID
+
+	if err := uc.repo.Create(ctx, booking); err != nil {
+		return "", err
+	}
+
+	return result.InitPoint, nil
+}
+
+// StoreMPPaymentID guarda el mp_payment_id en la reserva a partir del booking code.
+// Debe llamarse antes de HandleMercadoPagoWebhook cuando se conoce el bookingCode (ej. desde MercadoPagoReturn).
+func (uc *BookingUseCase) StoreMPPaymentID(ctx context.Context, bookingCode, paymentIDStr string) error {
+	booking, err := uc.repo.FindByBookingCode(ctx, bookingCode)
+	if err != nil {
+		return fmt.Errorf("booking not found for code %s: %w", bookingCode, err)
+	}
+	return uc.repo.UpdateMPPaymentID(ctx, booking.ID, paymentIDStr)
+}
+
+func (uc *BookingUseCase) HandleMercadoPagoWebhook(ctx context.Context, paymentIDStr string) error {
+	paymentID, err := strconv.Atoi(paymentIDStr)
+	if err != nil {
+		return fmt.Errorf("invalid payment ID: %w", err)
+	}
+
+	// Buscar la reserva por mp_payment_id (guardado previamente por StoreMPPaymentID o webhook anterior)
+	booking, err := uc.repo.FindByMPPaymentID(ctx, paymentIDStr)
+	if err != nil {
+		return fmt.Errorf("booking not found for mp_payment_id %s: %w", paymentIDStr, err)
+	}
+
+	// Obtener el centro deportivo por ID
+	center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
+	if err != nil {
+		return fmt.Errorf("sport center not found for booking %s: %w", booking.BookingCode, err)
+	}
+
+	if center.MercadoPago == nil || center.MercadoPago.AccessToken == "" {
+		return fmt.Errorf("mercadopago not configured for center %s", center.Name)
+	}
+
+	// Verificar el pago con el token del centro
+	client := mercadopago.NewClient(center.MercadoPago.AccessToken)
+	payment, err := client.GetPayment(ctx, paymentID)
+	if err != nil {
+		return fmt.Errorf("error getting payment %d from mercadopago: %w", paymentID, err)
+	}
+	log.Printf("[MP WEBHOOK] Pago %d verificado con token de %s, status: %s\n", paymentID, center.Name, payment.Status)
+
+	paymentStatus := payment.Status
+
+	var newStatus domain.BookingStatus
+	switch paymentStatus {
+	case "approved":
+		newStatus = domain.BookingStatusConfirmed
+	case "rejected", "cancelled":
+		newStatus = domain.BookingStatusCancelled
+	case "pending", "in_process", "authorized":
+		log.Printf("[MP WEBHOOK] Payment %d still %s for booking %s\n", paymentID, paymentStatus, booking.BookingCode)
+		return nil
+	default:
+		log.Printf("[MP WEBHOOK] Unknown payment status %s for payment %d\n", paymentStatus, paymentID)
+		return nil
+	}
+
+	if err := uc.repo.UpdateStatus(ctx, booking.ID, newStatus); err != nil {
+		return fmt.Errorf("error updating booking status: %w", err)
+	}
+
+	log.Printf("[MP WEBHOOK] Booking %s updated to %s (payment %d, center: %s)\n", booking.BookingCode, newStatus, paymentID, center.Name)
+
+	if newStatus == domain.BookingStatusConfirmed && uc.mailer != nil {
+		go func(b *domain.Booking) {
+			if err := uc.mailer.SendBookingConfirmation(context.Background(), b); err != nil {
+				log.Printf("[MAIL ERROR] sending booking confirmation: %v\n", err)
+			}
+		}(booking)
+	}
+
+	return nil
+}
+
+func (uc *BookingUseCase) ValidateMercadoPagoPaymentAndGetCode(ctx context.Context, bookingCode string) (string, error) {
+	booking, err := uc.repo.FindByBookingCode(ctx, bookingCode)
+	if err != nil {
+		return "", fmt.Errorf("booking not found for code: %w", err)
+	}
+
+	if booking.Status == domain.BookingStatusConfirmed {
+		return booking.BookingCode, nil
+	}
+
+	// If still pending but has MP payment, try to check status
+	if booking.Status == domain.BookingStatusPending && booking.MPPaymentID != "" {
+		center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
+		if err != nil {
+			return booking.BookingCode, nil
+		}
+
+		if center.MercadoPago == nil || center.MercadoPago.AccessToken == "" {
+			return booking.BookingCode, nil
+		}
+		accessToken := center.MercadoPago.AccessToken
+
+		paymentID, err := strconv.Atoi(booking.MPPaymentID)
+		if err != nil {
+			return booking.BookingCode, nil
+		}
+
+		client := mercadopago.NewClient(accessToken)
+		payment, err := client.GetPayment(ctx, paymentID)
+		if err != nil {
+			return booking.BookingCode, nil
+		}
+
+		if payment.Status == "approved" {
+			booking.Status = domain.BookingStatusConfirmed
+			booking.UpdatedAt = time.Now()
+			if err := uc.repo.Update(ctx, booking); err != nil {
+				return booking.BookingCode, fmt.Errorf("error updating booking: %w", err)
+			}
+			if uc.mailer != nil {
+				go func() {
+					if err := uc.mailer.SendBookingConfirmation(context.Background(), booking); err != nil {
+						log.Printf("[MAIL ERROR] sending booking confirmation: %v\n", err)
+					}
+				}()
+			}
+		}
+	}
+
+	return booking.BookingCode, nil
+}
+
 func (uc *BookingUseCase) GetByBookingCode(ctx context.Context, code string) (*domain.Booking, error) {
 	return uc.repo.FindByBookingCode(ctx, code)
+}
+
+func (uc *BookingUseCase) GetByMPPaymentID(ctx context.Context, paymentID string) (*domain.Booking, error) {
+	return uc.repo.FindByMPPaymentID(ctx, paymentID)
 }
 
 func (uc *BookingUseCase) HandleFintocRefund(ctx context.Context, paymentIntentID string, refundID string, amount int, status string) error {
@@ -365,13 +587,7 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 		return fmt.Errorf("booking not found: %w", err)
 	}
 
-	// Obtener información de la cancha y el centro para calcular políticas
-	court, err := uc.courtRepo.FindByID(ctx, booking.CourtID)
-	if err != nil {
-		return fmt.Errorf("court not found: %w", err)
-	}
-
-	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
+	center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
 	if err != nil {
 		return fmt.Errorf("sport center not found: %w", err)
 	}
@@ -420,8 +636,7 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 		return fmt.Errorf("unauthorized to cancel this booking")
 	}
 
-	// Si es administrador o el método de pago es "flow", el reembolso es 100% independiente del horario
-	if isAdmin || booking.PaymentMethod == "flow" {
+	if isAdmin {
 		refundPercentage = 100
 	}
 
@@ -431,8 +646,49 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 
 	log.Printf("[CANCEL_BOOKING] Iniciando cancelación de reserva %s con %d%% de reembolso\n", id.Hex(), refundPercentage)
 
-	// TODO: Aquí se podría llamar a la API de Fintoc para procesar el reembolso
-	// usando refundPercentage y booking.FintocPaymentIntentID
+	// Procesar reembolso en MercadoPago si aplica
+
+	log.Printf("booking.PaymentMethod: %s, booking.MPPaymentID: %s, refundPercentage: %d\n", booking.PaymentMethod, booking.MPPaymentID, refundPercentage)
+	log.Printf("center.MercadoPago.AccessToken: %s", center.MercadoPago.AccessToken)
+
+	if booking.PaymentMethod == "mercadopago" && booking.MPPaymentID != "" && refundPercentage > 0 {
+		mpPaymentID, convErr := strconv.Atoi(booking.MPPaymentID)
+		if convErr != nil {
+			return fmt.Errorf("invalid mp_payment_id '%s': %w", booking.MPPaymentID, convErr)
+		}
+
+		if center.MercadoPago == nil || center.MercadoPago.AccessToken == "" {
+			return fmt.Errorf("mercadopago not configured for center %s, cannot process refund", center.Name)
+		}
+
+		mpClient := mercadopago.NewClient(center.MercadoPago.AccessToken)
+
+		var refundResult *mercadopago.RefundResult
+		if refundPercentage == 100 {
+			refundResult, err = mpClient.CreateRefund(ctx, mpPaymentID)
+		} else {
+			refundAmount := (booking.FinalPrice * float64(refundPercentage)) / 100
+			refundResult, err = mpClient.CreatePartialRefund(ctx, mpPaymentID, refundAmount)
+		}
+		if err != nil {
+			log.Printf("err: %s", err)
+			return fmt.Errorf("error processing mercadopago refund: %w", err)
+		}
+
+		log.Printf("[CANCEL_BOOKING] Refund MP procesado: ID=%d, Status=%s, Amount=%.2f\n",
+			refundResult.ID, refundResult.Status, refundResult.Amount)
+
+		// Registrar el refund en la reserva
+		mpRefund := domain.Refund{
+			ID:        strconv.Itoa(refundResult.ID),
+			Amount:    int(refundResult.Amount),
+			Status:    refundResult.Status,
+			CreatedAt: time.Now(),
+		}
+		if addErr := uc.repo.AddRefundByBookingID(ctx, booking.ID, mpRefund); addErr != nil {
+			log.Printf("[CANCEL_BOOKING] Error guardando refund en DB: %v\n", addErr)
+		}
+	}
 
 	cancelledBy := "user"
 	if isAdmin {

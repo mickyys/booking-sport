@@ -128,6 +128,10 @@ func main() {
 	r.POST("/api/bookings/fintoc/webhook", bookingHandler.FintocWebhook)
 	r.GET("/api/bookings/fintoc/return", bookingHandler.FintocReturn)
 	r.GET("/api/bookings/fintoc/:id", bookingHandler.GetFintocPaymentIntentStatus)
+	// MercadoPago payment routes
+	r.POST("/api/bookings/mercadopago", bookingHandler.CreateMercadoPagoPayment)
+	r.POST("/api/bookings/mercadopago/webhook", bookingHandler.MercadoPagoWebhook)
+	r.GET("/api/bookings/mercadopago/return", bookingHandler.MercadoPagoReturn)
 	r.GET("/api/bookings/code/:code", bookingHandler.GetByBookingCode)
 	r.POST("/api/bookings/code/:code/cancel", bookingHandler.CancelByBookingCode)
 	r.POST("/api/bookings", bookingHandler.CreateBooking)
