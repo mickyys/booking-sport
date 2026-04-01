@@ -251,6 +251,18 @@ func (r *SportCenterRepository) Update(ctx context.Context, center *domain.Sport
 	return err
 }
 
+func (r *SportCenterRepository) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug string, cancellationHours int, retentionPercent int) error {
+	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
+		"$set": bson.M{
+			"slug":               slug,
+			"cancellation_hours": cancellationHours,
+			"retention_percent":  retentionPercent,
+			"updated_at":         time.Now(),
+		},
+	})
+	return err
+}
+
 func (r *SportCenterRepository) GetCities(ctx context.Context) ([]string, error) {
 	// Filter out empty cities
 	values, err := r.collection.Distinct(ctx, "city", bson.M{"city": bson.M{"$ne": ""}})

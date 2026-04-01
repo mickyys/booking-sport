@@ -166,6 +166,49 @@ func (h *SportCenterHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"center": center, "cancellation_policy": cancellationPolicy})
 }
 
+func (h *SportCenterHandler) UpdateSettings(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID format"})
+		return
+	}
+
+	var body struct {
+		Slug              string `json:"slug"`
+		CancellationHours int    `json:"cancellation_hours"`
+		RetentionPercent  int    `json:"retention_percent"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.useCase.UpdateSettings(c.Request.Context(), id, body.Slug, body.CancellationHours, body.RetentionPercent); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Settings updated successfully"})
+}
+
+func (h *SportCenterHandler) GetByID(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID format"})
+		return
+	}
+
+	center, err := h.useCase.FindByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Sport center not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"center": center})
+}
+
 type CourtHandler struct {
 	useCase *app.CourtUseCase
 }

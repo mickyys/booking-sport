@@ -152,6 +152,8 @@ func main() {
 		api.DELETE("/admin/courts/:id", courtHandler.DeleteAdminCourt)
 		api.PUT("/admin/courts/:id/schedule", courtHandler.ConfigureSchedule)
 		api.PUT("/admin/sport-centers/:id", sportCenterHandler.Update)
+		api.PATCH("/admin/sport-centers/:id/settings", sportCenterHandler.UpdateSettings)
+		api.GET("/admin/sport-centers/:id", sportCenterHandler.GetByID)
 		api.POST("/admin/bookings/internal", bookingHandler.CreateInternalBooking)
 		api.DELETE("/admin/bookings/:id", bookingHandler.DeleteBooking)
 	}
