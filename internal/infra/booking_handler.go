@@ -130,7 +130,6 @@ func (h *BookingHandler) FintocWebhook(c *gin.Context) {
 		}
 	}
 
-	// Logs para debugging del webhook
 	log.Printf("[FINTOC WEBHOOK] Evento recibido: %s\n", event.Type)
 
 	switch event.Type {
