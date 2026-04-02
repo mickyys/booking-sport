@@ -146,6 +146,8 @@ func main() {
 		api.GET("/bookings/confirmed/count", bookingHandler.GetConfirmedCount)
 		api.POST("/bookings/:id/cancel", bookingHandler.CancelBooking)
 		api.GET("/admin/dashboard", bookingHandler.GetAdminDashboard)
+		api.DELETE("/admin/bookings/series/:series_id", bookingHandler.DeleteBookingSeries)
+		api.GET("/admin/bookings/series", bookingHandler.GetRecurringSeries)
 		api.GET("/admin/courts", courtHandler.GetAdminCourts)
 		api.POST("/admin/courts", courtHandler.CreateAdminCourt)
 		api.PUT("/admin/courts/:id", courtHandler.UpdateAdminCourt)

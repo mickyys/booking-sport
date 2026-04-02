@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/hamp/booking-sport/internal/domain"
@@ -50,7 +49,9 @@ type BookingRepository interface {
 	CountConfirmedByUserID(ctx context.Context, userID string) (int64, error)
 	FindByUserIDAndStatusPaged(ctx context.Context, userID string, cancelled domain.BookingStatus, page int, limit int) ([]domain.BookingSummary, int64, error)
 	Delete(ctx context.Context, id primitive.ObjectID) error
+	DeleteBySeriesID(ctx context.Context, seriesID string) error
 	GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name string, code string, status string) (*domain.AdminDashboardData, error)
+	GetRecurringSeries(ctx context.Context, centerIDs []primitive.ObjectID) ([]domain.RecurringSeries, error)
 }
 
 // Mailer envía correos transaccionales (p. ej. confirmación de reserva)
@@ -497,7 +498,6 @@ func (uc *CourtUseCase) GetCourtsByAdminUser(ctx context.Context, userID string)
 		if err != nil {
 			return nil, err
 		}
-		log.Printf("data courts ========> %v", courts)
 		if courts == nil {
 			courts = []domain.Court{}
 		}

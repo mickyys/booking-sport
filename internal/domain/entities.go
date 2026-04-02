@@ -98,19 +98,27 @@ type PagedResponse struct {
 
 type BookingSummary struct {
 	ID                primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	SportCenterName   string             `bson:"sport_center_name" json:"sport_center_name"`
 	Date              time.Time          `bson:"date" json:"date"`
 	Hour              int                `bson:"hour" json:"hour"`
-	SportCenterName   string             `bson:"sport_center_name" json:"sport_center_name"`
 	CourtName         string             `bson:"court_name" json:"court_name"`
 	Status            BookingStatus      `bson:"status" json:"status"`
 	Price             float64            `bson:"price" json:"price"`
-	BookingCode       string             `bson:"booking_code" json:"booking_code"`
-	UserName          string             `bson:"user_name,omitempty" json:"user_name,omitempty"`
-	IsGuest           bool               `json:"is_guest"`
+	FinalPrice        float64            `bson:"final_price" json:"final_price"`
 	PaymentMethod     string             `bson:"payment_method" json:"payment_method"`
-	CancelledBy       string             `bson:"cancelled_by,omitempty" json:"cancelled_by,omitempty"`
 	CancellationHours int                `bson:"cancellation_hours" json:"cancellation_hours"`
 	RetentionPercent  int                `bson:"retention_percent" json:"retention_percent"`
+}
+
+type RecurringSeries struct {
+	SeriesID      string    `bson:"_id" json:"series_id"`
+	CustomerName  string    `bson:"customer_name" json:"customer_name"`
+	CustomerPhone string    `bson:"customer_phone" json:"customer_phone"`
+	CourtName     string    `bson:"court_name" json:"court_name"`
+	Hour          int       `bson:"hour" json:"hour"`
+	StartDate     time.Time `bson:"start_date" json:"start_date"`
+	EndDate       time.Time `bson:"end_date" json:"end_date"`
+	BookingsCount int       `bson:"bookings_count" json:"bookings_count"`
 }
 
 type AdminDashboardData struct {
@@ -155,6 +163,8 @@ type Booking struct {
 	CancellationReason    string             `bson:"cancellation_reason,omitempty" json:"cancellation_reason,omitempty"`
 	CustomerName          string             `bson:"customer_name,omitempty" json:"customer_name,omitempty"`
 	CustomerPhone         string             `bson:"customer_phone,omitempty" json:"customer_phone,omitempty"`
+	SeriesID              string             `bson:"series_id,omitempty" json:"series_id,omitempty"`
+	RecurringID           string             `bson:"recurring_id,omitempty" json:"recurring_id,omitempty"`
 	CreatedAt             time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt             time.Time          `bson:"updated_at" json:"updated_at"`
 }

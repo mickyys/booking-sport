@@ -47,6 +47,31 @@ func (uc *BookingUseCase) GetUserCancelledBookingsPaged(ctx context.Context, use
 	return uc.repo.FindByUserIDAndStatusPaged(ctx, userID, domain.BookingStatusCancelled, page, limit)
 }
 
+func (uc *BookingUseCase) DeleteSeries(ctx context.Context, seriesID string) error {
+	return uc.repo.DeleteBySeriesID(ctx, seriesID)
+}
+
+func (uc *BookingUseCase) GetRecurringSeries(ctx context.Context, userID string) ([]domain.RecurringSeries, error) {
+	// Buscamos los centros deportivos asociados al usuario
+	centers, err := uc.centerRepo.FindByUserID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("error al buscar centros del usuario: %w", err)
+	}
+
+	// Si el usuario no administra centros, retornamos lista vacía
+	if len(centers) == 0 {
+		return []domain.RecurringSeries{}, nil
+	}
+
+	// Extraemos solo los IDs para pasárselos al repositorio de bookings
+	var centerIDs []primitive.ObjectID
+	for _, c := range centers {
+		centerIDs = append(centerIDs, c.ID)
+	}
+
+	return uc.repo.GetRecurringSeries(ctx, centerIDs)
+}
+
 func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking *domain.Booking) (string, error) {
 	court, err := uc.courtRepo.FindByID(ctx, booking.CourtID)
 	if err != nil {
@@ -112,8 +137,12 @@ func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking
 	email := "cliente@email.com"
 	if booking.GuestDetails != nil {
 		email = booking.GuestDetails.Email
-		booking.CustomerName = booking.GuestDetails.Name
-		booking.CustomerPhone = booking.GuestDetails.Phone
+		if booking.CustomerName == "" {
+			booking.CustomerName = booking.GuestDetails.Name
+		}
+		if booking.CustomerPhone == "" {
+			booking.CustomerPhone = booking.GuestDetails.Phone
+		}
 	}
 
 	// successURL apunta al backend para validar y redirigir
@@ -305,8 +334,12 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	email := "cliente@email.com"
 	if booking.GuestDetails != nil {
 		email = booking.GuestDetails.Email
-		booking.CustomerName = booking.GuestDetails.Name
-		booking.CustomerPhone = booking.GuestDetails.Phone
+		if booking.CustomerName == "" {
+			booking.CustomerName = booking.GuestDetails.Name
+		}
+		if booking.CustomerPhone == "" {
+			booking.CustomerPhone = booking.GuestDetails.Phone
+		}
 	}
 
 	client := mercadopago.NewClient(center.MercadoPago.AccessToken)
@@ -755,8 +788,12 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 	booking.UpdatedAt = time.Now()
 
 	if booking.GuestDetails != nil {
-		booking.CustomerName = booking.GuestDetails.Name
-		booking.CustomerPhone = booking.GuestDetails.Phone
+		if booking.CustomerName == "" {
+			booking.CustomerName = booking.GuestDetails.Name
+		}
+		if booking.CustomerPhone == "" {
+			booking.CustomerPhone = booking.GuestDetails.Phone
+		}
 	}
 
 	if err := uc.repo.Create(ctx, booking); err != nil {
@@ -815,8 +852,12 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 	booking.UpdatedAt = time.Now()
 
 	if booking.GuestDetails != nil {
-		booking.CustomerName = booking.GuestDetails.Name
-		booking.CustomerPhone = booking.GuestDetails.Phone
+		if booking.CustomerName == "" {
+			booking.CustomerName = booking.GuestDetails.Name
+		}
+		if booking.CustomerPhone == "" {
+			booking.CustomerPhone = booking.GuestDetails.Phone
+		}
 	}
 
 	log.Println("booking para crear: ", booking)

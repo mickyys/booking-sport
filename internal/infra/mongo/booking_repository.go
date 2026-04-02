@@ -15,11 +15,13 @@ import (
 
 type BookingRepository struct {
 	collection *mongo.Collection
+	db         *mongo.Database
 }
 
 func NewBookingRepository(db *mongo.Database) *BookingRepository {
 	return &BookingRepository{
 		collection: db.Collection("bookings"),
+		db:         db,
 	}
 }
 
@@ -116,6 +118,12 @@ func (r *BookingRepository) FindByID(ctx context.Context, id primitive.ObjectID)
 		return nil, err
 	}
 	return &booking, nil
+}
+
+func (r *BookingRepository) DeleteBySeriesID(ctx context.Context, seriesID string) error {
+	filter := bson.M{"series_id": seriesID}
+	_, err := r.collection.DeleteMany(ctx, filter)
+	return err
 }
 
 func (r *BookingRepository) FindByPreferenceID(ctx context.Context, preferenceID string) (*domain.Booking, error) {
@@ -467,6 +475,55 @@ func (r *BookingRepository) CountConfirmedByUserID(ctx context.Context, userID s
 func (r *BookingRepository) Delete(ctx context.Context, id primitive.ObjectID) error {
 	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": id})
 	return err
+}
+func (r *BookingRepository) GetRecurringSeries(ctx context.Context, centerIDs []primitive.ObjectID) ([]domain.RecurringSeries, error) {
+	// Si no tiene centros, devolvemos lista vacía
+	if len(centerIDs) == 0 {
+		return []domain.RecurringSeries{}, nil
+	}
+
+	match := bson.M{
+		"series_id":       bson.M{"$ne": ""},
+		"sport_center_id": bson.M{"$in": centerIDs},
+	}
+
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: match}},
+		{{Key: "$sort", Value: bson.M{"date": 1}}},
+		{{Key: "$lookup", Value: bson.M{
+			"from":         "courts",
+			"localField":   "court_id",
+			"foreignField": "_id",
+			"as":           "court_info",
+		}}},
+		{{Key: "$unwind", Value: bson.M{
+			"path":                       "$court_info",
+			"preserveNullAndEmptyArrays": true,
+		}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":            "$series_id",
+			"customer_name":  bson.M{"$first": "$customer_name"},
+			"customer_phone": bson.M{"$first": "$customer_phone"},
+			"court_name":     bson.M{"$first": "$court_info.name"},
+			"hour":           bson.M{"$first": "$hour"},
+			"start_date":     bson.M{"$min": "$date"},
+			"end_date":       bson.M{"$max": "$date"},
+			"bookings_count": bson.M{"$sum": 1},
+		}}},
+	}
+
+	cursor, err := r.collection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var results []domain.RecurringSeries
+	if err := cursor.All(ctx, &results); err != nil {
+		return nil, err
+	}
+
+	return results, nil
 }
 
 func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name, code, status string) (*domain.AdminDashboardData, error) {

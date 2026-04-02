@@ -55,6 +55,25 @@ func (h *BookingHandler) GetUserCancelledBookings(c *gin.Context) {
 	})
 }
 
+func (h *BookingHandler) GetRecurringSeries(c *gin.Context) {
+	fmt.Printf("GetRecurringSeries 2026 ====================== ")
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "admin_id not found in token"})
+		return
+	}
+
+	userIDStr := userID.(string)
+
+	series, err := h.useCase.GetRecurringSeries(c.Request.Context(), userIDStr)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": series})
+}
+
 func (h *BookingHandler) CreateFintocPaymentIntent(c *gin.Context) {
 	var booking domain.Booking
 	if err := c.ShouldBindJSON(&booking); err != nil {
@@ -282,6 +301,22 @@ func (h *BookingHandler) GetUserBookings(c *gin.Context) {
 		Limit:      limit,
 		TotalPages: totalPages,
 	})
+}
+
+func (h *BookingHandler) DeleteBookingSeries(c *gin.Context) {
+	seriesID := c.Param("series_id")
+	if seriesID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "series_id is required"})
+		return
+	}
+
+	err := h.useCase.DeleteSeries(c.Request.Context(), seriesID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Series deleted successfully"})
 }
 
 func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
@@ -524,18 +559,22 @@ func (h *BookingHandler) CreateInternalBooking(c *gin.Context) {
 }
 
 func (h *BookingHandler) CreateBooking(c *gin.Context) {
-	var booking domain.Booking
+	var booking struct {
+		domain.Booking
+		SeriesID string `json:"series_id"`
+	}
 	if err := c.ShouldBindJSON(&booking); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	booking.Booking.SeriesID = booking.SeriesID
 
 	// Si hay un usuario autenticado (opcional), lo asociamos
 	if userID, exists := c.Get("user_id"); exists {
-		booking.UserID = userID.(string)
+		booking.Booking.UserID = userID.(string)
 	}
 
-	err := h.useCase.Create(c.Request.Context(), &booking)
+	err := h.useCase.CreateInternalBooking(c.Request.Context(), &booking.Booking)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
