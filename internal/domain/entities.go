@@ -50,8 +50,8 @@ type SportCenter struct {
 	Coordinates Coordinates        `bson:"coordinates" json:"coordinates"`
 	Services    []string           `bson:"services" json:"services"`
 	Contact     Contact            `bson:"contact" json:"contact"`
-	// Courts: cantidad de canchas asociadas al centro (campo calculado por el repositorio)
-	Courts            int                `bson:"courts_count,omitempty" json:"courts"`
+	// Courts: cantidad de canchas asociadas al centro
+	CourtsCount       int                `bson:"courts_count" json:"courts"`
 	Fintoc            *FintocConfig      `bson:"fintoc,omitempty" json:"-"`
 	MercadoPago       *MercadoPagoConfig `bson:"mercadopago,omitempty" json:"-"`
 	CancellationHours int                `bson:"cancellation_hours" json:"cancellation_hours"`

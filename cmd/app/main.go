@@ -61,6 +61,9 @@ func main() {
 
 	// 3. Inicializar Repositorios
 	sportCenterRepo := mongo.NewSportCenterRepository(db)
+	if err := sportCenterRepo.SyncCourtsCount(ctx); err != nil {
+		log.Printf("Warning: Error sincronizando contador de canchas: %v", err)
+	}
 	courtRepo := mongo.NewCourtRepository(db)
 	userRepo := mongo.NewUserRepository(db)
 	bookingRepo := mongo.NewBookingRepository(db)
@@ -140,6 +143,8 @@ func main() {
 	api := r.Group("/api")
 	api.Use(authMiddleware)
 	{
+		// Endpoint seguro para obtener schedules con detalles de reservas
+		api.GET("/sport-centers/:id/schedules/bookings", sportCenterHandler.GetSchedulesWithBookings)
 		api.GET("/bookings/:id", bookingHandler.GetBookingDetail)
 		api.GET("/bookings/my-bookings", bookingHandler.GetUserBookings)
 		api.GET("/bookings/my-cancelled", bookingHandler.GetUserCancelledBookings)
@@ -153,6 +158,7 @@ func main() {
 		api.PUT("/admin/courts/:id", courtHandler.UpdateAdminCourt)
 		api.DELETE("/admin/courts/:id", courtHandler.DeleteAdminCourt)
 		api.PUT("/admin/courts/:id/schedule", courtHandler.ConfigureSchedule)
+		api.PATCH("/admin/courts/:id/schedule/slot", courtHandler.UpdateScheduleSlot)
 		api.PUT("/admin/sport-centers/:id", sportCenterHandler.Update)
 		api.PATCH("/admin/sport-centers/:id/settings", sportCenterHandler.UpdateSettings)
 		api.GET("/admin/sport-centers/:id", sportCenterHandler.GetByID)

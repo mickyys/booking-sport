@@ -73,6 +73,12 @@ type EnrichedCourtSchedule struct {
 	PaymentRequired bool                `json:"payment_required"`
 	PaymentOptional bool                `json:"payment_optional"`
 	BookingID       *primitive.ObjectID `json:"booking_id,omitempty"`
+	// Información del cliente cuando la franja está reservada (opcional)
+	CustomerName  string `json:"customer_name,omitempty"`
+	CustomerEmail string `json:"customer_email,omitempty"`
+	CustomerPhone string `json:"customer_phone,omitempty"`
+	BookingCode   string `json:"booking_code,omitempty"`
+	PaymentMethod string `json:"payment_method,omitempty"`
 }
 
 type CourtScheduleResponse struct {
@@ -153,6 +159,108 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 			}
 
 			if all || (sch.Status == "available") {
+				schedules = append(schedules, sch)
+			}
+		}
+
+		if schedules == nil {
+			schedules = []EnrichedCourtSchedule{}
+		}
+
+		result = append(result, CourtScheduleResponse{
+			ID:       court.ID,
+			Name:     court.Name,
+			Schedule: schedules,
+		})
+	}
+	return result, nil
+}
+
+// GetSportCenterSchedulesWithBookingDetails retorna schedules enriquecidos
+// con información del cliente (nombre, email, teléfono y código de reserva)
+// para un centro y fecha específica. Solo incluye información de reservas
+// confirmadas.
+func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx context.Context, centerID primitive.ObjectID, date time.Time, all bool) ([]CourtScheduleResponse, error) {
+	courts, err := uc.courtRepo.FindByCenterID(ctx, centerID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Normalizar la fecha al inicio del día (00:00:00)
+	searchDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+
+	// Obtener todas las reservas confirmadas para este centro y fecha
+	allBookings, _ := uc.bookingRepo.FindBySportCenterAndDate(ctx, centerID, searchDate)
+
+	// Agrupar bookings por CourtID y hora
+	bookingsByCourt := make(map[primitive.ObjectID]map[int]*domain.Booking)
+	for _, b := range allBookings {
+		if b.Status != domain.BookingStatusConfirmed {
+			continue
+		}
+		if bookingsByCourt[b.CourtID] == nil {
+			bookingsByCourt[b.CourtID] = make(map[int]*domain.Booking)
+		}
+		bookingsByCourt[b.CourtID][b.Hour] = &b
+	}
+
+	loc, _ := time.LoadLocation("America/Santiago")
+	nowInLoc := time.Now().In(loc)
+
+	result := []CourtScheduleResponse{}
+	for _, court := range courts {
+		bookedHours := bookingsByCourt[court.ID]
+		if bookedHours == nil {
+			bookedHours = make(map[int]*domain.Booking)
+		}
+
+		schedules := []EnrichedCourtSchedule{}
+		for _, s := range court.Schedule {
+			sch := EnrichedCourtSchedule{
+				Hour:            s.Hour,
+				Minutes:         s.Minutes,
+				Price:           s.Price,
+				Status:          s.Status,
+				PaymentRequired: s.PaymentRequired,
+				PaymentOptional: s.PaymentOptional,
+			}
+
+			// Check if slot has already passed
+			slotTime := time.Date(date.Year(), date.Month(), date.Day(), s.Hour, s.Minutes, 0, 0, loc)
+			if slotTime.Before(nowInLoc) && sch.Status == "available" {
+				sch.Status = "passed"
+			}
+
+			if b, exists := bookedHours[s.Hour]; exists && b != nil {
+				// Si hay una reserva, mostramos la información sin importar si la hora ya pasó
+				sch.Status = "booked"
+				if slotTime.Before(nowInLoc) {
+					sch.Status = "passed_booked" // Opcional: estado especial para reservas pasadas
+				}
+				sch.BookingID = &b.ID
+				// Preferir GuestDetails si existe
+				if b.GuestDetails != nil {
+					sch.CustomerName = b.GuestDetails.Name
+					sch.CustomerEmail = b.GuestDetails.Email
+					sch.CustomerPhone = b.GuestDetails.Phone
+				} else {
+					sch.CustomerName = b.CustomerName
+					sch.CustomerEmail = ""
+					sch.CustomerPhone = b.CustomerPhone
+				}
+				sch.BookingCode = b.BookingCode
+				sch.PaymentMethod = b.PaymentMethod
+				// Diferenciar entre reserva interna y bloqueo
+				if b.PaymentMethod == "internal" {
+					if b.GuestDetails != nil && b.GuestDetails.Name != "" && b.GuestDetails.Email != "admin@internal.com" {
+						sch.PaymentMethod = "internal_reservation"
+					} else {
+						sch.PaymentMethod = "internal_block"
+					}
+				}
+			}
+
+			if all || (sch.Status == "available" || sch.Status == "booked" || sch.Status == "passed_booked" || sch.Status == "closed" || sch.Status == "passed") {
 				schedules = append(schedules, sch)
 			}
 		}
@@ -259,6 +367,7 @@ func NewUserUseCase(repo UserRepository) *UserUseCase {
 type CourtRepository interface {
 	Create(ctx context.Context, court *domain.Court) error
 	Update(ctx context.Context, court *domain.Court) error
+	UpdateScheduleSlot(ctx context.Context, id primitive.ObjectID, slot domain.CourtSchedule) error
 	Delete(ctx context.Context, id primitive.ObjectID) error
 	FindByID(ctx context.Context, id primitive.ObjectID) (*domain.Court, error)
 	FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.Court, error)
@@ -416,6 +525,32 @@ func (uc *CourtUseCase) ConfigureSchedule(ctx context.Context, courtID primitive
 	court.Schedule = schedule
 	court.UpdatedAt = time.Now()
 	return uc.repo.Update(ctx, court)
+}
+
+func (uc *CourtUseCase) UpdateScheduleSlot(ctx context.Context, courtID primitive.ObjectID, slot domain.CourtSchedule, userID string) error {
+	court, err := uc.repo.FindByID(ctx, courtID)
+	if err != nil {
+		return err
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
+	if err != nil {
+		return err
+	}
+
+	// Verify permissions
+	isOwner := false
+	for _, u := range center.Users {
+		if u == userID {
+			isOwner = true
+			break
+		}
+	}
+	if !isOwner {
+		return fmt.Errorf("user is not authorized to configure schedule for this court")
+	}
+
+	return uc.repo.UpdateScheduleSlot(ctx, courtID, slot)
 }
 
 func (uc *CourtUseCase) GetCourtSchedule(ctx context.Context, courtID primitive.ObjectID, date time.Time, all bool) ([]domain.CourtSchedule, error) {
