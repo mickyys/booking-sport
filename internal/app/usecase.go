@@ -259,6 +259,7 @@ func NewUserUseCase(repo UserRepository) *UserUseCase {
 type CourtRepository interface {
 	Create(ctx context.Context, court *domain.Court) error
 	Update(ctx context.Context, court *domain.Court) error
+	UpdateScheduleSlot(ctx context.Context, id primitive.ObjectID, slot domain.CourtSchedule) error
 	Delete(ctx context.Context, id primitive.ObjectID) error
 	FindByID(ctx context.Context, id primitive.ObjectID) (*domain.Court, error)
 	FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.Court, error)
@@ -416,6 +417,32 @@ func (uc *CourtUseCase) ConfigureSchedule(ctx context.Context, courtID primitive
 	court.Schedule = schedule
 	court.UpdatedAt = time.Now()
 	return uc.repo.Update(ctx, court)
+}
+
+func (uc *CourtUseCase) UpdateScheduleSlot(ctx context.Context, courtID primitive.ObjectID, slot domain.CourtSchedule, userID string) error {
+	court, err := uc.repo.FindByID(ctx, courtID)
+	if err != nil {
+		return err
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
+	if err != nil {
+		return err
+	}
+
+	// Verify permissions
+	isOwner := false
+	for _, u := range center.Users {
+		if u == userID {
+			isOwner = true
+			break
+		}
+	}
+	if !isOwner {
+		return fmt.Errorf("user is not authorized to configure schedule for this court")
+	}
+
+	return uc.repo.UpdateScheduleSlot(ctx, courtID, slot)
 }
 
 func (uc *CourtUseCase) GetCourtSchedule(ctx context.Context, courtID primitive.ObjectID, date time.Time, all bool) ([]domain.CourtSchedule, error) {

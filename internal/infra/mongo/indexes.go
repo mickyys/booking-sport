@@ -52,6 +52,13 @@ func ensureSportCenterIndexes(ctx context.Context, db *mongo.Database) error {
 			Keys:    bson.D{{Key: "city", Value: 1}},
 			Options: options.Index().SetName("idx_sport_centers_city"),
 		},
+		{
+			Keys: bson.D{
+				{Key: "name", Value: "text"},
+				{Key: "city", Value: "text"},
+			},
+			Options: options.Index().SetName("idx_sport_centers_text"),
+		},
 	}
 
 	_, err := collection.Indexes().CreateMany(ctx, indexes)
@@ -125,6 +132,15 @@ func ensureBookingIndexes(ctx context.Context, db *mongo.Database) error {
 		},
 		{
 			Keys: bson.D{
+				{Key: "sport_center_id", Value: 1},
+				{Key: "date", Value: 1},
+				{Key: "hour", Value: 1},
+				{Key: "status", Value: 1},
+			},
+			Options: options.Index().SetName("idx_bookings_center_date_hour_status"),
+		},
+		{
+			Keys: bson.D{
 				{Key: "user_id", Value: 1},
 				{Key: "date", Value: 1},
 				{Key: "hour", Value: 1},
@@ -152,6 +168,13 @@ func ensureBookingIndexes(ctx context.Context, db *mongo.Database) error {
 				{Key: "status", Value: 1},
 			},
 			Options: options.Index().SetName("idx_bookings_user_status"),
+		},
+		{
+			Keys: bson.D{
+				{Key: "sport_center_id", Value: 1},
+				{Key: "status", Value: 1},
+			},
+			Options: options.Index().SetName("idx_bookings_center_status"),
 		},
 	}
 

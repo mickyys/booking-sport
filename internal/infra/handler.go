@@ -312,6 +312,50 @@ func (h *CourtHandler) ConfigureSchedule(c *gin.Context) {
 	c.JSON(http.StatusNoContent, nil)
 }
 
+func (h *CourtHandler) UpdateScheduleSlot(c *gin.Context) {
+	idStr := c.Param("id")
+	courtID, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid court ID format"})
+		return
+	}
+
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in context"})
+		return
+	}
+
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid User ID type"})
+		return
+	}
+
+	var slot domain.CourtSchedule
+	if err := c.ShouldBindJSON(&slot); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Validar horario
+	if slot.Hour < 0 || slot.Hour > 23 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Hour must be between 0 and 23"})
+		return
+	}
+	if slot.Minutes < 0 || slot.Minutes > 59 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Minutes must be between 0 and 59"})
+		return
+	}
+
+	if err := h.useCase.UpdateScheduleSlot(c.Request.Context(), courtID, slot, userIDStr); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Schedule slot updated successfully"})
+}
+
 func (h *CourtHandler) GetSchedule(c *gin.Context) {
 	idStr := c.Param("id")
 	courtID, err := primitive.ObjectIDFromHex(idStr)

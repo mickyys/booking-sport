@@ -2,6 +2,8 @@ package mongo
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"time"
 
 	"github.com/hamp/booking-sport/internal/domain"
@@ -46,9 +48,6 @@ func (r *SportCenterRepository) FindByID(ctx context.Context, id primitive.Objec
 	if err != nil {
 		return nil, err
 	}
-	// Rellenar contador de canchas
-	count, _ := r.db.Collection("courts").CountDocuments(ctx, bson.M{"sport_center_id": center.ID})
-	center.Courts = int(count)
 	return &center, nil
 }
 
@@ -58,9 +57,6 @@ func (r *SportCenterRepository) FindBySlug(ctx context.Context, slug string) (*d
 	if err != nil {
 		return nil, err
 	}
-	// Rellenar contador de canchas
-	count, _ := r.db.Collection("courts").CountDocuments(ctx, bson.M{"sport_center_id": center.ID})
-	center.Courts = int(count)
 	return &center, nil
 }
 
@@ -75,21 +71,20 @@ func (r *SportCenterRepository) FindAll(ctx context.Context) ([]domain.SportCent
 	if err = cursor.All(ctx, &centers); err != nil {
 		return nil, err
 	}
-	// Rellenar contador de canchas para cada centro (uso CountDocuments)
-	for i := range centers {
-		cnt, _ := r.db.Collection("courts").CountDocuments(ctx, bson.M{"sport_center_id": centers[i].ID})
-		centers[i].Courts = int(cnt)
-	}
 	return centers, nil
 }
 
 func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int) ([]domain.SportCenter, int64, error) {
 	match := bson.M{}
-	if name != "" {
-		match["name"] = bson.M{"$regex": name, "$options": "i"}
-	}
-	if city != "" {
-		match["city"] = bson.M{"$regex": city, "$options": "i"}
+	if name != "" || city != "" {
+		searchText := ""
+		if name != "" {
+			searchText += name + " "
+		}
+		if city != "" {
+			searchText += city
+		}
+		match["$text"] = bson.M{"$search": searchText}
 	}
 
 	pipeline := mongodb.Pipeline{
@@ -211,12 +206,6 @@ func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, 
 		centers = []domain.SportCenter{}
 	}
 
-	// Rellenar contador de canchas para cada centro
-	for i := range centers {
-		cnt, _ := r.db.Collection("courts").CountDocuments(ctx, bson.M{"sport_center_id": centers[i].ID})
-		centers[i].Courts = int(cnt)
-	}
-
 	return centers, total, nil
 }
 
@@ -235,12 +224,6 @@ func (r *SportCenterRepository) FindByUserID(ctx context.Context, userID string)
 
 	if centers == nil {
 		centers = []domain.SportCenter{}
-	}
-
-	// Rellenar contador de canchas
-	for i := range centers {
-		cnt, _ := r.db.Collection("courts").CountDocuments(ctx, bson.M{"sport_center_id": centers[i].ID})
-		centers[i].Courts = int(cnt)
 	}
 
 	return centers, nil
@@ -279,6 +262,40 @@ func (r *SportCenterRepository) GetCities(ctx context.Context) ([]string, error)
 	return cities, nil
 }
 
+func (r *SportCenterRepository) SyncCourtsCount(ctx context.Context) error {
+	log.Println("[MONGODB] Sincronizando contador de canchas...")
+	cursor, err := r.collection.Find(ctx, bson.M{})
+	if err != nil {
+		return fmt.Errorf("error al obtener centros para sincronización: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	updatedCount := 0
+	for cursor.Next(ctx) {
+		var center domain.SportCenter
+		if err := cursor.Decode(&center); err != nil {
+			log.Printf("[MONGODB] Error al decodificar centro en sincronización: %v", err)
+			continue
+		}
+
+		count, err := r.db.Collection("courts").CountDocuments(ctx, bson.M{"sport_center_id": center.ID})
+		if err != nil {
+			log.Printf("[MONGODB] Error al contar canchas para centro %s: %v", center.ID.Hex(), err)
+			continue
+		}
+
+		_, err = r.collection.UpdateOne(ctx, bson.M{"_id": center.ID}, bson.M{"$set": bson.M{"courts_count": int(count)}})
+		if err != nil {
+			log.Printf("[MONGODB] Error al actualizar contador para centro %s: %v", center.ID.Hex(), err)
+			continue
+		}
+		updatedCount++
+	}
+
+	log.Printf("[MONGODB] Sincronización finalizada. %d centros actualizados\n", updatedCount)
+	return nil
+}
+
 type CourtRepository struct {
 	db         *mongodb.Database
 	collection *mongodb.Collection
@@ -296,6 +313,16 @@ func (r *CourtRepository) Create(ctx context.Context, court *domain.Court) error
 		court.ID = primitive.NewObjectID()
 	}
 	_, err := r.collection.InsertOne(ctx, court)
+	if err != nil {
+		return err
+	}
+
+	// Incrementar contador de canchas en el centro deportivo
+	_, err = r.db.Collection("sport_centers").UpdateOne(
+		ctx,
+		bson.M{"_id": court.SportCenterID},
+		bson.M{"$inc": bson.M{"courts_count": 1}},
+	)
 	return err
 }
 
@@ -327,8 +354,56 @@ func (r *CourtRepository) Update(ctx context.Context, court *domain.Court) error
 	return err
 }
 
+func (r *CourtRepository) UpdateScheduleSlot(ctx context.Context, id primitive.ObjectID, slot domain.CourtSchedule) error {
+	// First, try to update the slot if it exists
+	filter := bson.M{
+		"_id":           id,
+		"schedule.hour": slot.Hour,
+	}
+	update := bson.M{
+		"$set": bson.M{
+			"schedule.$": slot,
+			"updated_at": time.Now(),
+		},
+	}
+
+	result, err := r.collection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return err
+	}
+
+	// If no document was matched, it means the hour slot doesn't exist in the array, so push it
+	if result.MatchedCount == 0 {
+		filter = bson.M{"_id": id}
+		update = bson.M{
+			"$push": bson.M{"schedule": slot},
+			"$set":  bson.M{"updated_at": time.Now()},
+		}
+		_, err = r.collection.UpdateOne(ctx, filter, update)
+		return err
+	}
+
+	return nil
+}
+
 func (r *CourtRepository) Delete(ctx context.Context, id primitive.ObjectID) error {
-	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": id})
+	// Obtener el court para saber a qué centro pertenece
+	court, err := r.FindByID(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	_, err = r.collection.DeleteOne(ctx, bson.M{"_id": id})
+	if err != nil {
+		return err
+	}
+
+	// Decrementar contador de canchas en el centro deportivo
+	_, err = r.db.Collection("sport_centers").UpdateOne(
+		ctx,
+		bson.M{"_id": court.SportCenterID},
+		bson.M{"$inc": bson.M{"courts_count": -1}},
+	)
 	return err
 }
 
