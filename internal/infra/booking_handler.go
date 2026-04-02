@@ -56,7 +56,6 @@ func (h *BookingHandler) GetUserCancelledBookings(c *gin.Context) {
 }
 
 func (h *BookingHandler) GetRecurringSeries(c *gin.Context) {
-	fmt.Printf("GetRecurringSeries 2026 ====================== ")
 	userID, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "admin_id not found in token"})
