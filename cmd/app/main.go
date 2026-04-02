@@ -143,6 +143,8 @@ func main() {
 	api := r.Group("/api")
 	api.Use(authMiddleware)
 	{
+		// Endpoint seguro para obtener schedules con detalles de reservas
+		api.GET("/sport-centers/:id/schedules/bookings", sportCenterHandler.GetSchedulesWithBookings)
 		api.GET("/bookings/:id", bookingHandler.GetBookingDetail)
 		api.GET("/bookings/my-bookings", bookingHandler.GetUserBookings)
 		api.GET("/bookings/my-cancelled", bookingHandler.GetUserCancelledBookings)

@@ -550,6 +550,73 @@ func (h *SportCenterHandler) GetSchedules(c *gin.Context) {
 	c.JSON(http.StatusOK, schedules)
 }
 
+// GetSchedulesWithBookings retorna schedules con detalles del cliente
+// Requiere autenticación y el usuario debe estar asociado al centro deportivo
+func (h *SportCenterHandler) GetSchedulesWithBookings(c *gin.Context) {
+	idStr := c.Param("id")
+	var centerID primitive.ObjectID
+	// Try parse as ObjectID first; if fails, treat as slug and resolve
+	oid, err := primitive.ObjectIDFromHex(idStr)
+	if err == nil {
+		centerID = oid
+	} else {
+		center, findErr := h.useCase.FindBySlug(c.Request.Context(), idStr)
+		if findErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid sport center identifier"})
+			return
+		}
+		centerID = center.ID
+	}
+
+	// Authorization: user must be associated to the center
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in context"})
+		return
+	}
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid User ID type"})
+		return
+	}
+
+	// Verify user is owner of the center
+	center, err := h.useCase.FindByID(c.Request.Context(), centerID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Sport center not found"})
+		return
+	}
+	authorized := false
+	for _, u := range center.Users {
+		if u == userIDStr {
+			authorized = true
+			break
+		}
+	}
+	if !authorized {
+		c.JSON(http.StatusForbidden, gin.H{"error": "user not authorized for this sport center"})
+		return
+	}
+
+	dateStr := c.Query("date")
+	date := time.Now()
+	if dateStr != "" {
+		parsedDate, err := time.Parse("2006-01-02", dateStr)
+		if err == nil {
+			date = parsedDate
+		}
+	}
+
+	all := c.Query("all") == "true"
+	schedules, err := h.useCase.GetSportCenterSchedulesWithBookingDetails(c.Request.Context(), centerID, date, all)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, schedules)
+}
+
 type UserHandler struct {
 	useCase *app.UserUseCase
 }
