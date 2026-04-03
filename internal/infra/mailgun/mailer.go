@@ -146,16 +146,17 @@ func (m *MailgunMailer) SendBookingCancellation(ctx context.Context, booking *do
 	return nil
 }
 
-func (m *MailgunMailer) SendContactEmail(ctx context.Context, to string, name string, email string, sportCenterName string, messageBody string) error {
+func (m *MailgunMailer) SendContactEmail(ctx context.Context, to string, name string, email string, phone string, sportCenterName string, messageBody string) error {
 	subject := fmt.Sprintf("Nuevo contacto de Centro Deportivo: %s", sportCenterName)
 	body := fmt.Sprintf(`
 		<h3>Nuevo mensaje de contacto</h3>
 		<p><strong>Nombre:</strong> %s</p>
 		<p><strong>Email:</strong> %s</p>
+		<p><strong>Teléfono:</strong> %s</p>
 		<p><strong>Centro Deportivo:</strong> %s</p>
 		<p><strong>Mensaje:</strong></p>
 		<p>%s</p>
-	`, name, email, sportCenterName, messageBody)
+	`, name, email, phone, sportCenterName, messageBody)
 
 	message := m.mg.NewMessage(m.from, subject, "", to)
 	message.SetHtml(body)

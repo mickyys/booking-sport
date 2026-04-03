@@ -23,6 +23,7 @@ func NewContactHandler(mailer app.Mailer) *ContactHandler {
 type ContactRequest struct {
 	Name            string `json:"name" binding:"required"`
 	Email           string `json:"email" binding:"required,email"`
+	Phone           string `json:"phone" binding:"required"`
 	SportCenterName string `json:"sportCenterName" binding:"required"`
 	Message         string `json:"message" binding:"required"`
 	TurnstileToken  string `json:"turnstileToken" binding:"required"`
@@ -68,7 +69,7 @@ func (h *ContactHandler) Submit(c *gin.Context) {
 			receiverEmail = "hector.martinez@reservaloya.cl" // Fallback
 		}
 
-		err := h.mailer.SendContactEmail(c.Request.Context(), receiverEmail, req.Name, req.Email, req.SportCenterName, req.Message)
+		err := h.mailer.SendContactEmail(c.Request.Context(), receiverEmail, req.Name, req.Email, req.Phone, req.SportCenterName, req.Message)
 		if err != nil {
 			log.Printf("Error al enviar correo de contacto: %v", err)
 			// No bloqueamos la respuesta al usuario si falla el correo, pero lo logueamos
@@ -78,8 +79,8 @@ func (h *ContactHandler) Submit(c *gin.Context) {
 	}
 
 	// Por ahora simulamos éxito y logueamos el contacto.
-	log.Printf("Nuevo contacto de centro deportivo: %s <%s>, Centro: %s, Mensaje: %s",
-		req.Name, req.Email, req.SportCenterName, req.Message)
+	log.Printf("Nuevo contacto de centro deportivo: %s <%s>, Tel: %s, Centro: %s, Mensaje: %s",
+		req.Name, req.Email, req.Phone, req.SportCenterName, req.Message)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Contacto recibido correctamente"})
 }
