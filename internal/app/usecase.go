@@ -58,6 +58,7 @@ type BookingRepository interface {
 type Mailer interface {
 	SendBookingConfirmation(ctx context.Context, booking *domain.Booking) error
 	SendBookingCancellation(ctx context.Context, booking *domain.Booking) error
+	SendContactEmail(ctx context.Context, to string, name string, email string, sportCenterName string, message string) error
 }
 type SportCenterUseCase struct {
 	repo        SportCenterRepository

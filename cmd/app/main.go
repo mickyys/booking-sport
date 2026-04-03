@@ -91,6 +91,7 @@ func main() {
 	sportCenterHandler := infra.NewSportCenterHandler(sportCenterUC)
 	courtHandler := infra.NewCourtHandler(courtUC)
 	bookingHandler := infra.NewBookingHandler(bookingUC)
+	contactHandler := infra.NewContactHandler(bookingMailer)
 
 	// 6. Configurar Rutas
 	r := gin.Default()
@@ -138,6 +139,7 @@ func main() {
 	r.GET("/api/bookings/code/:code", bookingHandler.GetByBookingCode)
 	r.POST("/api/bookings/code/:code/cancel", bookingHandler.CancelByBookingCode)
 	r.POST("/api/bookings", bookingHandler.CreateBooking)
+	r.POST("/api/contact", contactHandler.Submit)
 
 	// Rutas Protegidas
 	api := r.Group("/api")

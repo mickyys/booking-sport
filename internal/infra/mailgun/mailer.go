@@ -145,3 +145,28 @@ func (m *MailgunMailer) SendBookingCancellation(ctx context.Context, booking *do
 	log.Printf("[MAILGUN] sent cancel message id=%s to=%s", id, to)
 	return nil
 }
+
+func (m *MailgunMailer) SendContactEmail(ctx context.Context, to string, name string, email string, sportCenterName string, messageBody string) error {
+	subject := fmt.Sprintf("Nuevo contacto de Centro Deportivo: %s", sportCenterName)
+	body := fmt.Sprintf(`
+		<h3>Nuevo mensaje de contacto</h3>
+		<p><strong>Nombre:</strong> %s</p>
+		<p><strong>Email:</strong> %s</p>
+		<p><strong>Centro Deportivo:</strong> %s</p>
+		<p><strong>Mensaje:</strong></p>
+		<p>%s</p>
+	`, name, email, sportCenterName, messageBody)
+
+	message := m.mg.NewMessage(m.from, subject, "", to)
+	message.SetHtml(body)
+
+	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	_, id, err := m.mg.Send(sendCtx, message)
+	if err != nil {
+		return fmt.Errorf("mailgun send contact error: %w", err)
+	}
+	log.Printf("[MAILGUN] sent contact email id=%s to=%s", id, to)
+	return nil
+}
