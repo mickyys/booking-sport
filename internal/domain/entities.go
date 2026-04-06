@@ -99,6 +99,9 @@ type PagedResponse struct {
 type BookingSummary struct {
 	ID                primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	SportCenterName   string             `bson:"sport_center_name" json:"sport_center_name"`
+	CustomerName      string             `bson:"customer_name" json:"customer_name"`
+	CustomerPhone     string             `bson:"customer_phone" json:"customer_phone"`
+	CustomerEmail     string             `bson:"customer_email" json:"customer_email"`
 	Date              time.Time          `bson:"date" json:"date"`
 	Hour              int                `bson:"hour" json:"hour"`
 	CourtName         string             `bson:"court_name" json:"court_name"`
@@ -124,10 +127,17 @@ type RecurringSeries struct {
 type AdminDashboardData struct {
 	TodayBookingsCount int              `json:"today_bookings_count"`
 	TodayRevenue       float64          `json:"today_revenue"`
+	TodayOnlineRevenue float64          `json:"today_online_revenue"`
+	TodayVenueRevenue  float64          `json:"today_venue_revenue"`
 	TotalRevenue       float64          `json:"total_revenue"`
+	TotalOnlineRevenue float64          `json:"total_online_revenue"`
+	TotalVenueRevenue  float64          `json:"total_venue_revenue"`
 	CancelledCount     int              `json:"cancelled_count"`
 	RecentBookings     []BookingSummary `json:"recent_bookings"`
 	TotalRecentCount   int64            `json:"total_recent_count"`
+	Page               int              `json:"page"`
+	Limit              int              `json:"limit"`
+	TotalPages         int              `json:"total_pages"`
 }
 
 type BookingStatus string
