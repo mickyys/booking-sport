@@ -541,28 +541,60 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 	}
 	todayCount, _ := r.collection.CountDocuments(ctx, todayFilter)
 
+	// Helper function to extract revenue from aggregation result
+	getRevenueValues := func(result []bson.M, totalKey, onlineKey, venueKey string) (float64, float64, float64) {
+		total := 0.0
+		online := 0.0
+		venue := 0.0
+		if len(result) > 0 {
+			to_float := func(v interface{}) float64 {
+				switch val := v.(type) {
+				case float64:
+					return val
+				case int32:
+					return float64(val)
+				case int64:
+					return float64(val)
+				default:
+					return 0.0
+				}
+			}
+			total = to_float(result[0][totalKey])
+			online = to_float(result[0][onlineKey])
+			venue = to_float(result[0][venueKey])
+		}
+		return total, online, venue
+	}
+
 	// 2. Today's Revenue
 	pipelineTodayRevenue := mongo.Pipeline{
 		{{Key: "$match", Value: todayFilter}},
 		{{Key: "$group", Value: bson.M{
 			"_id":           nil,
 			"today_revenue": bson.M{"$sum": "$price"},
+			"online_revenue": bson.M{"$sum": bson.M{
+				"$cond": []interface{}{
+					bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "internal"}}},
+					0,
+					"$price",
+				},
+			}},
+			"venue_revenue": bson.M{"$sum": bson.M{
+				"$cond": []interface{}{
+					bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "internal"}}},
+					"$price",
+					0,
+				},
+			}},
 		}}},
 	}
-	cursorRevenue, _ := r.collection.Aggregate(ctx, pipelineTodayRevenue)
+	cursorRevenue, err := r.collection.Aggregate(ctx, pipelineTodayRevenue)
+	if err != nil {
+		return nil, err
+	}
 	var todayRevenueResult []bson.M
 	cursorRevenue.All(ctx, &todayRevenueResult)
-	todayRevenue := 0.0
-	if len(todayRevenueResult) > 0 {
-		switch v := todayRevenueResult[0]["today_revenue"].(type) {
-		case float64:
-			todayRevenue = v
-		case int32:
-			todayRevenue = float64(v)
-		case int64:
-			todayRevenue = float64(v)
-		}
-	}
+	todayRevenue, todayOnlineRevenue, todayVenueRevenue := getRevenueValues(todayRevenueResult, "today_revenue", "online_revenue", "venue_revenue")
 
 	// 3. Total Revenue (Confirmed)
 	pipelineTotalRevenue := mongo.Pipeline{
@@ -573,22 +605,29 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 		{{Key: "$group", Value: bson.M{
 			"_id":           nil,
 			"total_revenue": bson.M{"$sum": "$price"},
+			"online_revenue": bson.M{"$sum": bson.M{
+				"$cond": []interface{}{
+					bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "internal"}}},
+					0,
+					"$price",
+				},
+			}},
+			"venue_revenue": bson.M{"$sum": bson.M{
+				"$cond": []interface{}{
+					bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "internal"}}},
+					"$price",
+					0,
+				},
+			}},
 		}}},
 	}
-	cursorTotal, _ := r.collection.Aggregate(ctx, pipelineTotalRevenue)
+	cursorTotal, err := r.collection.Aggregate(ctx, pipelineTotalRevenue)
+	if err != nil {
+		return nil, err
+	}
 	var totalRevenueResult []bson.M
 	cursorTotal.All(ctx, &totalRevenueResult)
-	totalRevenue := 0.0
-	if len(totalRevenueResult) > 0 {
-		switch v := totalRevenueResult[0]["total_revenue"].(type) {
-		case float64:
-			totalRevenue = v
-		case int32:
-			totalRevenue = float64(v)
-		case int64:
-			totalRevenue = float64(v)
-		}
-	}
+	totalRevenue, totalOnlineRevenue, totalVenueRevenue := getRevenueValues(totalRevenueResult, "total_revenue", "online_revenue", "venue_revenue")
 
 	// 4. Cancelled Count
 	cancelledFilter := bson.M{
@@ -664,6 +703,9 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 			"sport_center_name":  "$sport_center_info.name",
 			"court_name":         "$court_info.name",
 			"user_name":          bson.M{"$ifNull": []interface{}{"$customer_name", "$guest_details.name", "Usuario"}},
+			"customer_name":      bson.M{"$ifNull": []interface{}{"$customer_name", "$guest_details.name", ""}},
+			"customer_phone":     bson.M{"$ifNull": []interface{}{"$customer_phone", "$guest_details.phone", ""}},
+			"customer_email":     bson.M{"$ifNull": []interface{}{"$customer_email", "$guest_details.email", ""}},
 			"is_guest":           bson.M{"$cond": []interface{}{bson.M{"$ne": []interface{}{"$guest_details", nil}}, true, false}},
 			"payment_method":     bson.M{"$ifNull": []interface{}{"$payment_method", "fintoc"}},
 			"cancelled_by":       bson.M{"$ifNull": []interface{}{"$cancelled_by", ""}},
@@ -673,6 +715,9 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 		{{Key: "$project", Value: bson.M{
 			"id":                 "$_id",
 			"sport_center_name":  1,
+			"customer_name":      1,
+			"customer_phone":     1,
+			"customer_email":     1,
 			"date":               1,
 			"hour":               1,
 			"booking_code":       1,
@@ -702,7 +747,11 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 	return &domain.AdminDashboardData{
 		TodayBookingsCount: int(todayCount),
 		TodayRevenue:       todayRevenue,
+		TodayOnlineRevenue: todayOnlineRevenue,
+		TodayVenueRevenue:  todayVenueRevenue,
 		TotalRevenue:       totalRevenue,
+		TotalOnlineRevenue: totalOnlineRevenue,
+		TotalVenueRevenue:  totalVenueRevenue,
 		CancelledCount:     int(cancelledCount),
 		RecentBookings:     recentBookings,
 		TotalRecentCount:   totalRecentCount,
