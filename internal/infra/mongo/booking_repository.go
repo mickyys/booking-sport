@@ -744,6 +744,8 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 		return nil, err
 	}
 
+	totalPages := int((totalRecentCount + int64(limit) - 1) / int64(limit))
+
 	return &domain.AdminDashboardData{
 		TodayBookingsCount: int(todayCount),
 		TodayRevenue:       todayRevenue,
@@ -755,5 +757,8 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 		CancelledCount:     int(cancelledCount),
 		RecentBookings:     recentBookings,
 		TotalRecentCount:   totalRecentCount,
+		Page:               page,
+		Limit:              limit,
+		TotalPages:         totalPages,
 	}, nil
 }

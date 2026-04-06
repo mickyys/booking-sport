@@ -135,6 +135,9 @@ type AdminDashboardData struct {
 	CancelledCount     int              `json:"cancelled_count"`
 	RecentBookings     []BookingSummary `json:"recent_bookings"`
 	TotalRecentCount   int64            `json:"total_recent_count"`
+	Page               int              `json:"page"`
+	Limit              int              `json:"limit"`
+	TotalPages         int              `json:"total_pages"`
 }
 
 type BookingStatus string
