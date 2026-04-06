@@ -102,6 +102,7 @@ type BookingSummary struct {
 	CustomerName      string             `bson:"customer_name" json:"customer_name"`
 	CustomerPhone     string             `bson:"customer_phone" json:"customer_phone"`
 	CustomerEmail     string             `bson:"customer_email" json:"customer_email"`
+	BookingCode       string             `bson:"booking_code" json:"booking_code"`
 	Date              time.Time          `bson:"date" json:"date"`
 	Hour              int                `bson:"hour" json:"hour"`
 	CourtName         string             `bson:"court_name" json:"court_name"`
