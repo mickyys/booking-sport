@@ -599,9 +599,10 @@ func (h *SportCenterHandler) GetSchedulesWithBookings(c *gin.Context) {
 	}
 
 	dateStr := c.Query("date")
-	date := time.Now()
+	loc, _ := time.LoadLocation("America/Santiago")
+	date := time.Now().In(loc)
 	if dateStr != "" {
-		parsedDate, err := time.Parse("2006-01-02", dateStr)
+		parsedDate, err := time.ParseInLocation("2006-01-02", dateStr, loc)
 		if err == nil {
 			date = parsedDate
 		}

@@ -238,9 +238,10 @@ func (r *BookingRepository) FindByCourtAndDate(ctx context.Context, courtID prim
 }
 
 func (r *BookingRepository) FindBySportCenterAndDate(ctx context.Context, centerID primitive.ObjectID, date time.Time) ([]domain.Booking, error) {
-	// Normalizar fecha al inicio del día
-	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
-	endDate := startDate.Add(24 * time.Hour)
+	// Normalizar fecha al inicio y fin del día en zona horaria de Chile
+	loc, _ := time.LoadLocation("America/Santiago")
+	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
+	endDate := startDate.AddDate(0, 0, 1)
 
 	cursor, err := r.collection.Find(ctx, bson.M{
 		"sport_center_id": centerID,
