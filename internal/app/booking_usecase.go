@@ -52,18 +52,15 @@ func (uc *BookingUseCase) DeleteSeries(ctx context.Context, seriesID string) err
 }
 
 func (uc *BookingUseCase) GetRecurringSeries(ctx context.Context, userID string) ([]domain.RecurringSeries, error) {
-	// Buscamos los centros deportivos asociados al usuario
 	centers, err := uc.centerRepo.FindByUserID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("error al buscar centros del usuario: %w", err)
 	}
 
-	// Si el usuario no administra centros, retornamos lista vacía
 	if len(centers) == 0 {
 		return []domain.RecurringSeries{}, nil
 	}
 
-	// Extraemos solo los IDs para pasárselos al repositorio de bookings
 	var centerIDs []primitive.ObjectID
 	for _, c := range centers {
 		centerIDs = append(centerIDs, c.ID)
@@ -82,7 +79,6 @@ func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking
 	found := false
 	for _, s := range court.Schedule {
 		if s.Hour == booking.Hour {
-			// Check if slot has already passed
 			loc, _ := time.LoadLocation("America/Santiago")
 			bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, loc)
 			if bookingDateTime.Before(time.Now().In(loc)) {
@@ -114,7 +110,6 @@ func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking
 	booking.PaymentMethod = "fintoc"
 	booking.SportCenterID = court.SportCenterID
 
-	// Obtener el centro deportivo para sacar la secret key de Fintoc
 	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
 	if err != nil {
 		return "", fmt.Errorf("sport center not found: %w", err)
@@ -145,7 +140,6 @@ func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking
 		}
 	}
 
-	// successURL apunta al backend para validar y redirigir
 	url := fmt.Sprintf("%s?id=%s", urlPaymentCallback, booking.BookingCode)
 
 	orderID := fmt.Sprintf("booking-%s-%d", booking.CourtID.Hex(), booking.Hour)
@@ -182,13 +176,11 @@ func (uc *BookingUseCase) HandleFintocCheckoutFinished(ctx context.Context, chec
 }
 
 func (uc *BookingUseCase) GetFintocPaymentStatus(ctx context.Context, paymentIntentID string) (string, error) {
-	// Buscar la reserva para saber a qué centro pertenece
 	booking, err := uc.repo.FindByFintocPaymentIntentID(ctx, paymentIntentID)
 	if err != nil {
 		return "", fmt.Errorf("booking not found for payment intent: %w", err)
 	}
 
-	// Obtener el centro para sacar la secret key
 	center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
 	if err != nil {
 		return "", fmt.Errorf("sport center not found: %w", err)
@@ -214,14 +206,11 @@ func (uc *BookingUseCase) ValidateFintocPaymentAndGetCode(ctx context.Context, b
 		return "", fmt.Errorf("booking not found for code: %w", err)
 	}
 
-	// Si el estado ya es confirmado, redireccionamos directamente
 	if booking.Status == domain.BookingStatusConfirmed {
 		return booking.BookingCode, nil
 	}
 
-	// Si el estado es pendiente, consultamos Fintoc
 	if booking.Status == domain.BookingStatusPending && booking.FintocPaymentID != "" {
-		// Obtener el centro para sacar la secret key
 		center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
 		if err != nil {
 			return booking.BookingCode, fmt.Errorf("sport center not found: %w", err)
@@ -332,12 +321,12 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 
 		percent := center.PartialPaymentPercent
 		if percent <= 0 {
-			percent = 50 // Default
+			percent = 50
 		}
 
 		booking.PaidAmount = (price * float64(percent)) / 100
 		booking.PendingAmount = price - booking.PaidAmount
-		booking.FinalPrice = booking.PaidAmount // Para MercadoPago pagamos solo la parte proporcional
+		booking.FinalPrice = booking.PaidAmount
 	} else {
 		booking.PaidAmount = price
 		booking.PendingAmount = 0
@@ -910,16 +899,11 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 		}
 	}
 
-	log.Println("booking para crear: ", booking)
 	if err := uc.repo.Create(ctx, booking); err != nil {
 		return err
 	}
 
-	log.Println("booking para creado: ", booking)
-	log.Println("booking uc.mailer: ", uc.mailer)
-
 	if uc.mailer != nil {
-		log.Printf("[CREATE BOOKING] Enviando correo de confirmación para reserva %s\n", booking.ID.Hex())
 		go func(b *domain.Booking) {
 			if err := uc.mailer.SendBookingConfirmation(context.Background(), b); err != nil {
 				log.Printf("[MAIL ERROR] sending booking confirmation: %v\n", err)

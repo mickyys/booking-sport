@@ -27,7 +27,6 @@ func NewBookingHandler(uc *app.BookingUseCase) *BookingHandler {
 	return &BookingHandler{useCase: uc}
 }
 
-// GetUserCancelledBookings retorna solo las reservas canceladas del usuario autenticado
 func (h *BookingHandler) GetUserCancelledBookings(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
@@ -90,13 +89,11 @@ func (h *BookingHandler) CreateFintocPaymentIntent(c *gin.Context) {
 }
 
 func (h *BookingHandler) FintocWebhook(c *gin.Context) {
-	// 1. Read body to verify signature before unmarshaling
 	bodyBytes, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read request body"})
 		return
 	}
-	// Restore body for ShouldBindJSON later if needed, but we'll use json.Unmarshal
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
 	var event struct {
@@ -110,16 +107,13 @@ func (h *BookingHandler) FintocWebhook(c *gin.Context) {
 		return
 	}
 
-	// 2. Validate Signature if header present
 	signature := c.GetHeader("Fintoc-Signature")
 	if signature != "" {
-		// Extract generic ID from data to find the sport center and its secret
 		var data struct {
 			ID string `json:"id"`
 		}
 		json.Unmarshal(event.Data, &data)
 
-		// We use the ID to find the booking/center (could be checkout session or intent ID)
 		secret, err := h.useCase.GetWebhookSecret(c.Request.Context(), data.ID)
 
 		if err != nil {
@@ -132,7 +126,6 @@ func (h *BookingHandler) FintocWebhook(c *gin.Context) {
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid signature"})
 				return
 			}
-			// Log valid signature with center and amount if possible
 			booking, errB := h.useCase.GetBookingByFintocID(c.Request.Context(), data.ID)
 			if errB == nil && booking != nil {
 				center, _ := h.useCase.GetSportCenterByID(c.Request.Context(), booking.SportCenterID)
@@ -239,7 +232,7 @@ func (h *BookingHandler) GetFintocPaymentIntentStatus(c *gin.Context) {
 
 func (h *BookingHandler) FintocReturn(c *gin.Context) {
 	url := os.Getenv("URL_FRONTEND")
-	bookingCode := c.Query("id") // Fintoc envía el id en el query param 'id', que mapeamos al booking_code
+	bookingCode := c.Query("id")
 	fmt.Println("============== ID =================", bookingCode)
 	if bookingCode == "" {
 		c.Redirect(http.StatusFound, url+"/booking/failure?error=missing_id")
@@ -274,7 +267,6 @@ func (h *BookingHandler) GetConfirmedCount(c *gin.Context) {
 }
 
 func (h *BookingHandler) GetUserBookings(c *gin.Context) {
-	// Obtener userID del token (inyectado por el middleware)
 	userID, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in token"})
@@ -351,7 +343,6 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 		})
 		return
 	}
-	// Combina fecha y hora de la reserva
 	hoursUntilMatch := time.Until(booking.Date.Add(time.Hour * time.Duration(booking.Hour))).Hours()
 
 	configCancellationHours := center.CancellationHours
@@ -375,7 +366,6 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 
 	maxRefundAmount := (booking.Price * float64(refundPercentage)) / 100
 
-	// Nueva estructura de respuesta para evitar exponer IDs sensibles y agregar nombres
 	response := gin.H{
 		"booking_detail": gin.H{
 			"id":                   booking.ID,
@@ -430,7 +420,6 @@ func (h *BookingHandler) CancelBooking(c *gin.Context) {
 		return
 	}
 
-	// El porcentaje de reembolso ahora se calcula en el backend
 	err = h.useCase.CancelBooking(c.Request.Context(), bookingID, userID.(string))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -453,7 +442,6 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 		return
 	}
 
-	// Build same response structure as GetBookingDetail
 	court, err := h.useCase.GetCourtByID(c.Request.Context(), booking.CourtID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get court info"})
@@ -524,7 +512,6 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-// CancelByBookingCode permite cancelar una reserva usando el booking_code (pública)
 func (h *BookingHandler) CancelByBookingCode(c *gin.Context) {
 	code := c.Param("code")
 	if code == "" {
@@ -538,8 +525,6 @@ func (h *BookingHandler) CancelByBookingCode(c *gin.Context) {
 		return
 	}
 
-	// Para cancelación pública, pasamos userID vacío. El usecase validará si la reserva
-	// puede ser cancelada por invitado (por ejemplo, cuando booking.UserID == "").
 	err = h.useCase.CancelBooking(c.Request.Context(), booking.ID, "")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -576,7 +561,6 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 	}
 	booking.Booking.SeriesID = booking.SeriesID
 
-	// Si hay un usuario autenticado (opcional), lo asociamos
 	if userID, exists := c.Get("user_id"); exists {
 		booking.Booking.UserID = userID.(string)
 	}
@@ -683,10 +667,6 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 }
 
 func (h *BookingHandler) MercadoPagoWebhook(c *gin.Context) {
-	// MercadoPago sends webhook notifications
-	// Query param: type=payment, data.id=<payment_id>
-	// Or JSON body: { "action": "payment.updated", "data": { "id": "123" } }
-
 	var event struct {
 		Action string `json:"action"`
 		Type   string `json:"type"`
@@ -696,7 +676,6 @@ func (h *BookingHandler) MercadoPagoWebhook(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&event); err != nil {
-		// Try query params as fallback (IPN style)
 		topic := c.Query("topic")
 		id := c.Query("id")
 		if topic == "payment" && id != "" {
@@ -735,7 +714,6 @@ func (h *BookingHandler) MercadoPagoReturn(c *gin.Context) {
 	log.Printf("[MP RETURN] code=%s payment_id=%s\n", bookingCode, paymentID)
 
 	if bookingCode == "" {
-		// Try external_reference as fallback
 		bookingCode = c.Query("external_reference")
 	}
 
@@ -744,7 +722,6 @@ func (h *BookingHandler) MercadoPagoReturn(c *gin.Context) {
 		return
 	}
 
-	// Si tenemos payment_id, guardarlo en la reserva antes de procesar el webhook
 	if paymentID != "" {
 		if err := h.useCase.StoreMPPaymentID(c.Request.Context(), bookingCode, paymentID); err != nil {
 			log.Printf("[MP RETURN] Error storing payment_id %s for code %s: %v\n", paymentID, bookingCode, err)

@@ -44,7 +44,6 @@ func (h *SportCenterHandler) List(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date format, expected YYYY-MM-DD"})
 			return
 		}
-		// Normalize to UTC midnight
 		utcDate := time.Date(parsedDate.Year(), parsedDate.Month(), parsedDate.Day(), 0, 0, 0, 0, time.UTC)
 		date = &utcDate
 	}
@@ -63,15 +62,12 @@ func (h *SportCenterHandler) List(c *gin.Context) {
 		hour = &hInt
 	}
 
-	// If hour is provided but date is not, default to today in America/Santiago
 	if hour != nil && date == nil {
 		loc, err := time.LoadLocation("America/Santiago")
 		if err != nil {
-			// Fallback to UTC if timezone db is missing
 			loc = time.UTC
 		}
 		now := time.Now().In(loc)
-		// We set the date to UTC midnight for consistency with MongoDB storage
 		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 		date = &today
 	}
@@ -191,9 +187,6 @@ func (h *SportCenterHandler) UpdateSettings(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	// Como el useCase.UpdateSettings no tiene los nuevos campos, vamos a usar UpdateSportCenter indirectamente o actualizar el repo.
-	// Pero mejor actualizamos el repo y el usecase.
 
 	existing, err := h.useCase.FindByID(c.Request.Context(), id)
 	if err != nil {
@@ -315,7 +308,6 @@ func (h *CourtHandler) ConfigureSchedule(c *gin.Context) {
 		return
 	}
 
-	// Validar horarios (0 a 23 y 0 a 59)
 	for _, s := range schedule {
 		if s.Hour < 0 || s.Hour > 23 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Hour must be between 0 and 23"})
@@ -361,7 +353,6 @@ func (h *CourtHandler) UpdateScheduleSlot(c *gin.Context) {
 		return
 	}
 
-	// Validar horario
 	if slot.Hour < 0 || slot.Hour > 23 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Hour must be between 0 and 23"})
 		return
@@ -540,7 +531,6 @@ func (h *CourtHandler) DeleteAdminCourt(c *gin.Context) {
 func (h *SportCenterHandler) GetSchedules(c *gin.Context) {
 	idStr := c.Param("id")
 	var centerID primitive.ObjectID
-	// Try parse as ObjectID first; if fails, treat as slug and resolve
 	oid, err := primitive.ObjectIDFromHex(idStr)
 	if err == nil {
 		centerID = oid
@@ -573,12 +563,9 @@ func (h *SportCenterHandler) GetSchedules(c *gin.Context) {
 	c.JSON(http.StatusOK, schedules)
 }
 
-// GetSchedulesWithBookings retorna schedules con detalles del cliente
-// Requiere autenticación y el usuario debe estar asociado al centro deportivo
 func (h *SportCenterHandler) GetSchedulesWithBookings(c *gin.Context) {
 	idStr := c.Param("id")
 	var centerID primitive.ObjectID
-	// Try parse as ObjectID first; if fails, treat as slug and resolve
 	oid, err := primitive.ObjectIDFromHex(idStr)
 	if err == nil {
 		centerID = oid
@@ -591,7 +578,6 @@ func (h *SportCenterHandler) GetSchedulesWithBookings(c *gin.Context) {
 		centerID = center.ID
 	}
 
-	// Authorization: user must be associated to the center
 	userID, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in context"})
@@ -603,7 +589,6 @@ func (h *SportCenterHandler) GetSchedulesWithBookings(c *gin.Context) {
 		return
 	}
 
-	// Verify user is owner of the center
 	center, err := h.useCase.FindByID(c.Request.Context(), centerID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Sport center not found"})

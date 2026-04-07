@@ -1,5 +1,3 @@
-// ...existing code...
-
 package mongo
 
 import (
@@ -25,7 +23,6 @@ func NewBookingRepository(db *mongo.Database) *BookingRepository {
 	}
 }
 
-// FindByUserIDAndStatusPaged retorna reservas de un usuario filtradas por estado, paginadas
 func (r *BookingRepository) FindByUserIDAndStatusPaged(ctx context.Context, userID string, status domain.BookingStatus, page, limit int) ([]domain.BookingSummary, int64, error) {
 	skip := (page - 1) * limit
 	filter := bson.M{"user_id": userID, "status": status}
@@ -232,7 +229,6 @@ func (r *BookingRepository) UpdateMPPaymentID(ctx context.Context, id primitive.
 }
 
 func (r *BookingRepository) FindByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error) {
-	// Normalizar fecha al inicio del día
 	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 	endDate := startDate.Add(24 * time.Hour)
 
@@ -256,7 +252,6 @@ func (r *BookingRepository) FindByCourtAndDate(ctx context.Context, courtID prim
 }
 
 func (r *BookingRepository) FindBySportCenterAndDate(ctx context.Context, centerID primitive.ObjectID, date time.Time) ([]domain.Booking, error) {
-	// Normalizar fecha al inicio del día
 	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 	endDate := startDate.Add(24 * time.Hour)
 
@@ -453,7 +448,6 @@ func (r *BookingRepository) FindByUserID(ctx context.Context, userID string) ([]
 func (r *BookingRepository) AddRefund(ctx context.Context, paymentIntentID string, refund domain.Refund) error {
 	filter := bson.M{"fintoc_payment_intent_id": paymentIntentID}
 
-	// Agregamos el refund al array y restamos el monto del final_price
 	update := bson.M{
 		"$push": bson.M{"refunds": refund},
 		"$inc":  bson.M{"final_price": -float64(refund.Amount)},
@@ -484,9 +478,7 @@ func (r *BookingRepository) CountConfirmedByUserID(ctx context.Context, userID s
 		"user_id": userID,
 		"status":  domain.BookingStatusConfirmed,
 		"$or": []bson.M{
-			// Reservas de días anteriores
 			{"date": bson.M{"$lt": today}},
-			// Reservas de hoy cuya hora ya pasó
 			{
 				"$and": []bson.M{
 					{"date": bson.M{"$eq": today}},

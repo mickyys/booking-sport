@@ -55,7 +55,6 @@ type BookingRepository interface {
 	GetRecurringSeries(ctx context.Context, centerIDs []primitive.ObjectID) ([]domain.RecurringSeries, error)
 }
 
-// Mailer envía correos transaccionales (p. ej. confirmación de reserva)
 type Mailer interface {
 	SendBookingConfirmation(ctx context.Context, booking *domain.Booking) error
 	SendBookingCancellation(ctx context.Context, booking *domain.Booking) error
@@ -178,23 +177,16 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 	return result, nil
 }
 
-// GetSportCenterSchedulesWithBookingDetails retorna schedules enriquecidos
-// con información del cliente (nombre, email, teléfono y código de reserva)
-// para un centro y fecha específica. Solo incluye información de reservas
-// confirmadas.
 func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx context.Context, centerID primitive.ObjectID, date time.Time, all bool) ([]CourtScheduleResponse, error) {
 	courts, err := uc.courtRepo.FindByCenterID(ctx, centerID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Normalizar la fecha al inicio del día (00:00:00)
 	searchDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 
-	// Obtener todas las reservas confirmadas para este centro y fecha
 	allBookings, _ := uc.bookingRepo.FindBySportCenterAndDate(ctx, centerID, searchDate)
 
-	// Agrupar bookings por CourtID y hora
 	bookingsByCourt := make(map[primitive.ObjectID]map[int]*domain.Booking)
 	for _, b := range allBookings {
 		if b.Status != domain.BookingStatusConfirmed {
@@ -227,20 +219,17 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 				PaymentOptional: s.PaymentOptional,
 			}
 
-			// Check if slot has already passed
 			slotTime := time.Date(date.Year(), date.Month(), date.Day(), s.Hour, s.Minutes, 0, 0, loc)
 			if slotTime.Before(nowInLoc) && sch.Status == "available" {
 				sch.Status = "passed"
 			}
 
 			if b, exists := bookedHours[s.Hour]; exists && b != nil {
-				// Si hay una reserva, mostramos la información sin importar si la hora ya pasó
 				sch.Status = "booked"
 				if slotTime.Before(nowInLoc) {
-					sch.Status = "passed_booked" // Opcional: estado especial para reservas pasadas
+					sch.Status = "passed_booked"
 				}
 				sch.BookingID = &b.ID
-				// Preferir GuestDetails si existe
 				if b.GuestDetails != nil {
 					sch.CustomerName = b.GuestDetails.Name
 					sch.CustomerEmail = b.GuestDetails.Email
@@ -252,7 +241,6 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 				}
 				sch.BookingCode = b.BookingCode
 				sch.PaymentMethod = b.PaymentMethod
-				// Diferenciar entre reserva interna y bloqueo
 				if b.PaymentMethod == "internal" {
 					if b.GuestDetails != nil && b.GuestDetails.Name != "" && b.GuestDetails.Email != "admin@internal.com" {
 						sch.PaymentMethod = "internal_reservation"
@@ -306,7 +294,6 @@ func (uc *SportCenterUseCase) UpdateSportCenter(ctx context.Context, id primitiv
 	updatedCenter.CreatedAt = existing.CreatedAt
 	updatedCenter.UpdatedAt = time.Now()
 
-	// Mantener la configuración de Fintoc existente si no se proporciona una nueva
 	if updatedCenter.Fintoc == nil {
 		updatedCenter.Fintoc = existing.Fintoc
 	}
@@ -654,8 +641,6 @@ func (uc *CourtUseCase) GetSportCenterSchedulesWithBookings(ctx context.Context,
 
 	result := []CourtScheduleResponse{}
 	for _, court := range courts {
-		// NOTA: Como CourtUseCase no tiene bookingRepo por defecto y no quiero romper dependencias circulares
-		// si fuera necesario, pero aquí usaremos la lógica de marcar como booked.
 		schedules := court.Schedule
 		enrichedSchedules := []EnrichedCourtSchedule{}
 		for _, s := range schedules {

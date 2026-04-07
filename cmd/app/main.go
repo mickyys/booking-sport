@@ -20,24 +20,19 @@ import (
 )
 
 func main() {
-	// Logger setup for local development
 	logFile, err := os.OpenFile("app.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err == nil {
-		// Output to both stdout and file
 		multiWriter := io.MultiWriter(os.Stdout, logFile)
 		log.SetOutput(multiWriter)
-		// Configure Gin to also write to both
 		gin.DefaultWriter = multiWriter
 		gin.DefaultErrorWriter = multiWriter
 
 		log.Println("--- Application Start ---")
 		log.Printf("Logging to app.log and stdout\n")
-		// No usar defer logFile.Close() aquí si el proceso es de larga duración y queremos asegurar el flush
 	} else {
 		fmt.Printf("Error opening log file: %v\n", err)
 	}
 
-	// 1. Configurar conexión a MongoDB (usando env o valor por defecto)
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
 		mongoURI = "mongodb://localhost:27017"
@@ -54,12 +49,10 @@ func main() {
 
 	db := client.Database("sport_booking")
 
-	// 2. Crear índices de MongoDB
 	if err := mongo.EnsureIndexes(ctx, db); err != nil {
 		log.Printf("Warning: Error creando índices de MongoDB: %v", err)
 	}
 
-	// 3. Inicializar Repositorios
 	sportCenterRepo := mongo.NewSportCenterRepository(db)
 	if err := sportCenterRepo.SyncCourtsCount(ctx); err != nil {
 		log.Printf("Warning: Error sincronizando contador de canchas: %v", err)
@@ -68,10 +61,8 @@ func main() {
 	userRepo := mongo.NewUserRepository(db)
 	bookingRepo := mongo.NewBookingRepository(db)
 
-	// 4. Inicializar Casos de Uso (Application Layer)
 	sportCenterUC := app.NewSportCenterUseCase(sportCenterRepo, courtRepo, userRepo, bookingRepo)
 	courtUC := app.NewCourtUseCase(courtRepo, sportCenterRepo, bookingRepo)
-	// Inicializar Mailer (Mailgun) si está configurado
 	var bookingMailer app.Mailer
 	mailgunAPIKey := os.Getenv("MAILGUN_API_KEY")
 	mailgunDomain := os.Getenv("MAILGUN_DOMAIN")
@@ -87,19 +78,15 @@ func main() {
 
 	bookingUC := app.NewBookingUseCase(bookingRepo, courtRepo, sportCenterRepo, userRepo, bookingMailer)
 
-	// 5. Inicializar Manejadores (Presentation Layer)
 	sportCenterHandler := infra.NewSportCenterHandler(sportCenterUC)
 	courtHandler := infra.NewCourtHandler(courtUC)
 	bookingHandler := infra.NewBookingHandler(bookingUC)
 	contactHandler := infra.NewContactHandler(bookingMailer)
 
-	// 6. Configurar Rutas
 	r := gin.Default()
 
-	// Configurar CORS
 	r.Use(cors.New(cors.Config{
 		AllowOriginFunc: func(origin string) bool {
-			// Permitir localhost:5173, localhost:3000 y sus subdominios
 			return origin == "http://localhost:5173" ||
 				origin == "http://localhost:3000" ||
 				strings.HasSuffix(origin, ".localhost:3000") ||
@@ -112,13 +99,11 @@ func main() {
 		MaxAge:           12 * time.Hour,
 	}))
 
-	// Auth0 Middleware
 	authMiddleware := auth.EnsureValidToken(
 		os.Getenv("AUTH0_DOMAIN"),
 		os.Getenv("AUTH0_AUDIENCE"),
 	)
 
-	// Rutas Públicas
 	r.GET("/api/sport-centers", sportCenterHandler.List)
 	r.GET("/api/cities", sportCenterHandler.ListCities)
 	r.GET("/api/sport-centers/slug/:slug", sportCenterHandler.GetBySlug)
@@ -132,7 +117,6 @@ func main() {
 	r.POST("/api/bookings/fintoc/webhook", bookingHandler.FintocWebhook)
 	r.GET("/api/bookings/fintoc/return", bookingHandler.FintocReturn)
 	r.GET("/api/bookings/fintoc/:id", bookingHandler.GetFintocPaymentIntentStatus)
-	// MercadoPago payment routes
 	r.POST("/api/bookings/mercadopago", bookingHandler.CreateMercadoPagoPayment)
 	r.POST("/api/bookings/mercadopago/webhook", bookingHandler.MercadoPagoWebhook)
 	r.GET("/api/bookings/mercadopago/return", bookingHandler.MercadoPagoReturn)
@@ -141,11 +125,9 @@ func main() {
 	r.POST("/api/bookings", bookingHandler.CreateBooking)
 	r.POST("/api/contact", contactHandler.Submit)
 
-	// Rutas Protegidas
 	api := r.Group("/api")
 	api.Use(authMiddleware)
 	{
-		// Endpoint seguro para obtener schedules con detalles de reservas
 		api.GET("/sport-centers/:id/schedules/bookings", sportCenterHandler.GetSchedulesWithBookings)
 		api.GET("/bookings/:id", bookingHandler.GetBookingDetail)
 		api.GET("/bookings/my-bookings", bookingHandler.GetUserBookings)
@@ -169,7 +151,6 @@ func main() {
 		api.DELETE("/admin/bookings/:id", bookingHandler.DeleteBooking)
 	}
 
-	// 7. Iniciar Servidor
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"

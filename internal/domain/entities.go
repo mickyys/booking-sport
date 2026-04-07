@@ -50,7 +50,6 @@ type SportCenter struct {
 	Coordinates Coordinates        `bson:"coordinates" json:"coordinates"`
 	Services    []string           `bson:"services" json:"services"`
 	Contact     Contact            `bson:"contact" json:"contact"`
-	// Courts: cantidad de canchas asociadas al centro
 	CourtsCount       int                `bson:"courts_count" json:"courts"`
 	Fintoc            *FintocConfig      `bson:"fintoc,omitempty" json:"-"`
 	MercadoPago           *MercadoPagoConfig `bson:"mercadopago,omitempty" json:"-"`
@@ -58,7 +57,7 @@ type SportCenter struct {
 	RetentionPercent      int                `bson:"retention_percent" json:"retention_percent"`
 	PartialPaymentEnabled bool               `bson:"partial_payment_enabled" json:"partial_payment_enabled"`
 	PartialPaymentPercent int                `bson:"partial_payment_percent" json:"partial_payment_percent"`
-	Users                 []string           `bson:"users" json:"users"` // Usuarios asociados al centro
+	Users                 []string           `bson:"users" json:"users"`
 	CreatedAt         time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt         time.Time          `bson:"updated_at" json:"updated_at"`
 }
@@ -74,10 +73,10 @@ type Court struct {
 }
 
 type CourtSchedule struct {
-	Hour            int     `bson:"hour" json:"hour"`       // 0 - 23
-	Minutes         int     `bson:"minutes" json:"minutes"` // 0 - 59
-	Price                 float64 `bson:"price" json:"price"`     // Valor por hora
-	Status                string  `bson:"status" json:"status"`   // "available", "booked", "closed"
+	Hour            int     `bson:"hour" json:"hour"`
+	Minutes         int     `bson:"minutes" json:"minutes"`
+	Price                 float64 `bson:"price" json:"price"`
+	Status                string  `bson:"status" json:"status"`
 	PaymentRequired       bool    `bson:"payment_required" json:"payment_required"`
 	PaymentOptional       bool    `bson:"payment_optional" json:"payment_optional"`
 	PartialPaymentEnabled bool    `bson:"partial_payment_enabled" json:"partial_payment_enabled"`
@@ -86,7 +85,7 @@ type CourtSchedule struct {
 type User struct {
 	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
 	Username  string             `bson:"username" json:"username"`
-	Password  string             `bson:"password" json:"-"` // Ocultar password en JSON
+	Password  string             `bson:"password" json:"-"`
 	Role      UserRole           `bson:"role" json:"role"`
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
 }
