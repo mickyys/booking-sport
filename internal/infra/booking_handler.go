@@ -378,20 +378,24 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 	// Nueva estructura de respuesta para evitar exponer IDs sensibles y agregar nombres
 	response := gin.H{
 		"booking_detail": gin.H{
-			"id":                booking.ID,
-			"user_id":           booking.UserID,
-			"court_id":          booking.CourtID,
-			"court_name":        court.Name,
-			"sport_center_id":   court.SportCenterID,
-			"sport_center_name": center.Name,
-			"date":              booking.Date,
-			"hour":              booking.Hour,
-			"price":             booking.Price,
-			"status":            booking.Status,
-			"payment_method":    booking.PaymentMethod,
-			"booking_code":      booking.BookingCode,
-			"created_at":        booking.CreatedAt,
-			"updated_at":        booking.UpdatedAt,
+			"id":                   booking.ID,
+			"user_id":              booking.UserID,
+			"court_id":             booking.CourtID,
+			"court_name":           court.Name,
+			"sport_center_id":      court.SportCenterID,
+			"sport_center_name":    center.Name,
+			"date":                 booking.Date,
+			"hour":                 booking.Hour,
+			"price":                booking.Price,
+			"paid_amount":          booking.PaidAmount,
+			"pending_amount":       booking.PendingAmount,
+			"is_partial_payment":   booking.IsPartialPayment,
+			"partial_payment_paid": booking.PartialPaymentPaid,
+			"status":               booking.Status,
+			"payment_method":       booking.PaymentMethod,
+			"booking_code":         booking.BookingCode,
+			"created_at":           booking.CreatedAt,
+			"updated_at":           booking.UpdatedAt,
 		},
 		"hours_until_match": hoursUntilMatch,
 		"can_cancel":        canCancel,
@@ -487,20 +491,24 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 
 	response := gin.H{
 		"booking_detail": gin.H{
-			"id":                booking.ID,
-			"user_id":           booking.UserID,
-			"court_id":          booking.CourtID,
-			"court_name":        court.Name,
-			"sport_center_id":   court.SportCenterID,
-			"sport_center_name": center.Name,
-			"date":              booking.Date,
-			"hour":              booking.Hour,
-			"price":             booking.Price,
-			"status":            booking.Status,
-			"payment_method":    booking.PaymentMethod,
-			"booking_code":      booking.BookingCode,
-			"created_at":        booking.CreatedAt,
-			"updated_at":        booking.UpdatedAt,
+			"id":                   booking.ID,
+			"user_id":              booking.UserID,
+			"court_id":             booking.CourtID,
+			"court_name":           court.Name,
+			"sport_center_id":      court.SportCenterID,
+			"sport_center_name":    center.Name,
+			"date":                 booking.Date,
+			"hour":                 booking.Hour,
+			"price":                booking.Price,
+			"paid_amount":          booking.PaidAmount,
+			"pending_amount":       booking.PendingAmount,
+			"is_partial_payment":   booking.IsPartialPayment,
+			"partial_payment_paid": booking.PartialPaymentPaid,
+			"status":               booking.Status,
+			"payment_method":       booking.PaymentMethod,
+			"booking_code":         booking.BookingCode,
+			"created_at":           booking.CreatedAt,
+			"updated_at":           booking.UpdatedAt,
 		},
 		"hours_until_match": hoursUntilMatch,
 		"can_cancel":        canCancel,
@@ -597,6 +605,34 @@ func (h *BookingHandler) DeleteBooking(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+}
+
+func (h *BookingHandler) MarkAsPaidInPerson(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "booking id is required"})
+		return
+	}
+
+	bookingID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid booking id format"})
+		return
+	}
+
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in token"})
+		return
+	}
+
+	err = h.useCase.MarkAsPaidInPerson(c.Request.Context(), bookingID, userID.(string))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "paid"})
 }
 
 func (h *BookingHandler) GetAdminDashboard(c *gin.Context) {

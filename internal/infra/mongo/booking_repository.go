@@ -63,22 +63,30 @@ func (r *BookingRepository) FindByUserIDAndStatusPaged(ctx context.Context, user
 		bson.D{{Key: "$addFields", Value: bson.M{
 			"sport_center_name":  "$sport_center_info.name",
 			"court_name":         "$court_info.name",
-			"payment_method":     bson.M{"$ifNull": []interface{}{"$payment_method", "fintoc"}},
-			"cancellation_hours": bson.M{"$ifNull": []interface{}{"$sport_center_info.cancellation_hours", 3}},
-			"retention_percent":  bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
+			"payment_method":       bson.M{"$ifNull": []interface{}{"$payment_method", "fintoc"}},
+			"cancellation_hours":   bson.M{"$ifNull": []interface{}{"$sport_center_info.cancellation_hours", 3}},
+			"retention_percent":    bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
+			"paid_amount":          bson.M{"$ifNull": []interface{}{"$paid_amount", "$final_price"}},
+			"pending_amount":       bson.M{"$ifNull": []interface{}{"$pending_amount", 0}},
+			"is_partial_payment":   bson.M{"$ifNull": []interface{}{"$is_partial_payment", false}},
+			"partial_payment_paid": bson.M{"$ifNull": []interface{}{"$partial_payment_paid", false}},
 		}}},
 		bson.D{{Key: "$project", Value: bson.M{
-			"id":                 "$_id",
-			"sport_center_name":  1,
-			"date":               1,
-			"hour":               1,
-			"court_name":         1,
-			"status":             1,
-			"price":              1,
-			"final_price":        1,
-			"payment_method":     1,
-			"cancellation_hours": 1,
-			"retention_percent":  1,
+			"id":                   "$_id",
+			"sport_center_name":    1,
+			"date":                 1,
+			"hour":                 1,
+			"court_name":           1,
+			"status":               1,
+			"price":                1,
+			"final_price":          1,
+			"paid_amount":          1,
+			"pending_amount":       1,
+			"is_partial_payment":   1,
+			"partial_payment_paid": 1,
+			"payment_method":       1,
+			"cancellation_hours":   1,
+			"retention_percent":    1,
 		}}},
 	}
 
@@ -107,6 +115,16 @@ func (r *BookingRepository) Create(ctx context.Context, booking *domain.Booking)
 func (r *BookingRepository) Update(ctx context.Context, booking *domain.Booking) error {
 	filter := bson.M{"_id": booking.ID}
 	update := bson.M{"$set": booking}
+	_, err := r.collection.UpdateOne(ctx, filter, update)
+	return err
+}
+
+func (r *BookingRepository) MarkPartialPaymentAsPaid(ctx context.Context, id primitive.ObjectID) error {
+	filter := bson.M{"_id": id}
+	update := bson.M{"$set": bson.M{
+		"partial_payment_paid": true,
+		"updated_at":           time.Now(),
+	}}
 	_, err := r.collection.UpdateOne(ctx, filter, update)
 	return err
 }
@@ -335,23 +353,31 @@ func (r *BookingRepository) FindByUserIDPaged(ctx context.Context, userID string
 		{{Key: "$addFields", Value: bson.M{
 			"sport_center_name":  "$sport_center_info.name",
 			"court_name":         "$court_info.name",
-			"payment_method":     bson.M{"$ifNull": []interface{}{"$payment_method", "fintoc"}},
-			"cancellation_hours": bson.M{"$ifNull": []interface{}{"$sport_center_info.cancellation_hours", 3}},
-			"retention_percent":  bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
+			"payment_method":       bson.M{"$ifNull": []interface{}{"$payment_method", "fintoc"}},
+			"cancellation_hours":   bson.M{"$ifNull": []interface{}{"$sport_center_info.cancellation_hours", 3}},
+			"retention_percent":    bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
+			"paid_amount":          bson.M{"$ifNull": []interface{}{"$paid_amount", "$final_price"}},
+			"pending_amount":       bson.M{"$ifNull": []interface{}{"$pending_amount", 0}},
+			"is_partial_payment":   bson.M{"$ifNull": []interface{}{"$is_partial_payment", false}},
+			"partial_payment_paid": bson.M{"$ifNull": []interface{}{"$partial_payment_paid", false}},
 		}}},
 		{{Key: "$project", Value: bson.M{
-			"id":                 "$_id",
-			"_id":                1,
-			"sport_center_name":  1,
-			"date":               1,
-			"hour":               1,
-			"court_name":         1,
-			"status":             1,
-			"price":              1,
-			"final_price":        1,
-			"payment_method":     1,
-			"cancellation_hours": 1,
-			"retention_percent":  1,
+			"id":                   "$_id",
+			"_id":                  1,
+			"sport_center_name":    1,
+			"date":                 1,
+			"hour":                 1,
+			"court_name":           1,
+			"status":               1,
+			"price":                1,
+			"final_price":          1,
+			"paid_amount":          1,
+			"pending_amount":       1,
+			"is_partial_payment":   1,
+			"partial_payment_paid": 1,
+			"payment_method":       1,
+			"cancellation_hours":   1,
+			"retention_percent":    1,
 		}}},
 	}
 
@@ -592,20 +618,36 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 	pipelineTodayRevenue := mongo.Pipeline{
 		{{Key: "$match", Value: todayFilter}},
 		{{Key: "$group", Value: bson.M{
-			"_id":           nil,
-			"today_revenue": bson.M{"$sum": "$price"},
+			"_id": nil,
+			"today_revenue": bson.M{"$sum": bson.M{
+				"$add": []interface{}{
+					bson.M{"$ifNull": []interface{}{"$paid_amount", "$price"}},
+					bson.M{"$cond": []interface{}{
+						bson.M{"$eq": []interface{}{"$partial_payment_paid", true}},
+						bson.M{"$ifNull": []interface{}{"$pending_amount", 0}},
+						0,
+					}},
+				},
+			}},
 			"online_revenue": bson.M{"$sum": bson.M{
 				"$cond": []interface{}{
 					bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "internal"}}},
 					0,
-					"$price",
+					bson.M{"$ifNull": []interface{}{"$paid_amount", "$price"}},
 				},
 			}},
 			"venue_revenue": bson.M{"$sum": bson.M{
-				"$cond": []interface{}{
-					bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "internal"}}},
-					"$price",
-					0,
+				"$add": []interface{}{
+					bson.M{"$cond": []interface{}{
+						bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "internal"}}},
+						bson.M{"$ifNull": []interface{}{"$paid_amount", "$price"}},
+						0,
+					}},
+					bson.M{"$cond": []interface{}{
+						bson.M{"$eq": []interface{}{"$partial_payment_paid", true}},
+						bson.M{"$ifNull": []interface{}{"$pending_amount", 0}},
+						0,
+					}},
 				},
 			}},
 		}}},
@@ -630,20 +672,36 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 	pipelineTotalRevenue := mongo.Pipeline{
 		{{Key: "$match", Value: totalRevenueMatch}},
 		{{Key: "$group", Value: bson.M{
-			"_id":           nil,
-			"total_revenue": bson.M{"$sum": "$price"},
+			"_id": nil,
+			"total_revenue": bson.M{"$sum": bson.M{
+				"$add": []interface{}{
+					bson.M{"$ifNull": []interface{}{"$paid_amount", "$price"}},
+					bson.M{"$cond": []interface{}{
+						bson.M{"$eq": []interface{}{"$partial_payment_paid", true}},
+						bson.M{"$ifNull": []interface{}{"$pending_amount", 0}},
+						0,
+					}},
+				},
+			}},
 			"online_revenue": bson.M{"$sum": bson.M{
 				"$cond": []interface{}{
 					bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "internal"}}},
 					0,
-					"$price",
+					bson.M{"$ifNull": []interface{}{"$paid_amount", "$price"}},
 				},
 			}},
 			"venue_revenue": bson.M{"$sum": bson.M{
-				"$cond": []interface{}{
-					bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "internal"}}},
-					"$price",
-					0,
+				"$add": []interface{}{
+					bson.M{"$cond": []interface{}{
+						bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "internal"}}},
+						bson.M{"$ifNull": []interface{}{"$paid_amount", "$price"}},
+						0,
+					}},
+					bson.M{"$cond": []interface{}{
+						bson.M{"$eq": []interface{}{"$partial_payment_paid", true}},
+						bson.M{"$ifNull": []interface{}{"$pending_amount", 0}},
+						0,
+					}},
 				},
 			}},
 		}}},
@@ -719,29 +777,37 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 			"customer_phone":     bson.M{"$ifNull": []interface{}{"$customer_phone", "$guest_details.phone", ""}},
 			"customer_email":     bson.M{"$ifNull": []interface{}{"$customer_email", "$guest_details.email", ""}},
 			"is_guest":           bson.M{"$cond": []interface{}{bson.M{"$ne": []interface{}{"$guest_details", nil}}, true, false}},
-			"payment_method":     bson.M{"$ifNull": []interface{}{"$payment_method", "fintoc"}},
-			"cancelled_by":       bson.M{"$ifNull": []interface{}{"$cancelled_by", ""}},
-			"cancellation_hours": bson.M{"$ifNull": []interface{}{"$sport_center_info.cancellation_hours", 3}},
-			"retention_percent":  bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
+			"payment_method":       bson.M{"$ifNull": []interface{}{"$payment_method", "fintoc"}},
+			"cancelled_by":         bson.M{"$ifNull": []interface{}{"$cancelled_by", ""}},
+			"cancellation_hours":   bson.M{"$ifNull": []interface{}{"$sport_center_info.cancellation_hours", 3}},
+			"retention_percent":    bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
+			"paid_amount":          bson.M{"$ifNull": []interface{}{"$paid_amount", "$price"}},
+			"pending_amount":       bson.M{"$ifNull": []interface{}{"$pending_amount", 0}},
+			"is_partial_payment":   bson.M{"$ifNull": []interface{}{"$is_partial_payment", false}},
+			"partial_payment_paid": bson.M{"$ifNull": []interface{}{"$partial_payment_paid", false}},
 		}}},
 		{{Key: "$project", Value: bson.M{
-			"id":                 "$_id",
-			"sport_center_name":  1,
-			"customer_name":      1,
-			"customer_phone":     1,
-			"customer_email":     1,
-			"date":               1,
-			"hour":               1,
-			"booking_code":       1,
-			"court_name":         1,
-			"status":             1,
-			"price":              1,
-			"user_name":          1,
-			"is_guest":           1,
-			"payment_method":     1,
-			"cancelled_by":       1,
-			"cancellation_hours": 1,
-			"retention_percent":  1,
+			"id":                   "$_id",
+			"sport_center_name":    1,
+			"customer_name":        1,
+			"customer_phone":       1,
+			"customer_email":       1,
+			"date":                 1,
+			"hour":                 1,
+			"booking_code":         1,
+			"court_name":           1,
+			"status":               1,
+			"price":                1,
+			"paid_amount":          1,
+			"pending_amount":       1,
+			"is_partial_payment":   1,
+			"partial_payment_paid": 1,
+			"user_name":            1,
+			"is_guest":             1,
+			"payment_method":       1,
+			"cancelled_by":         1,
+			"cancellation_hours":   1,
+			"retention_percent":    1,
 		}}},
 	}
 

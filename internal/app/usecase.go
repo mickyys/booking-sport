@@ -40,6 +40,7 @@ type BookingRepository interface {
 	UpdateCancellation(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, cancelledBy string, reason string) error
 	UpdateFintocPaymentIntentID(ctx context.Context, id primitive.ObjectID, paymentIntentID string) error
 	UpdateMPPaymentID(ctx context.Context, id primitive.ObjectID, mpPaymentID string) error
+	MarkPartialPaymentAsPaid(ctx context.Context, id primitive.ObjectID) error
 	AddRefund(ctx context.Context, paymentIntentID string, refund domain.Refund) error
 	AddRefundByBookingID(ctx context.Context, bookingID primitive.ObjectID, refund domain.Refund) error
 	FindByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error)

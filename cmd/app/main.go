@@ -152,6 +152,7 @@ func main() {
 		api.GET("/bookings/my-cancelled", bookingHandler.GetUserCancelledBookings)
 		api.GET("/bookings/confirmed/count", bookingHandler.GetConfirmedCount)
 		api.POST("/bookings/:id/cancel", bookingHandler.CancelBooking)
+		api.POST("/bookings/:id/pay-in-person", bookingHandler.MarkAsPaidInPerson)
 		api.GET("/admin/dashboard", bookingHandler.GetAdminDashboard)
 		api.DELETE("/admin/bookings/series/:series_id", bookingHandler.DeleteBookingSeries)
 		api.GET("/admin/bookings/series", bookingHandler.GetRecurringSeries)

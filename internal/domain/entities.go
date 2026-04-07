@@ -53,10 +53,12 @@ type SportCenter struct {
 	// Courts: cantidad de canchas asociadas al centro
 	CourtsCount       int                `bson:"courts_count" json:"courts"`
 	Fintoc            *FintocConfig      `bson:"fintoc,omitempty" json:"-"`
-	MercadoPago       *MercadoPagoConfig `bson:"mercadopago,omitempty" json:"-"`
-	CancellationHours int                `bson:"cancellation_hours" json:"cancellation_hours"`
-	RetentionPercent  int                `bson:"retention_percent" json:"retention_percent"`
-	Users             []string           `bson:"users" json:"users"` // Usuarios asociados al centro
+	MercadoPago           *MercadoPagoConfig `bson:"mercadopago,omitempty" json:"-"`
+	CancellationHours     int                `bson:"cancellation_hours" json:"cancellation_hours"`
+	RetentionPercent      int                `bson:"retention_percent" json:"retention_percent"`
+	PartialPaymentEnabled bool               `bson:"partial_payment_enabled" json:"partial_payment_enabled"`
+	PartialPaymentPercent int                `bson:"partial_payment_percent" json:"partial_payment_percent"`
+	Users                 []string           `bson:"users" json:"users"` // Usuarios asociados al centro
 	CreatedAt         time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt         time.Time          `bson:"updated_at" json:"updated_at"`
 }
@@ -74,10 +76,11 @@ type Court struct {
 type CourtSchedule struct {
 	Hour            int     `bson:"hour" json:"hour"`       // 0 - 23
 	Minutes         int     `bson:"minutes" json:"minutes"` // 0 - 59
-	Price           float64 `bson:"price" json:"price"`     // Valor por hora
-	Status          string  `bson:"status" json:"status"`   // "available", "booked", "closed"
-	PaymentRequired bool    `bson:"payment_required" json:"payment_required"`
-	PaymentOptional bool    `bson:"payment_optional" json:"payment_optional"`
+	Price                 float64 `bson:"price" json:"price"`     // Valor por hora
+	Status                string  `bson:"status" json:"status"`   // "available", "booked", "closed"
+	PaymentRequired       bool    `bson:"payment_required" json:"payment_required"`
+	PaymentOptional       bool    `bson:"payment_optional" json:"payment_optional"`
+	PartialPaymentEnabled bool    `bson:"partial_payment_enabled" json:"partial_payment_enabled"`
 }
 
 type User struct {
@@ -107,11 +110,15 @@ type BookingSummary struct {
 	Hour              int                `bson:"hour" json:"hour"`
 	CourtName         string             `bson:"court_name" json:"court_name"`
 	Status            BookingStatus      `bson:"status" json:"status"`
-	Price             float64            `bson:"price" json:"price"`
-	FinalPrice        float64            `bson:"final_price" json:"final_price"`
-	PaymentMethod     string             `bson:"payment_method" json:"payment_method"`
-	CancellationHours int                `bson:"cancellation_hours" json:"cancellation_hours"`
-	RetentionPercent  int                `bson:"retention_percent" json:"retention_percent"`
+	Price              float64            `bson:"price" json:"price"`
+	FinalPrice         float64            `bson:"final_price" json:"final_price"`
+	PaidAmount         float64            `bson:"paid_amount" json:"paid_amount"`
+	PendingAmount      float64            `bson:"pending_amount" json:"pending_amount"`
+	IsPartialPayment   bool               `bson:"is_partial_payment" json:"is_partial_payment"`
+	PartialPaymentPaid bool               `bson:"partial_payment_paid" json:"partial_payment_paid"`
+	PaymentMethod      string             `bson:"payment_method" json:"payment_method"`
+	CancellationHours  int                `bson:"cancellation_hours" json:"cancellation_hours"`
+	RetentionPercent   int                `bson:"retention_percent" json:"retention_percent"`
 }
 
 type RecurringSeries struct {
@@ -161,6 +168,10 @@ type Booking struct {
 	Hour                  int                `bson:"hour" json:"hour"`
 	FinalPrice            float64            `bson:"final_price" json:"final_price"`
 	Price                 float64            `bson:"price" json:"price"`
+	PaidAmount            float64            `bson:"paid_amount" json:"paid_amount"`
+	PendingAmount         float64            `bson:"pending_amount" json:"pending_amount"`
+	IsPartialPayment      bool               `bson:"is_partial_payment" json:"is_partial_payment"`
+	PartialPaymentPaid    bool               `bson:"partial_payment_paid" json:"partial_payment_paid"`
 	Status                BookingStatus      `bson:"status" json:"status"`
 	BookingCode           string             `bson:"booking_code,omitempty" json:"booking_code,omitempty"`
 	PaymentMethod         string             `bson:"payment_method,omitempty" json:"payment_method,omitempty"`

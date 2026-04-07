@@ -103,8 +103,10 @@ func (h *SportCenterHandler) GetBySlug(c *gin.Context) {
 		return
 	}
 	cancellationPolicy := gin.H{
-		"hours":             center.CancellationHours,
-		"retention_percent": center.RetentionPercent,
+		"hours":                   center.CancellationHours,
+		"retention_percent":       center.RetentionPercent,
+		"partial_payment_enabled": center.PartialPaymentEnabled,
+		"partial_payment_percent": center.PartialPaymentPercent,
 	}
 
 	c.JSON(http.StatusOK, gin.H{"center": center, "cancellation_policy": cancellationPolicy})
@@ -127,8 +129,10 @@ func (h *SportCenterHandler) Create(c *gin.Context) {
 		return
 	}
 	cancellationPolicy := gin.H{
-		"hours":             center.CancellationHours,
-		"retention_percent": center.RetentionPercent,
+		"hours":                   center.CancellationHours,
+		"retention_percent":       center.RetentionPercent,
+		"partial_payment_enabled": center.PartialPaymentEnabled,
+		"partial_payment_percent": center.PartialPaymentPercent,
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"center": center, "cancellation_policy": cancellationPolicy})
@@ -159,8 +163,10 @@ func (h *SportCenterHandler) Update(c *gin.Context) {
 	}
 
 	cancellationPolicy := gin.H{
-		"hours":             center.CancellationHours,
-		"retention_percent": center.RetentionPercent,
+		"hours":                   center.CancellationHours,
+		"retention_percent":       center.RetentionPercent,
+		"partial_payment_enabled": center.PartialPaymentEnabled,
+		"partial_payment_percent": center.PartialPaymentPercent,
 	}
 
 	c.JSON(http.StatusOK, gin.H{"center": center, "cancellation_policy": cancellationPolicy})
@@ -175,16 +181,33 @@ func (h *SportCenterHandler) UpdateSettings(c *gin.Context) {
 	}
 
 	var body struct {
-		Slug              string `json:"slug"`
-		CancellationHours int    `json:"cancellation_hours"`
-		RetentionPercent  int    `json:"retention_percent"`
+		Slug                  string `json:"slug"`
+		CancellationHours     int    `json:"cancellation_hours"`
+		RetentionPercent      int    `json:"retention_percent"`
+		PartialPaymentEnabled bool   `json:"partial_payment_enabled"`
+		PartialPaymentPercent int    `json:"partial_payment_percent"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := h.useCase.UpdateSettings(c.Request.Context(), id, body.Slug, body.CancellationHours, body.RetentionPercent); err != nil {
+	// Como el useCase.UpdateSettings no tiene los nuevos campos, vamos a usar UpdateSportCenter indirectamente o actualizar el repo.
+	// Pero mejor actualizamos el repo y el usecase.
+
+	existing, err := h.useCase.FindByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Sport center not found"})
+		return
+	}
+
+	existing.Slug = body.Slug
+	existing.CancellationHours = body.CancellationHours
+	existing.RetentionPercent = body.RetentionPercent
+	existing.PartialPaymentEnabled = body.PartialPaymentEnabled
+	existing.PartialPaymentPercent = body.PartialPaymentPercent
+
+	if err := h.useCase.UpdateSportCenter(c.Request.Context(), id, existing); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

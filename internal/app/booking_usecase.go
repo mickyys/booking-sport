@@ -282,8 +282,14 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		return "", fmt.Errorf("court not found: %w", err)
 	}
 
+	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
+	if err != nil {
+		return "", fmt.Errorf("sport center not found: %w", err)
+	}
+
 	price := 0.0
 	found := false
+	partialPaymentEnabledForSlot := false
 	for _, s := range court.Schedule {
 		if s.Hour == booking.Hour {
 			loc, _ := time.LoadLocation("America/Santiago")
@@ -301,6 +307,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 			}
 
 			price = s.Price
+			partialPaymentEnabledForSlot = s.PartialPaymentEnabled
 			found = true
 			break
 		}
@@ -317,9 +324,24 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	booking.PaymentMethod = "mercadopago"
 	booking.SportCenterID = court.SportCenterID
 
-	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
-	if err != nil {
-		return "", fmt.Errorf("sport center not found: %w", err)
+	// Lógica de pago parcial
+	if booking.IsPartialPayment {
+		if !center.PartialPaymentEnabled || !partialPaymentEnabledForSlot {
+			return "", fmt.Errorf("partial payment is not enabled for this center or slot")
+		}
+
+		percent := center.PartialPaymentPercent
+		if percent <= 0 {
+			percent = 50 // Default
+		}
+
+		booking.PaidAmount = (price * float64(percent)) / 100
+		booking.PendingAmount = price - booking.PaidAmount
+		booking.FinalPrice = booking.PaidAmount // Para MercadoPago pagamos solo la parte proporcional
+	} else {
+		booking.PaidAmount = price
+		booking.PendingAmount = 0
+		booking.FinalPrice = price
 	}
 
 	booking.SportCenterName = center.Name
@@ -355,7 +377,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	title := fmt.Sprintf("Reserva %s - %s", court.Name, center.Name)
 	externalRef := booking.BookingCode
 
-	result, err := client.CreatePreference(ctx, title, price, email, externalRef, successURL, failureURL, pendingURL, notificationURL)
+	result, err := client.CreatePreference(ctx, title, booking.PaidAmount, email, externalRef, successURL, failureURL, pendingURL, notificationURL)
 	if err != nil {
 		return "", fmt.Errorf("error creating mercadopago preference: %w", err)
 	}
@@ -696,30 +718,58 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 
 		mpClient := mercadopago.NewClient(center.MercadoPago.AccessToken)
 
+		// Si es pago parcial, la política aplica sobre el 100% (precio total)
+		// Si el reembolso calculado es menor o igual a 0, no devolvemos nada.
+		// Dado que el usuario pagó solo el PaidAmount (ej. 50%), y la política dice
+		// que si cancela tarde se retiene un porcentaje del TOTAL, puede que el reembolso
+		// sea 0 o incluso negativo (no le devolvemos nada).
+		// Ejemplo: Total 10.000, Pago 5.000. Retención 10% del total = 1.000. Reembolso = 9.000.
+		// Pero solo pagó 5.000, así que le devolvemos max 5.000.
+		// Pero el usuario dijo: "no la politica aplica sobre el 100% osea los 10.000 por lo que no se reembolsa los 5000"
+		// Interpreto que si el reembolso calculado (Total - Retención) requiere devolver algo de lo pagado online, se hace,
+		// pero si la retención es mayor o igual a lo pagado online, no se devuelve nada.
+		// Sin embargo, su respuesta sugiere que NO se reembolsa si la política aplica sobre el 100%.
+
 		var refundResult *mercadopago.RefundResult
-		if refundPercentage == 100 {
-			refundResult, err = mpClient.CreateRefund(ctx, mpPaymentID)
-		} else {
-			refundAmount := (booking.FinalPrice * float64(refundPercentage)) / 100
-			refundResult, err = mpClient.CreatePartialRefund(ctx, mpPaymentID, refundAmount)
-		}
-		if err != nil {
-			log.Printf("err: %s", err)
-			return fmt.Errorf("error processing mercadopago refund: %w", err)
+		totalToRefund := (booking.Price * float64(refundPercentage)) / 100
+		// El reembolso real no puede superar lo que el usuario pagó online
+		actualRefundAmount := totalToRefund
+		if actualRefundAmount > booking.PaidAmount {
+			actualRefundAmount = booking.PaidAmount
 		}
 
-		log.Printf("[CANCEL_BOOKING] Refund MP procesado: ID=%d, Status=%s, Amount=%.2f\n",
-			refundResult.ID, refundResult.Status, refundResult.Amount)
-
-		// Registrar el refund en la reserva
-		mpRefund := domain.Refund{
-			ID:        strconv.Itoa(refundResult.ID),
-			Amount:    int(refundResult.Amount),
-			Status:    refundResult.Status,
-			CreatedAt: time.Now(),
+		// Si el usuario dijo específicamente "no se reembolsa los 5000" cuando aplica sobre los 10000,
+		// tal vez quiere decir que si no se cancela con tiempo, se pierde lo pagado.
+		// Si refundPercentage < 100, y es pago parcial, podríamos decidir no devolver nada.
+		if booking.IsPartialPayment && refundPercentage < 100 {
+			actualRefundAmount = 0
 		}
-		if addErr := uc.repo.AddRefundByBookingID(ctx, booking.ID, mpRefund); addErr != nil {
-			log.Printf("[CANCEL_BOOKING] Error guardando refund en DB: %v\n", addErr)
+
+		if actualRefundAmount > 0 {
+			if actualRefundAmount >= booking.PaidAmount {
+				refundResult, err = mpClient.CreateRefund(ctx, mpPaymentID)
+			} else {
+				refundResult, err = mpClient.CreatePartialRefund(ctx, mpPaymentID, actualRefundAmount)
+			}
+
+			if err != nil {
+				log.Printf("err: %s", err)
+				return fmt.Errorf("error processing mercadopago refund: %w", err)
+			}
+
+			log.Printf("[CANCEL_BOOKING] Refund MP procesado: ID=%d, Status=%s, Amount=%.2f\n",
+				refundResult.ID, refundResult.Status, refundResult.Amount)
+
+			// Registrar el refund en la reserva
+			mpRefund := domain.Refund{
+				ID:        strconv.Itoa(refundResult.ID),
+				Amount:    int(refundResult.Amount),
+				Status:    refundResult.Status,
+				CreatedAt: time.Now(),
+			}
+			if addErr := uc.repo.AddRefundByBookingID(ctx, booking.ID, mpRefund); addErr != nil {
+				log.Printf("[CANCEL_BOOKING] Error guardando refund en DB: %v\n", addErr)
+			}
 		}
 	}
 
@@ -878,6 +928,40 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 	}
 
 	return nil
+}
+
+func (uc *BookingUseCase) MarkAsPaidInPerson(ctx context.Context, bookingID primitive.ObjectID, userID string) error {
+	booking, err := uc.repo.FindByID(ctx, bookingID)
+	if err != nil {
+		return err
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
+	if err != nil {
+		return err
+	}
+
+	// Verify permissions
+	isAdmin := false
+	for _, u := range center.Users {
+		if u == userID {
+			isAdmin = true
+			break
+		}
+	}
+	if !isAdmin {
+		return fmt.Errorf("unauthorized")
+	}
+
+	if !booking.IsPartialPayment {
+		return fmt.Errorf("booking is not a partial payment")
+	}
+
+	if booking.PartialPaymentPaid {
+		return fmt.Errorf("booking is already fully paid")
+	}
+
+	return uc.repo.MarkPartialPaymentAsPaid(ctx, bookingID)
 }
 
 func (uc *BookingUseCase) GetAdminDashboard(ctx context.Context, userID string, page, limit int, dateStr, name, code, status string) (*domain.AdminDashboardData, error) {
