@@ -844,7 +844,7 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 	booking.FinalPrice = booking.Price
 	booking.Status = domain.BookingStatusConfirmed
 	booking.BookingCode = generateBookingCode()
-	booking.PaymentMethod = "venue" // O "presencial"
+	booking.PaymentMethod = "presential"
 	booking.SportCenterID = court.SportCenterID
 	booking.SportCenterName = center.Name
 	booking.CourtName = court.Name
