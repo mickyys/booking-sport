@@ -532,6 +532,28 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	todayEnd := todayStart.Add(24 * time.Hour)
 
+	// Parse date range for global filters
+	var dateFilter bson.M
+	if dateStr != "" {
+		if strings.Contains(dateStr, "|") {
+			parts := strings.SplitN(dateStr, "|", 2)
+			startT, err1 := time.Parse("2006-01-02", parts[0])
+			endT, err2 := time.Parse("2006-01-02", parts[1])
+			if err1 == nil && err2 == nil {
+				start := time.Date(startT.Year(), startT.Month(), startT.Day(), 0, 0, 0, 0, time.UTC)
+				end := time.Date(endT.Year(), endT.Month(), endT.Day(), 0, 0, 0, 0, time.UTC).Add(24 * time.Hour)
+				dateFilter = bson.M{"$gte": start, "$lt": end}
+			}
+		} else {
+			t, err := time.Parse("2006-01-02", dateStr)
+			if err == nil {
+				start := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+				end := start.Add(24 * time.Hour)
+				dateFilter = bson.M{"$gte": start, "$lt": end}
+			}
+		}
+	}
+
 	// Get stats
 
 	// 1. Today's Bookings Count
@@ -598,11 +620,16 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 	todayRevenue, todayOnlineRevenue, todayVenueRevenue := getRevenueValues(todayRevenueResult, "today_revenue", "online_revenue", "venue_revenue")
 
 	// 3. Total Revenue (Confirmed)
+	totalRevenueMatch := bson.M{
+		"sport_center_id": bson.M{"$in": sportCenterIDs},
+		"status":          domain.BookingStatusConfirmed,
+	}
+	if dateFilter != nil {
+		totalRevenueMatch["date"] = dateFilter
+	}
+
 	pipelineTotalRevenue := mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{
-			"sport_center_id": bson.M{"$in": sportCenterIDs},
-			"status":          domain.BookingStatusConfirmed,
-		}}},
+		{{Key: "$match", Value: totalRevenueMatch}},
 		{{Key: "$group", Value: bson.M{
 			"_id":           nil,
 			"total_revenue": bson.M{"$sum": "$price"},
@@ -635,30 +662,15 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 		"sport_center_id": bson.M{"$in": sportCenterIDs},
 		"status":          domain.BookingStatusCancelled,
 	}
+	if dateFilter != nil {
+		cancelledFilter["date"] = dateFilter
+	}
 	cancelledCount, _ := r.collection.CountDocuments(ctx, cancelledFilter)
 
 	// 5. Recent Bookings with filters and pagination
 	recentMatch := bson.M{"sport_center_id": bson.M{"$in": sportCenterIDs}}
-	if dateStr != "" {
-		// Support either single date `YYYY-MM-DD` or range `YYYY-MM-DD|YYYY-MM-DD`
-		if strings.Contains(dateStr, "|") {
-			parts := strings.SplitN(dateStr, "|", 2)
-			startT, err1 := time.Parse("2006-01-02", parts[0])
-			endT, err2 := time.Parse("2006-01-02", parts[1])
-			if err1 == nil && err2 == nil {
-				start := time.Date(startT.Year(), startT.Month(), startT.Day(), 0, 0, 0, 0, time.UTC)
-				// make end exclusive by adding one day
-				end := time.Date(endT.Year(), endT.Month(), endT.Day(), 0, 0, 0, 0, time.UTC).Add(24 * time.Hour)
-				recentMatch["date"] = bson.M{"$gte": start, "$lt": end}
-			}
-		} else {
-			t, err := time.Parse("2006-01-02", dateStr)
-			if err == nil {
-				start := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
-				end := start.Add(24 * time.Hour)
-				recentMatch["date"] = bson.M{"$gte": start, "$lt": end}
-			}
-		}
+	if dateFilter != nil {
+		recentMatch["date"] = dateFilter
 	}
 	if name != "" {
 		recentMatch["$or"] = []bson.M{
