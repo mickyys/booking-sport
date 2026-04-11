@@ -110,8 +110,9 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 		return nil, err
 	}
 
+	loc, _ := time.LoadLocation("America/Santiago")
 	// Normalizar la fecha al inicio del día (00:00:00)
-	searchDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	searchDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
 
 	// Buscar TODOS los bookings confirmados para este centro y fecha específica en una sola consulta
 	allBookings, _ := uc.bookingRepo.FindBySportCenterAndDate(ctx, centerID, searchDate)
@@ -126,7 +127,6 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 		bookingsByCourt[b.CourtID][b.Hour] = &id
 	}
 
-	loc, _ := time.LoadLocation("America/Santiago")
 	nowInLoc := time.Now().In(loc)
 
 	result := []CourtScheduleResponse{}
@@ -187,8 +187,9 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 		return nil, err
 	}
 
+	loc, _ := time.LoadLocation("America/Santiago")
 	// Normalizar la fecha al inicio del día (00:00:00)
-	searchDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	searchDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
 
 	// Obtener todas las reservas confirmadas para este centro y fecha
 	allBookings, _ := uc.bookingRepo.FindBySportCenterAndDate(ctx, centerID, searchDate)
@@ -205,7 +206,6 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 		bookingsByCourt[b.CourtID][b.Hour] = &b
 	}
 
-	loc, _ := time.LoadLocation("America/Santiago")
 	nowInLoc := time.Now().In(loc)
 
 	result := []CourtScheduleResponse{}
@@ -560,7 +560,8 @@ func (uc *CourtUseCase) GetCourtSchedule(ctx context.Context, courtID primitive.
 		return nil, err
 	}
 
-	searchDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	loc, _ := time.LoadLocation("America/Santiago")
+	searchDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
 	bookings, _ := uc.bookingRepo.FindByCourtAndDate(ctx, courtID, searchDate)
 	bookedHours := make(map[int]bool)
 	for _, b := range bookings {
@@ -569,7 +570,6 @@ func (uc *CourtUseCase) GetCourtSchedule(ctx context.Context, courtID primitive.
 		}
 	}
 
-	loc, _ := time.LoadLocation("America/Santiago")
 	nowInLoc := time.Now().In(loc)
 	result := []domain.CourtSchedule{}
 	for _, s := range court.Schedule {

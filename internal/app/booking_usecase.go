@@ -634,9 +634,10 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 		}
 	}
 
-	// Calcular horas restantes (negativo si ya pasó)
-	bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, booking.Date.Location())
-	hoursUntilMatch := time.Until(bookingDateTime).Hours()
+	// Calcular horas restantes (negativo si ya pasó) en horario de Santiago
+	loc, _ := time.LoadLocation("America/Santiago")
+	bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, loc)
+	hoursUntilMatch := time.Until(bookingDateTime.In(loc)).Hours()
 
 	if hoursUntilMatch <= 0 {
 		// Los admins pueden cancelar hasta 48 horas pasadas

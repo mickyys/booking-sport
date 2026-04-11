@@ -214,8 +214,9 @@ func (r *BookingRepository) UpdateMPPaymentID(ctx context.Context, id primitive.
 }
 
 func (r *BookingRepository) FindByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error) {
-	// Normalizar fecha al inicio del día
-	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	// Normalizar fecha al inicio del día en zona horaria de Chile
+	loc, _ := time.LoadLocation("America/Santiago")
+	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
 	endDate := startDate.Add(24 * time.Hour)
 
 	cursor, err := r.collection.Find(ctx, bson.M{
@@ -267,12 +268,13 @@ func (r *BookingRepository) FindByUserIDPaged(ctx context.Context, userID string
 	skip := (page - 1) * limit
 	filter := bson.M{"user_id": userID}
 
-	if isOld {
-		now := time.Now()
-		// Normalize today for date comparison
-		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-		currentHour := now.Hour()
+	loc, _ := time.LoadLocation("America/Santiago")
+	now := time.Now().In(loc)
+	// Normalize today for date comparison
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	currentHour := now.Hour()
 
+	if isOld {
 		filter["$or"] = []bson.M{
 			// Cases where the date is strictly before today
 			{"date": bson.M{"$lt": today}},
@@ -285,11 +287,6 @@ func (r *BookingRepository) FindByUserIDPaged(ctx context.Context, userID string
 			},
 		}
 	} else {
-		now := time.Now()
-		// Normalize today for date comparison
-		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-		currentHour := now.Hour()
-
 		filter["$or"] = []bson.M{
 			// Cases where the date is strictly in the future
 			{"date": bson.M{"$gt": today}},
@@ -451,8 +448,9 @@ func (r *BookingRepository) AddRefundByBookingID(ctx context.Context, bookingID 
 }
 
 func (r *BookingRepository) CountConfirmedByUserID(ctx context.Context, userID string) (int64, error) {
-	now := time.Now()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	loc, _ := time.LoadLocation("America/Santiago")
+	now := time.Now().In(loc)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 	currentHour := now.Hour()
 
 	filter := bson.M{
@@ -528,8 +526,9 @@ func (r *BookingRepository) GetRecurringSeries(ctx context.Context, centerIDs []
 }
 
 func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name, code, status string) (*domain.AdminDashboardData, error) {
-	now := time.Now()
-	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	loc, _ := time.LoadLocation("America/Santiago")
+	now := time.Now().In(loc)
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 	todayEnd := todayStart.Add(24 * time.Hour)
 
 	// Parse date range for global filters
@@ -540,14 +539,14 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 			startT, err1 := time.Parse("2006-01-02", parts[0])
 			endT, err2 := time.Parse("2006-01-02", parts[1])
 			if err1 == nil && err2 == nil {
-				start := time.Date(startT.Year(), startT.Month(), startT.Day(), 0, 0, 0, 0, time.UTC)
-				end := time.Date(endT.Year(), endT.Month(), endT.Day(), 0, 0, 0, 0, time.UTC).Add(24 * time.Hour)
+				start := time.Date(startT.Year(), startT.Month(), startT.Day(), 0, 0, 0, 0, loc)
+				end := time.Date(endT.Year(), endT.Month(), endT.Day(), 0, 0, 0, 0, loc).Add(24 * time.Hour)
 				dateFilter = bson.M{"$gte": start, "$lt": end}
 			}
 		} else {
 			t, err := time.Parse("2006-01-02", dateStr)
 			if err == nil {
-				start := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+				start := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
 				end := start.Add(24 * time.Hour)
 				dateFilter = bson.M{"$gte": start, "$lt": end}
 			}

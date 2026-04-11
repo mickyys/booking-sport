@@ -39,14 +39,15 @@ func (h *SportCenterHandler) List(c *gin.Context) {
 
 	var date *time.Time
 	if dateStr != "" {
-		parsedDate, err := time.Parse("2006-01-02", dateStr)
+		loc, _ := time.LoadLocation("America/Santiago")
+		parsedDate, err := time.ParseInLocation("2006-01-02", dateStr, loc)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date format, expected YYYY-MM-DD"})
 			return
 		}
-		// Normalize to UTC midnight
-		utcDate := time.Date(parsedDate.Year(), parsedDate.Month(), parsedDate.Day(), 0, 0, 0, 0, time.UTC)
-		date = &utcDate
+		// Normalize to Santiago midnight
+		santiagoDate := time.Date(parsedDate.Year(), parsedDate.Month(), parsedDate.Day(), 0, 0, 0, 0, loc)
+		date = &santiagoDate
 	}
 
 	var hour *int
@@ -65,14 +66,10 @@ func (h *SportCenterHandler) List(c *gin.Context) {
 
 	// If hour is provided but date is not, default to today in America/Santiago
 	if hour != nil && date == nil {
-		loc, err := time.LoadLocation("America/Santiago")
-		if err != nil {
-			// Fallback to UTC if timezone db is missing
-			loc = time.UTC
-		}
+		loc, _ := time.LoadLocation("America/Santiago")
 		now := time.Now().In(loc)
-		// We set the date to UTC midnight for consistency with MongoDB storage
-		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		// We set the date to Santiago midnight for consistency with MongoDB storage
+		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 		date = &today
 	}
 
@@ -364,10 +361,11 @@ func (h *CourtHandler) GetSchedule(c *gin.Context) {
 		return
 	}
 
+	loc, _ := time.LoadLocation("America/Santiago")
 	dateStr := c.Query("date")
-	date := time.Now()
+	date := time.Now().In(loc)
 	if dateStr != "" {
-		parsedDate, err := time.Parse("2006-01-02", dateStr)
+		parsedDate, err := time.ParseInLocation("2006-01-02", dateStr, loc)
 		if err == nil {
 			date = parsedDate
 		}
@@ -531,10 +529,11 @@ func (h *SportCenterHandler) GetSchedules(c *gin.Context) {
 		centerID = center.ID
 	}
 
+	loc, _ := time.LoadLocation("America/Santiago")
 	dateStr := c.Query("date")
-	date := time.Now()
+	date := time.Now().In(loc)
 	if dateStr != "" {
-		parsedDate, err := time.Parse("2006-01-02", dateStr)
+		parsedDate, err := time.ParseInLocation("2006-01-02", dateStr, loc)
 		if err == nil {
 			date = parsedDate
 		}
