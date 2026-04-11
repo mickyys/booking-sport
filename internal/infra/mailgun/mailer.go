@@ -41,6 +41,13 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 		return fmt.Errorf("no recipient email for booking %s", booking.BookingCode)
 	}
 
+	// Cargar zona horaria de Santiago
+	loc, err := time.LoadLocation("America/Santiago")
+	if err != nil {
+		log.Printf("[MAILGUN] error loading location America/Santiago: %v, using UTC\n", err)
+		loc = time.UTC
+	}
+
 	// Formatear hora usando únicamente `booking.Hour` (sin minutos).
 	timeStr := fmt.Sprintf("%02d:00", booking.Hour)
 	// Añadir sufijo " hrs" tal como se solicita (ej. "16:00 hrs").
@@ -64,7 +71,7 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 			"booking_code":  booking.BookingCode,
 			"center_name":   booking.SportCenterName,
 			"court_name":    booking.CourtName,
-			"date":          booking.Date.Format("02-01-2006"),
+			"date":          booking.Date.In(loc).Format("02-01-2006"),
 			"hour":          timeWithSuffix,
 			"price":         booking.FinalPrice,
 			"customer_name": booking.CustomerName,
@@ -78,7 +85,7 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 	} else {
 		// fallback simple body
 		// Usar booking.Date para formatear minutos si existen
-		body := fmt.Sprintf("Tu reserva %s en %s (cancha %s) para %s a las %s ha sido confirmada.", booking.BookingCode, booking.SportCenterName, booking.CourtName, booking.Date.Format("2006-01-02"), timeWithSuffix)
+		body := fmt.Sprintf("Tu reserva %s en %s (cancha %s) para %s a las %s ha sido confirmada.", booking.BookingCode, booking.SportCenterName, booking.CourtName, booking.Date.In(loc).Format("2006-01-02"), timeWithSuffix)
 		message.SetHtml(body)
 	}
 
@@ -103,6 +110,13 @@ func (m *MailgunMailer) SendBookingCancellation(ctx context.Context, booking *do
 		return fmt.Errorf("no recipient email for booking %s", booking.BookingCode)
 	}
 
+	// Cargar zona horaria de Santiago
+	loc, err := time.LoadLocation("America/Santiago")
+	if err != nil {
+		log.Printf("[MAILGUN] error loading location America/Santiago: %v, using UTC\n", err)
+		loc = time.UTC
+	}
+
 	timeStr := fmt.Sprintf("%02d:00", booking.Hour)
 	timeWithSuffix := fmt.Sprintf("%s hrs", timeStr)
 
@@ -120,7 +134,7 @@ func (m *MailgunMailer) SendBookingCancellation(ctx context.Context, booking *do
 			"booking_code":  booking.BookingCode,
 			"center_name":   booking.SportCenterName,
 			"court_name":    booking.CourtName,
-			"date":          booking.Date.Format("02-01-2006"),
+			"date":          booking.Date.In(loc).Format("02-01-2006"),
 			"hour":          timeWithSuffix,
 			"price":         booking.FinalPrice,
 			"customer_name": booking.CustomerName,
@@ -131,7 +145,7 @@ func (m *MailgunMailer) SendBookingCancellation(ctx context.Context, booking *do
 			log.Printf("[MAILGUN] error marshaling template variables (cancel): %v\n", err)
 		}
 	} else {
-		body := fmt.Sprintf("Tu reserva %s en %s (cancha %s) para %s a las %s ha sido cancelada.", booking.BookingCode, booking.SportCenterName, booking.CourtName, booking.Date.Format("2006-01-02"), timeWithSuffix)
+		body := fmt.Sprintf("Tu reserva %s en %s (cancha %s) para %s a las %s ha sido cancelada.", booking.BookingCode, booking.SportCenterName, booking.CourtName, booking.Date.In(loc).Format("2006-01-02"), timeWithSuffix)
 		message.SetHtml(body)
 	}
 
