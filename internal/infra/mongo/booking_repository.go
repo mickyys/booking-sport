@@ -597,9 +597,9 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 			"today_revenue": bson.M{"$sum": "$price"},
 			"online_revenue": bson.M{"$sum": bson.M{
 				"$cond": []interface{}{
-					bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "internal"}}},
-					0,
+					bson.M{"$eq": []interface{}{"$payment_method", "mercadopago"}},
 					"$price",
+					0,
 				},
 			}},
 			"venue_revenue": bson.M{"$sum": bson.M{
@@ -635,9 +635,9 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 			"total_revenue": bson.M{"$sum": "$price"},
 			"online_revenue": bson.M{"$sum": bson.M{
 				"$cond": []interface{}{
-					bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "internal"}}},
-					0,
+					bson.M{"$eq": []interface{}{"$payment_method", "mercadopago"}},
 					"$price",
+					0,
 				},
 			}},
 			"venue_revenue": bson.M{"$sum": bson.M{

@@ -548,7 +548,7 @@ func (h *BookingHandler) CreateInternalBooking(c *gin.Context) {
 		return
 	}
 
-	err := h.useCase.CreateInternalBooking(c.Request.Context(), &booking)
+	err := h.useCase.CreateInternalBooking(c.Request.Context(), &booking, "internal")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -573,7 +573,7 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 		booking.Booking.UserID = userID.(string)
 	}
 
-	err := h.useCase.CreateInternalBooking(c.Request.Context(), &booking.Booking)
+	err := h.useCase.CreateInternalBooking(c.Request.Context(), &booking.Booking, "presential")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

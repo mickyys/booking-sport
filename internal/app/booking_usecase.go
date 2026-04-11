@@ -749,7 +749,7 @@ func (uc *BookingUseCase) DeleteBooking(ctx context.Context, id primitive.Object
 	return uc.repo.Delete(ctx, id)
 }
 
-func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *domain.Booking) error {
+func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *domain.Booking, paymentMethod string) error {
 	court, err := uc.courtRepo.FindByID(ctx, booking.CourtID)
 	if err != nil {
 		return fmt.Errorf("court not found: %w", err)
@@ -780,7 +780,7 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 	booking.FinalPrice = price
 	booking.Status = domain.BookingStatusConfirmed
 	booking.BookingCode = generateBookingCode()
-	booking.PaymentMethod = "internal"
+	booking.PaymentMethod = paymentMethod
 	booking.SportCenterID = court.SportCenterID
 	booking.SportCenterName = center.Name
 	booking.CourtName = court.Name
