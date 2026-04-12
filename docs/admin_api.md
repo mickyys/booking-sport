@@ -64,7 +64,7 @@ Lista todas las canchas de los centros deportivos asociados al usuario.
 
 - **URL:** `/admin/courts`
 - **Método:** `GET`
-- **Respuesta:** Lista de objetos `Court`.
+- **Respuesta (JSON):** Lista de objetos `Court`.
 
 ### Crear una Nueva Cancha
 - **URL:** `/admin/courts`
@@ -77,6 +77,7 @@ Lista todas las canchas de los centros deportivos asociados al usuario.
     "description": "Cancha de pasto sintético"
   }
   ```
+- **Respuesta (JSON):** Objeto `Court` creado.
 
 ### Actualizar una Cancha
 - **URL:** `/admin/courts/:id`
@@ -88,10 +89,12 @@ Lista todas las canchas de los centros deportivos asociados al usuario.
     "description": "Nueva Descripción"
   }
   ```
+- **Respuesta (JSON):** `{"message": "Court updated successfully"}`
 
 ### Eliminar una Cancha
 - **URL:** `/admin/courts/:id`
 - **Método:** `DELETE`
+- **Respuesta (JSON):** `{"message": "Court deleted successfully"}`
 
 ---
 
@@ -105,7 +108,7 @@ Este endpoint es el más importante para el administrador. Retorna todos los slo
 - **Parámetros de Consulta:**
   - `date` (string, opcional): Fecha `YYYY-MM-DD` (defecto: hoy en `America/Santiago`).
   - `all` (bool, opcional): Si es `true`, incluye todos los slots (incluso bloqueados o pasados).
-- **Respuesta:** Lista de canchas con sus respectivos slots. Cada slot puede tener un objeto `booking` asociado.
+- **Respuesta (JSON):** Lista de canchas con sus respectivos slots. Cada slot puede tener un objeto `booking` asociado.
 
 ### Configurar Horario Semanal (Masivo)
 Configura todos los slots de una cancha de forma recurrente.
@@ -125,6 +128,7 @@ Configura todos los slots de una cancha de forma recurrente.
     ...
   ]
   ```
+- **Respuesta:** `204 No Content`
 
 ### Actualizar un Slot Específico (Bloqueos o Cambios de Precio)
 Se usa para bloquear una hora específica (marcar como `closed`) o cambiar el precio de un slot puntual.
@@ -141,7 +145,7 @@ Se usa para bloquear una hora específica (marcar como `closed`) o cambiar el pr
     "payment_required": false
   }
   ```
-  > **Nota:** Para "Bloquear" una cancha, enviar `status: "closed"`. Para liberar, enviar `status: "available"`.
+- **Respuesta (JSON):** `{"message": "Schedule slot updated successfully"}`
 
 ---
 
@@ -150,6 +154,17 @@ Se usa para bloquear una hora específica (marcar como `closed`) o cambiar el pr
 ### Ver Detalle de una Reserva
 - **URL:** `/bookings/:id`
 - **Método:** `GET`
+- **Respuesta (JSON):**
+  ```json
+  {
+    "booking_detail": { ... },
+    "hours_until_match": 24,
+    "can_cancel": true,
+    "refund_percentage": 100,
+    "max_refund_amount": 25000,
+    "cancellation_policy": { ... }
+  }
+  ```
 
 ### Crear Reserva Interna (Manual)
 Utilizado cuando el administrador recibe una reserva por fuera de la plataforma (teléfono, presencial).
@@ -169,24 +184,46 @@ Utilizado cuando el administrador recibe una reserva por fuera de la plataforma 
     "payment_method": "internal"
   }
   ```
+- **Respuesta (JSON):** Objeto `Booking` creado.
 
 ### Cancelar Reserva
 Cambia el estado de la reserva a `cancelled` y libera el slot.
 - **URL:** `/bookings/:id/cancel`
 - **Método:** `POST`
+- **Respuesta (JSON):** `{"status": "cancelled"}`
 
 ### Eliminar Reserva (Físico)
-Elimina permanentemente el registro de la reserva.
+Elimina permanentemente el registro de la reserva de la base de datos.
 - **URL:** `/admin/bookings/:id`
 - **Método:** `DELETE`
+- **Respuesta (JSON):** `{"status": "deleted"}`
 
 ### Listar Series Recurrentes
 - **URL:** `/admin/bookings/series`
 - **Método:** `GET`
+- **Respuesta (JSON):**
+  ```json
+  {
+    "data": [
+      {
+        "series_id": "...",
+        "customer_name": "Juan Perez",
+        "customer_phone": "569...",
+        "court_name": "Cancha 1",
+        "hour": 18,
+        "start_date": "...",
+        "end_date": "...",
+        "bookings_count": 4
+      }
+    ]
+  }
+  ```
 
 ### Eliminar una Serie Recurrente
+Elimina todas las reservas futuras asociadas a una serie.
 - **URL:** `/admin/bookings/series/:series_id`
 - **Método:** `DELETE`
+- **Respuesta (JSON):** `{"message": "Series deleted successfully"}`
 
 ---
 
@@ -195,12 +232,24 @@ Elimina permanentemente el registro de la reserva.
 ### Obtener Datos del Centro
 - **URL:** `/admin/sport-centers/:id`
 - **Método:** `GET`
+- **Respuesta (JSON):** `{"center": { ... }}`
 
 ### Actualizar Información General
 - **URL:** `/admin/sport-centers/:id`
 - **Método:** `PUT`
+- **Cuerpo (JSON):** Objeto `SportCenter` completo.
+- **Respuesta (JSON):**
+  ```json
+  {
+    "center": { ... },
+    "cancellation_policy": {
+      "hours": 3,
+      "retention_percent": 10
+    }
+  }
+  ```
 
-### Actualizar Políticas y Slug
+### Actualizar Políticas y Slug (Ajustes rápidos)
 - **URL:** `/admin/sport-centers/:id/settings`
 - **Método:** `PATCH`
 - **Cuerpo (JSON):**
@@ -211,6 +260,7 @@ Elimina permanentemente el registro de la reserva.
     "retention_percent": 10
   }
   ```
+- **Respuesta (JSON):** `{"message": "Settings updated successfully"}`
 
 ---
 
