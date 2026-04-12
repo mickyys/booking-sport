@@ -45,6 +45,7 @@ Retorna métricas de ventas y una lista paginada de reservas recientes para el a
         "hour": 18,
         "court_name": "Cancha 1",
         "status": "confirmed",
+        "payment_method": "mercadopago",
         "price": 25000
       }
     ],
@@ -96,18 +97,18 @@ Lista todas las canchas de los centros deportivos asociados al usuario.
 
 ## 3. Gestión de Horarios y Disponibilidad
 
-### Obtener Calendario con Detalles de Reservas
-Este endpoint es crucial para la vista de agenda. Muestra los slots horarios y, si están ocupados, incluye la información del cliente.
+### Obtener Calendario con Detalles de Reservas (Vista de Agenda)
+Este endpoint es el más importante para el administrador. Retorna todos los slots horarios y, si están ocupados, incluye el detalle del cliente y la reserva.
 
 - **URL:** `/sport-centers/:id/schedules/bookings`
 - **Método:** `GET`
 - **Parámetros de Consulta:**
-  - `date` (string, opcional): Fecha `YYYY-MM-DD` (defecto: hoy).
-  - `all` (bool, opcional): Si es `true`, incluye slots cerrados o pasados.
-- **Respuesta:** Lista de canchas con sus respectivos slots y detalles de reserva.
+  - `date` (string, opcional): Fecha `YYYY-MM-DD` (defecto: hoy en `America/Santiago`).
+  - `all` (bool, opcional): Si es `true`, incluye todos los slots (incluso bloqueados o pasados).
+- **Respuesta:** Lista de canchas con sus respectivos slots. Cada slot puede tener un objeto `booking` asociado.
 
 ### Configurar Horario Semanal (Masivo)
-Configura todos los slots de una cancha.
+Configura todos los slots de una cancha de forma recurrente.
 
 - **URL:** `/admin/courts/:id/schedule`
 - **Método:** `PUT`
@@ -125,8 +126,8 @@ Configura todos los slots de una cancha.
   ]
   ```
 
-### Actualizar un Slot Específico
-Modifica un solo horario sin afectar el resto.
+### Actualizar un Slot Específico (Bloqueos o Cambios de Precio)
+Se usa para bloquear una hora específica (marcar como `closed`) o cambiar el precio de un slot puntual.
 
 - **URL:** `/admin/courts/:id/schedule/slot`
 - **Método:** `PATCH`
@@ -140,6 +141,7 @@ Modifica un solo horario sin afectar el resto.
     "payment_required": false
   }
   ```
+  > **Nota:** Para "Bloquear" una cancha, enviar `status: "closed"`. Para liberar, enviar `status: "available"`.
 
 ---
 
@@ -150,7 +152,7 @@ Modifica un solo horario sin afectar el resto.
 - **Método:** `GET`
 
 ### Crear Reserva Interna (Manual)
-Permite al administrador registrar una reserva tomada por teléfono o presencialmente.
+Utilizado cuando el administrador recibe una reserva por fuera de la plataforma (teléfono, presencial).
 
 - **URL:** `/admin/bookings/internal`
 - **Método:** `POST`
@@ -169,11 +171,12 @@ Permite al administrador registrar una reserva tomada por teléfono o presencial
   ```
 
 ### Cancelar Reserva
+Cambia el estado de la reserva a `cancelled` y libera el slot.
 - **URL:** `/bookings/:id/cancel`
 - **Método:** `POST`
 
 ### Eliminar Reserva (Físico)
-Elimina el registro de la base de datos (usar con precaución).
+Elimina permanentemente el registro de la reserva.
 - **URL:** `/admin/bookings/:id`
 - **Método:** `DELETE`
 
@@ -196,32 +199,40 @@ Elimina el registro de la base de datos (usar con precaución).
 ### Actualizar Información General
 - **URL:** `/admin/sport-centers/:id`
 - **Método:** `PUT`
-- **Cuerpo (JSON):** Mismo objeto que la creación (Nombre, Dirección, Contacto, etc).
 
 ### Actualizar Políticas y Slug
-Permite cambiar el slug (URL amigable) y las políticas de cancelación.
-
 - **URL:** `/admin/sport-centers/:id/settings`
 - **Método:** `PATCH`
 - **Cuerpo (JSON):**
   ```json
   {
-    "slug": "nuevo-nombre-centro",
-    "cancellation_hours": 4,
-    "retention_percent": 15
+    "slug": "nuevo-slug",
+    "cancellation_hours": 3,
+    "retention_percent": 10
   }
   ```
 
 ---
 
-## Estados y Enums
+## Glosario de Valores y Enums
+
+### Métodos de Pago (`payment_method`)
+- `mercadopago`: Pago realizado online mediante Mercado Pago.
+- `fintoc`: Pago realizado online mediante Fintoc.
+- `internal`: Reserva creada manualmente por el administrador desde el panel.
+- `presencial` / `venue`: Pago que se realizará directamente en el centro deportivo.
+
+### Tipos de Reserva y Estados de Slot
+- **Reserva Online:** El slot pasa a `status: "booked"` y el `payment_method` es `mercadopago` o `fintoc`.
+- **Reserva Interna:** El slot pasa a `status: "booked"` y el `payment_method` es `internal`.
+- **Bloqueo de Administrador:** El slot tiene `status: "closed"`. No tiene una reserva asociada, simplemente no está disponible para el público.
 
 ### Estados de Reserva (`status`)
-- `pending`: Pendiente de pago.
-- `confirmed`: Confirmada.
-- `cancelled`: Cancelada.
+- `pending`: Reserva iniciada pero pago no confirmado.
+- `confirmed`: Reserva válida y confirmada.
+- `cancelled`: Reserva anulada (slot liberado).
 
 ### Estados de Slot (`status`)
-- `available`: Disponible para reserva.
-- `booked`: Reservado.
-- `closed`: Bloqueado por el administrador.
+- `available`: Libre para ser reservado.
+- `booked`: Ocupado por una reserva.
+- `closed`: Bloqueado manualmente (mantenimiento, clases, etc).
