@@ -144,6 +144,28 @@ func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, 
 				}},
 				{Key: "as", Value: "bookings"},
 			}}},
+				// Join with recurring rules
+				bson.D{{Key: "$lookup", Value: bson.D{
+					{Key: "from", Value: "recurring_rules"},
+					{Key: "let", Value: bson.D{{Key: "center_id", Value: "$_id"}}},
+					{Key: "pipeline", Value: mongodb.Pipeline{
+						{{Key: "$match", Value: bson.D{
+							{Key: "$expr", Value: bson.D{
+								{Key: "$and", Value: bson.A{
+									bson.D{{Key: "$eq", Value: bson.A{"$sport_center_id", "$$center_id"}}},
+									bson.D{{Key: "$eq", Value: bson.A{"$day_of_week", int(searchDate.Weekday())}}},
+									bson.D{{Key: "$eq", Value: bson.A{"$hour", *hour}}},
+									bson.D{{Key: "$lte", Value: bson.A{"$start_date", searchDate}}},
+									bson.D{{Key: "$or", Value: bson.A{
+										bson.D{{Key: "$eq", Value: bson.A{"$end_date", nil}}},
+										bson.D{{Key: "$gte", Value: bson.A{"$end_date", searchDate}}},
+									}}},
+								}},
+							}},
+						}}},
+					}},
+					{Key: "as", Value: "recurring_rules"},
+				}}},
 			// Filter available courts that don't have a booking for that hour
 			bson.D{{Key: "$addFields", Value: bson.D{
 				{Key: "final_available_courts", Value: bson.D{
@@ -152,7 +174,7 @@ func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, 
 						{Key: "as", Value: "court"},
 						{Key: "cond", Value: bson.D{
 							{Key: "$not", Value: bson.A{
-								bson.D{{Key: "$in", Value: bson.A{"$$court._id", "$bookings.court_id"}}},
+								bson.D{{Key: "$or", Value: bson.A{bson.D{{Key: "$in", Value: bson.A{"$$court._id", "$bookings.court_id"}}}, bson.D{{Key: "$in", Value: bson.A{"$$court._id", "$recurring_rules.court_id"}}}}}},
 							}},
 						}},
 					}},

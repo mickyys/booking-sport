@@ -65,6 +65,7 @@ type SportCenterUseCase struct {
 	courtRepo   CourtRepository
 	userRepo    UserRepository
 	bookingRepo BookingRepository
+	ruleRepo    RecurringRuleRepository
 }
 type EnrichedCourtSchedule struct {
 	Hour            int                 `json:"hour"`
@@ -279,8 +280,9 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 	return result, nil
 }
 
-func NewSportCenterUseCase(repo SportCenterRepository, courtRepo CourtRepository, userRepo UserRepository, bookingRepo BookingRepository) *SportCenterUseCase {
-	return &SportCenterUseCase{repo: repo, courtRepo: courtRepo, userRepo: userRepo, bookingRepo: bookingRepo}
+func NewSportCenterUseCase(repo SportCenterRepository, courtRepo CourtRepository, userRepo UserRepository, bookingRepo BookingRepository,
+	ruleRepo    RecurringRuleRepository) *SportCenterUseCase {
+	return &SportCenterUseCase{repo: repo, courtRepo: courtRepo, userRepo: userRepo, bookingRepo: bookingRepo, ruleRepo: ruleRepo}
 }
 
 func (uc *SportCenterUseCase) CreateSportCenter(ctx context.Context, center *domain.SportCenter) error {
@@ -379,10 +381,12 @@ type CourtUseCase struct {
 	repo        CourtRepository
 	centerRepo  SportCenterRepository
 	bookingRepo BookingRepository
+	ruleRepo    RecurringRuleRepository
 }
 
-func NewCourtUseCase(repo CourtRepository, centerRepo SportCenterRepository, bookingRepo BookingRepository) *CourtUseCase {
-	return &CourtUseCase{repo: repo, centerRepo: centerRepo, bookingRepo: bookingRepo}
+func NewCourtUseCase(repo CourtRepository, centerRepo SportCenterRepository, bookingRepo BookingRepository,
+	ruleRepo    RecurringRuleRepository) *CourtUseCase {
+	return &CourtUseCase{repo: repo, centerRepo: centerRepo, bookingRepo: bookingRepo, ruleRepo: ruleRepo}
 }
 
 func (uc *CourtUseCase) CreateCourt(ctx context.Context, court *domain.Court) error {
@@ -567,6 +571,18 @@ func (uc *CourtUseCase) GetCourtSchedule(ctx context.Context, courtID primitive.
 	for _, b := range bookings {
 		if b.Status == domain.BookingStatusConfirmed {
 			bookedHours[b.Hour] = true
+		}
+	}
+	// Check recurring rules for this day and court
+	dayOfWeek := int(searchDate.Weekday())
+	rules, _ := uc.ruleRepo.FindByCenter(ctx, []primitive.ObjectID{court.SportCenterID})
+	for _, rule := range rules {
+		if rule.CourtID == courtID && rule.DayOfWeek == dayOfWeek && rule.Hour < 24 {
+			// Check if rule is active for this date
+			if (searchDate.Equal(rule.StartDate) || searchDate.After(rule.StartDate)) &&
+			   (rule.EndDate == nil || searchDate.Before(*rule.EndDate) || searchDate.Equal(*rule.EndDate)) {
+				bookedHours[rule.Hour] = true
+			}
 		}
 	}
 

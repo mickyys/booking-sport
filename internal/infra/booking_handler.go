@@ -728,3 +728,62 @@ func (h *BookingHandler) MercadoPagoReturn(c *gin.Context) {
 	redirectURL := fmt.Sprintf("%s/booking/status?code=%s", url, code)
 	c.Redirect(http.StatusFound, redirectURL)
 }
+
+func (h *BookingHandler) CreateRecurringRule(c *gin.Context) {
+	var rule domain.RecurringRule
+	if err := c.ShouldBindJSON(&rule); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	userID, _ := c.Get("user_id")
+	err := h.useCase.CreateRecurringRule(c.Request.Context(), &rule, userID.(string))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, rule)
+}
+
+func (h *BookingHandler) ListRecurringRules(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	rules, err := h.useCase.ListRecurringRules(c.Request.Context(), userID.(string))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, rules)
+}
+
+func (h *BookingHandler) UpdateRecurringRule(c *gin.Context) {
+	idStr := c.Param("id")
+	id, _ := primitive.ObjectIDFromHex(idStr)
+
+	var rule domain.RecurringRule
+	if err := c.ShouldBindJSON(&rule); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	userID, _ := c.Get("user_id")
+	err := h.useCase.UpdateRecurringRule(c.Request.Context(), id, &rule, userID.(string))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "updated"})
+}
+
+func (h *BookingHandler) DeleteRecurringRule(c *gin.Context) {
+	idStr := c.Param("id")
+	id, _ := primitive.ObjectIDFromHex(idStr)
+	userID, _ := c.Get("user_id")
+
+	err := h.useCase.DeleteRecurringRule(c.Request.Context(), id, userID.(string))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+}

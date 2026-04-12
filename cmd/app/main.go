@@ -67,10 +67,11 @@ func main() {
 	courtRepo := mongo.NewCourtRepository(db)
 	userRepo := mongo.NewUserRepository(db)
 	bookingRepo := mongo.NewBookingRepository(db)
+	ruleRepo := mongo.NewRecurringRuleRepository(db)
 
 	// 4. Inicializar Casos de Uso (Application Layer)
-	sportCenterUC := app.NewSportCenterUseCase(sportCenterRepo, courtRepo, userRepo, bookingRepo)
-	courtUC := app.NewCourtUseCase(courtRepo, sportCenterRepo, bookingRepo)
+	sportCenterUC := app.NewSportCenterUseCase(sportCenterRepo, courtRepo, userRepo, bookingRepo, ruleRepo)
+	courtUC := app.NewCourtUseCase(courtRepo, sportCenterRepo, bookingRepo, ruleRepo)
 	// Inicializar Mailer (Mailgun) si está configurado
 	var bookingMailer app.Mailer
 	mailgunAPIKey := os.Getenv("MAILGUN_API_KEY")
@@ -85,7 +86,7 @@ func main() {
 		log.Println("Mailgun mailer initialized")
 	}
 
-	bookingUC := app.NewBookingUseCase(bookingRepo, courtRepo, sportCenterRepo, userRepo, bookingMailer)
+	bookingUC := app.NewBookingUseCase(bookingRepo, courtRepo, sportCenterRepo, userRepo, ruleRepo, bookingMailer)
 
 	// 5. Inicializar Manejadores (Presentation Layer)
 	sportCenterHandler := infra.NewSportCenterHandler(sportCenterUC)
@@ -165,6 +166,10 @@ func main() {
 		api.PATCH("/admin/sport-centers/:id/settings", sportCenterHandler.UpdateSettings)
 		api.GET("/admin/sport-centers/:id", sportCenterHandler.GetByID)
 		api.POST("/admin/bookings/internal", bookingHandler.CreateInternalBooking)
+		api.POST("/admin/bookings/recurring-rules", bookingHandler.CreateRecurringRule)
+		api.GET("/admin/bookings/recurring-rules", bookingHandler.ListRecurringRules)
+		api.PUT("/admin/bookings/recurring-rules/:id", bookingHandler.UpdateRecurringRule)
+		api.DELETE("/admin/bookings/recurring-rules/:id", bookingHandler.DeleteRecurringRule)
 		api.DELETE("/admin/bookings/:id", bookingHandler.DeleteBooking)
 	}
 

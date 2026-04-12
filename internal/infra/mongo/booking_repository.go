@@ -16,12 +16,14 @@ import (
 type BookingRepository struct {
 	collection *mongo.Collection
 	db         *mongo.Database
+	ruleColl   *mongo.Collection
 }
 
 func NewBookingRepository(db *mongo.Database) *BookingRepository {
 	return &BookingRepository{
 		collection: db.Collection("bookings"),
 		db:         db,
+		ruleColl:   db.Collection("recurring_rules"),
 	}
 }
 
@@ -559,9 +561,10 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 	todayFilter := bson.M{
 		"sport_center_id": bson.M{"$in": sportCenterIDs},
 		"date":            bson.M{"$gte": todayStart, "$lt": todayEnd},
-		"status":          domain.BookingStatusConfirmed,
-	}
+		"status":          domain.BookingStatusConfirmed,}
+	rulesToday, _ := r.getActiveRulesForDate(ctx, sportCenterIDs, todayStart)
 	todayCount, _ := r.collection.CountDocuments(ctx, todayFilter)
+	todayCount += int64(len(rulesToday))
 
 	// Helper function to extract revenue from aggregation result
 	getRevenueValues := func(result []bson.M, totalKey, onlineKey, venueKey string) (float64, float64, float64) {
@@ -617,6 +620,10 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 	var todayRevenueResult []bson.M
 	cursorRevenue.All(ctx, &todayRevenueResult)
 	todayRevenue, todayOnlineRevenue, todayVenueRevenue := getRevenueValues(todayRevenueResult, "today_revenue", "online_revenue", "venue_revenue")
+	for _, rule := range rulesToday {
+		todayRevenue += rule.Price
+		todayVenueRevenue += rule.Price
+	}
 
 	// 3. Total Revenue (Confirmed)
 	totalRevenueMatch := bson.M{
@@ -758,6 +765,43 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 
 	totalPages := int((totalRecentCount + int64(limit) - 1) / int64(limit))
 
+	// Inject recurring rules into recent bookings if we are looking at a specific date or today
+	if dateStr != "" || (dateStr == "" && page == 1) {
+		searchDate := todayStart
+		if dateStr != "" && !strings.Contains(dateStr, "|") {
+			t, err := time.Parse("2006-01-02", dateStr)
+			if err == nil {
+				searchDate = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
+			}
+		}
+
+		rulesForDate, _ := r.getActiveRulesForDate(ctx, sportCenterIDs, searchDate)
+		for _, rule := range rulesForDate {
+			if name != "" && !strings.Contains(strings.ToLower(rule.CustomerName), strings.ToLower(name)) {
+				continue
+			}
+			if status != "" && status != string(domain.BookingStatusConfirmed) {
+				continue
+			}
+
+			recentBookings = append([]domain.BookingSummary{{
+				ID:              rule.ID,
+				CustomerName:    rule.CustomerName,
+				CustomerPhone:   rule.CustomerPhone,
+				Date:            searchDate,
+				Hour:            rule.Hour,
+				CourtName:       rule.CourtName,
+				Status:          domain.BookingStatusConfirmed,
+				Price:           rule.Price,
+				FinalPrice:      rule.Price,
+				PaymentMethod:   "internal",
+			}}, recentBookings...)
+			totalRecentCount++
+		}
+		// Recalculate totalPages if we added rules
+		totalPages = int((totalRecentCount + int64(limit) - 1) / int64(limit))
+	}
+
 	return &domain.AdminDashboardData{
 		TodayBookingsCount: int(todayCount),
 		TodayRevenue:       todayRevenue,
@@ -773,4 +817,24 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 		Limit:              limit,
 		TotalPages:         totalPages,
 	}, nil
+}
+func (r *BookingRepository) getActiveRulesForDate(ctx context.Context, centerIDs []primitive.ObjectID, date time.Time) ([]domain.RecurringRule, error) {
+	dayOfWeek := int(date.Weekday())
+	filter := bson.M{
+		"sport_center_id": bson.M{"$in": centerIDs},
+		"day_of_week":      dayOfWeek,
+		"start_date":      bson.M{"$lte": date},
+		"$or": []bson.M{
+			{"end_date": nil},
+			{"end_date": bson.M{"$gte": date}},
+		},
+	}
+	cursor, err := r.ruleColl.Find(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var rules []domain.RecurringRule
+	cursor.All(ctx, &rules)
+	return rules, nil
 }

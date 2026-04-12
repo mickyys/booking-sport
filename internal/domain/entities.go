@@ -114,6 +114,23 @@ type BookingSummary struct {
 	RetentionPercent  int                `bson:"retention_percent" json:"retention_percent"`
 }
 
+type RecurringRule struct {
+	ID              primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	SportCenterID   primitive.ObjectID `bson:"sport_center_id" json:"sport_center_id"`
+	CourtID         primitive.ObjectID `bson:"court_id" json:"court_id"`
+	CourtName       string             `bson:"court_name" json:"court_name"`
+	DayOfWeek       int                `bson:"day_of_week" json:"day_of_week"` // 0 = Sunday, 1 = Monday, ...
+	Hour            int                `bson:"hour" json:"hour"`
+	Price           float64            `bson:"price" json:"price"`
+	CustomerName    string             `bson:"customer_name" json:"customer_name"`
+	CustomerPhone   string             `bson:"customer_phone" json:"customer_phone"`
+	IsIndefinite    bool               `bson:"is_indefinite" json:"is_indefinite"`
+	StartDate       time.Time          `bson:"start_date" json:"start_date"`
+	EndDate         *time.Time         `bson:"end_date,omitempty" json:"end_date,omitempty"`
+	CreatedAt       time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt       time.Time          `bson:"updated_at" json:"updated_at"`
+}
+
 type RecurringSeries struct {
 	SeriesID      string    `bson:"_id" json:"series_id"`
 	CustomerName  string    `bson:"customer_name" json:"customer_name"`
