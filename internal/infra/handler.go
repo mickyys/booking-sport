@@ -617,6 +617,67 @@ func (h *SportCenterHandler) GetSchedulesWithBookings(c *gin.Context) {
 	c.JSON(http.StatusOK, schedules)
 }
 
+// GetAdminSchedulesWithBookings retorna schedules con detalles del cliente
+// para los centros asociados al usuario autenticado. No requiere el id del centro.
+func (h *SportCenterHandler) GetAdminSchedulesWithBookings(c *gin.Context) {
+	// Obtener user_id del contexto
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in context"})
+		return
+	}
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid User ID type"})
+		return
+	}
+
+	// Obtener centros asociados al usuario
+	centers, err := h.useCase.FindByUserID(c.Request.Context(), userIDStr)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if len(centers) == 0 {
+		c.JSON(http.StatusOK, []interface{}{})
+		return
+	}
+
+	// Parámetros de fecha y 'all'
+	dateStr := c.Query("date")
+	loc, _ := time.LoadLocation("America/Santiago")
+	date := time.Now().In(loc)
+	if dateStr != "" {
+		parsedDate, err := time.ParseInLocation("2006-01-02", dateStr, loc)
+		if err == nil {
+			date = parsedDate
+		}
+	}
+
+	all := c.Query("all") == "true"
+
+	// Construir respuesta: para cada centro retornar sus schedules enriquecidos
+	type CenterSchedules struct {
+		SportCenter domain.SportCenter          `json:"sport_center"`
+		Schedules   []app.CourtScheduleResponse `json:"schedules"`
+	}
+
+	var response []CenterSchedules
+	for _, center := range centers {
+		schedules, err := h.useCase.GetSportCenterSchedulesWithBookingDetails(c.Request.Context(), center.ID, date, all)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		response = append(response, CenterSchedules{
+			SportCenter: center,
+			Schedules:   schedules,
+		})
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
 type UserHandler struct {
 	useCase *app.UserUseCase
 }

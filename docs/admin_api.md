@@ -66,6 +66,36 @@ Lista todas las canchas de los centros deportivos asociados al usuario.
 - **Método:** `GET`
 - **Respuesta (JSON):** Lista de objetos `Court`.
 
+#### Ejemplo de respuesta
+
+```json
+[
+  {
+    "sport_center": {
+      "id": "642f1a2b3c4d5e6f7a8b9c0d",
+      "name": "Centro Deportivo Las Lomas",
+      "slug": "las-lomas",
+      "city": "Santiago",
+      "address": "Av. Principal 123",
+      "users": ["auth0|1234567890abcdef"],
+      "courts_count": 2
+    },
+    "courts": [
+      {
+        "id": "742f1a2b3c4d5e6f7a8b9c1e",
+        "name": "Cancha 1",
+        "description": "Cancha sintética"
+      },
+      {
+        "id": "842f1a2b3c4d5e6f7a8b9c2f",
+        "name": "Cancha 2",
+        "description": "Cancha de pasto"
+      }
+    ]
+  }
+]
+```
+
 ### Crear una Nueva Cancha
 - **URL:** `/admin/courts`
 - **Método:** `POST`
@@ -109,6 +139,36 @@ Este endpoint es el más importante para el administrador. Retorna todos los slo
   - `date` (string, opcional): Fecha `YYYY-MM-DD` (defecto: hoy en `America/Santiago`).
   - `all` (bool, opcional): Si es `true`, incluye todos los slots (incluso bloqueados o pasados).
 - **Respuesta (JSON):** Lista de canchas con sus respectivos slots. Cada slot puede tener un objeto `booking` asociado.
+
+Además existe un endpoint protegido para administradores que no requiere el id del centro: devuelve la agenda de los centros asociados al usuario autenticado.
+
+- **URL:** `/admin/sport-centers/schedules/bookings`
+- **Método:** `GET`
+- **Parámetros de Consulta:**
+  - `date` (string, opcional): Fecha `YYYY-MM-DD` (defecto: hoy en `America/Santiago`).
+  - `all` (bool, opcional): Si es `true`, incluye todos los slots (incluso bloqueados o pasados).
+- **Autenticación:** `Authorization: Bearer <JWT_TOKEN>` (admin)
+- **Respuesta (JSON):** Array de objetos por centro: `{ "sport_center": {...}, "schedules": [...] }`.
+
+Ejemplo de respuesta (cuando el administrador gestiona 1 centro):
+
+```json
+[
+  {
+    "sport_center": { "id": "642f1a2b3c4d5e6f7a8b9c0d", "name": "Centro Deportivo Las Lomas", "slug": "las-lomas" },
+    "schedules": [
+      {
+        "id": "742f1a2b3c4d5e6f7a8b9c1e",
+        "name": "Cancha 1",
+        "schedule": [
+          { "hour": 9, "minutes": 0, "price": 20000, "status": "available", "payment_required": true },
+          { "hour": 10, "minutes": 0, "price": 20000, "status": "booked", "booking_code": "ABC-123", "customer_name": "Juan Perez" }
+        ]
+      }
+    ]
+  }
+]
+```
 
 ### Configurar Horario Semanal (Masivo)
 Configura todos los slots de una cancha de forma recurrente.
@@ -226,6 +286,41 @@ Elimina todas las reservas futuras asociadas a una serie.
 - **Respuesta (JSON):** `{"message": "Series deleted successfully"}`
 
 ---
+
+## 6. Identificación de Administradores (Auth0)
+
+Los endpoints del panel de administración requieren un token JWT válido emitido por Auth0.
+
+- El backend espera el header: `Authorization: Bearer <JWT_TOKEN>`.
+- El middleware de autenticación valida `iss` y `aud`, verifica la firma contra el JWKS de Auth0 y extrae el `sub` del token.
+- El valor `sub` (subject) se guarda en el contexto de Gin como `user_id` y se usa para asociar acciones al usuario autenticado.
+
+Flujo resumido:
+
+1. El cliente obtiene un token desde Auth0 (con el `audience` correcto para la API).
+2. Envía requests al backend incluyendo `Authorization: Bearer <JWT>`.
+3. El backend valida el token y ejecuta `c.Set("user_id", claims["sub"])` (ver implementación en [pkg/auth/auth.go](pkg/auth/auth.go#L122)).
+4. Para determinar si el usuario es administrador de un centro deportivo, el backend verifica si `user_id` aparece en la lista de administradores del centro (`center.Users`). Ejemplo de la comprobación en el backend: [internal/app/booking_usecase.go](internal/app/booking_usecase.go#L630).
+
+Ejemplo de claims (payload decodificado) esperado en el JWT:
+
+```json
+{
+  "iss": "https://<YOUR_AUTH0_DOMAIN>/",
+  "sub": "auth0|1234567890abcdef",
+  "aud": ["your-api-audience"],
+  "iat": 1610000000,
+  "exp": 1610003600,
+  "scope": "openid profile email",
+  "email": "admin@centro.cl"
+}
+```
+
+Notas importantes:
+
+- Asegúrate de que el `audience` configurado en el cliente de Auth0 coincida con el `audience` que el middleware espera.
+- El backend NO asume que cualquier token válido pertenece a un administrador; valida la pertenencia comprobando la presencia del `sub` en `center.Users` antes de permitir acciones administrativas.
+- Si quieres que se use un claim diferente para roles (por ejemplo `https://example.com/roles`), podemos extender el middleware para exponer ese claim y documentarlo aquí.
 
 ## 5. Configuración del Centro Deportivo
 

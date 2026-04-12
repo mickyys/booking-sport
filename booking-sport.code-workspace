@@ -5,12 +5,10 @@
 		},
 		{
 			"path": "../booking-sport-ui"
-		},
-		{
-			"path": "../booking-sport-batch"
 		}
 	],
 	"settings": {
-		"liveServer.settings.multiRootWorkspaceName": "booking-sport"
+		"liveServer.settings.multiRootWorkspaceName": "booking-sport",
+		"java.configuration.updateBuildConfiguration": "interactive"
 	}
 }

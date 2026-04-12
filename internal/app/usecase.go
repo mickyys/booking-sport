@@ -253,7 +253,7 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 				sch.PaymentMethod = b.PaymentMethod
 				// Diferenciar entre reserva interna y bloqueo
 				if b.PaymentMethod == "internal" {
-					if b.GuestDetails != nil && b.GuestDetails.Name != "" && b.GuestDetails.Email != "admin@internal.com" {
+					if b.GuestDetails != nil && b.GuestDetails.Name != "" {
 						sch.PaymentMethod = "internal_reservation"
 					} else {
 						sch.PaymentMethod = "internal_block"
@@ -355,6 +355,11 @@ func (uc *SportCenterUseCase) ListSportCentersPaged(ctx context.Context, page, l
 		Limit:      limit,
 		TotalPages: totalPages,
 	}, nil
+}
+
+// FindByUserID devuelve los centros deportivos asociados a un usuario (administrador)
+func (uc *SportCenterUseCase) FindByUserID(ctx context.Context, userID string) ([]domain.SportCenter, error) {
+	return uc.repo.FindByUserID(ctx, userID)
 }
 
 type UserUseCase struct {
