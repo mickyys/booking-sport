@@ -276,7 +276,7 @@ func (uc *BookingUseCase) ValidateFintocPaymentAndGetCode(ctx context.Context, b
 
 // ==================== MercadoPago Payment Methods ====================
 
-func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking *domain.Booking) (string, error) {
+func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking *domain.Booking, usePartialPayment bool) (string, error) {
 	court, err := uc.courtRepo.FindByID(ctx, booking.CourtID)
 	if err != nil {
 		return "", fmt.Errorf("court not found: %w", err)
@@ -284,6 +284,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 
 	price := 0.0
 	found := false
+	var selectedSlot *domain.CourtSchedule
 	for _, s := range court.Schedule {
 		if s.Hour == booking.Hour {
 			loc, _ := time.LoadLocation("America/Santiago")
@@ -301,6 +302,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 			}
 
 			price = s.Price
+			selectedSlot = &s
 			found = true
 			break
 		}
@@ -310,18 +312,41 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		return "", fmt.Errorf("hour %d not found in schedule", booking.Hour)
 	}
 
-	booking.Price = price
-	booking.FinalPrice = price
-	booking.Status = domain.BookingStatusPending
-	booking.BookingCode = generateBookingCode()
-	booking.PaymentMethod = "mercadopago"
-	booking.SportCenterID = court.SportCenterID
-
 	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
 	if err != nil {
 		return "", fmt.Errorf("sport center not found: %w", err)
 	}
 
+	amountToPay := price
+	isPartial := false
+
+	if usePartialPayment {
+		partialEnabled := false
+		if selectedSlot.PartialPaymentEnabled != nil {
+			partialEnabled = *selectedSlot.PartialPaymentEnabled
+		} else {
+			partialEnabled = center.PartialPaymentEnabled
+		}
+
+		if partialEnabled {
+			percent := center.PartialPaymentPercent
+			if percent <= 0 || percent > 100 {
+				percent = 50
+			}
+			amountToPay = (price * float64(percent)) / 100
+			isPartial = true
+		}
+	}
+
+	booking.Price = price
+	booking.FinalPrice = price
+	booking.PaidAmount = 0
+	booking.PendingAmount = price
+	booking.IsPartialPayment = isPartial
+	booking.Status = domain.BookingStatusPending
+	booking.BookingCode = generateBookingCode()
+	booking.PaymentMethod = "mercadopago"
+	booking.SportCenterID = court.SportCenterID
 	booking.SportCenterName = center.Name
 	booking.CourtName = court.Name
 	booking.CreatedAt = time.Now()
@@ -353,9 +378,12 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	pendingURL := fmt.Sprintf("%s?code=%s", urlPaymentCallback, booking.BookingCode)
 
 	title := fmt.Sprintf("Reserva %s - %s", court.Name, center.Name)
+	if isPartial {
+		title = fmt.Sprintf("Abono Reserva %s - %s", court.Name, center.Name)
+	}
 	externalRef := booking.BookingCode
 
-	result, err := client.CreatePreference(ctx, title, price, email, externalRef, successURL, failureURL, pendingURL, notificationURL)
+	result, err := client.CreatePreference(ctx, title, amountToPay, email, externalRef, successURL, failureURL, pendingURL, notificationURL)
 	if err != nil {
 		return "", fmt.Errorf("error creating mercadopago preference: %w", err)
 	}
@@ -425,11 +453,21 @@ func (uc *BookingUseCase) HandleMercadoPagoWebhook(ctx context.Context, paymentI
 		return nil
 	}
 
-	if err := uc.repo.UpdateStatus(ctx, booking.ID, newStatus); err != nil {
+	paidAmount := 0.0
+	pendingAmount := booking.Price
+	if newStatus == domain.BookingStatusConfirmed {
+		paidAmount = payment.TransactionAmount
+		pendingAmount = booking.Price - paidAmount
+		if pendingAmount < 0 {
+			pendingAmount = 0
+		}
+	}
+
+	if err := uc.repo.ConfirmPayment(ctx, booking.ID, newStatus, paidAmount, pendingAmount); err != nil {
 		return fmt.Errorf("error updating booking status: %w", err)
 	}
 
-	log.Printf("[MP WEBHOOK] Booking %s updated to %s (payment %d, center: %s)\n", booking.BookingCode, newStatus, paymentID, center.Name)
+	log.Printf("[MP WEBHOOK] Booking %s updated to %s (paid: %.2f, pending: %.2f)\n", booking.BookingCode, newStatus, paidAmount, pendingAmount)
 
 	if newStatus == domain.BookingStatusConfirmed && uc.mailer != nil {
 		go func(b *domain.Booking) {
@@ -698,29 +736,39 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 		mpClient := mercadopago.NewClient(center.MercadoPago.AccessToken)
 
 		var refundResult *mercadopago.RefundResult
-		if refundPercentage == 100 {
-			refundResult, err = mpClient.CreateRefund(ctx, mpPaymentID)
-		} else {
-			refundAmount := (booking.FinalPrice * float64(refundPercentage)) / 100
-			refundResult, err = mpClient.CreatePartialRefund(ctx, mpPaymentID, refundAmount)
+		retentionAmount := (booking.Price * float64(100-refundPercentage)) / 100
+		refundAmount := booking.PaidAmount - retentionAmount
+		if refundAmount <= 0 {
+			log.Printf("[CANCEL_BOOKING] PaidAmount %.2f is less or equal to retention %.2f, no refund processed\n", booking.PaidAmount, retentionAmount)
+			refundAmount = 0
+		}
+
+		if refundAmount > 0 {
+			if refundAmount >= booking.PaidAmount {
+				refundResult, err = mpClient.CreateRefund(ctx, mpPaymentID)
+			} else {
+				refundResult, err = mpClient.CreatePartialRefund(ctx, mpPaymentID, refundAmount)
+			}
 		}
 		if err != nil {
 			log.Printf("err: %s", err)
 			return fmt.Errorf("error processing mercadopago refund: %w", err)
 		}
 
-		log.Printf("[CANCEL_BOOKING] Refund MP procesado: ID=%d, Status=%s, Amount=%.2f\n",
-			refundResult.ID, refundResult.Status, refundResult.Amount)
+		if refundResult != nil {
+			log.Printf("[CANCEL_BOOKING] Refund MP procesado: ID=%d, Status=%s, Amount=%.2f\n",
+				refundResult.ID, refundResult.Status, refundResult.Amount)
 
-		// Registrar el refund en la reserva
-		mpRefund := domain.Refund{
-			ID:        strconv.Itoa(refundResult.ID),
-			Amount:    int(refundResult.Amount),
-			Status:    refundResult.Status,
-			CreatedAt: time.Now(),
-		}
-		if addErr := uc.repo.AddRefundByBookingID(ctx, booking.ID, mpRefund); addErr != nil {
-			log.Printf("[CANCEL_BOOKING] Error guardando refund en DB: %v\n", addErr)
+			// Registrar el refund en la reserva
+			mpRefund := domain.Refund{
+				ID:        strconv.Itoa(refundResult.ID),
+				Amount:    int(refundResult.Amount),
+				Status:    refundResult.Status,
+				CreatedAt: time.Now(),
+			}
+			if addErr := uc.repo.AddRefundByBookingID(ctx, booking.ID, mpRefund); addErr != nil {
+				log.Printf("[CANCEL_BOOKING] Error guardando refund en DB: %v\n", addErr)
+			}
 		}
 	}
 
@@ -901,4 +949,38 @@ func (uc *BookingUseCase) GetAdminDashboard(ctx context.Context, userID string, 
 
 	// 2. Get dashboard data from repo
 	return uc.repo.GetDashboardData(ctx, centerIDs, page, limit, dateStr, name, code, status)
+}
+
+func (uc *BookingUseCase) MarkPartialPaymentAsPaid(ctx context.Context, id primitive.ObjectID, userID string) error {
+	booking, err := uc.repo.FindByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("booking not found: %w", err)
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
+	if err != nil {
+		return fmt.Errorf("sport center not found: %w", err)
+	}
+
+	isAdmin := false
+	for _, u := range center.Users {
+		if u == userID {
+			isAdmin = true
+			break
+		}
+	}
+
+	if !isAdmin {
+		return fmt.Errorf("unauthorized: only admins can mark balance as paid")
+	}
+
+	if !booking.IsPartialPayment {
+		return fmt.Errorf("booking is not a partial payment")
+	}
+
+	if booking.PartialPaymentPaid {
+		return fmt.Errorf("balance already paid")
+	}
+
+	return uc.repo.MarkBalanceAsPaid(ctx, id)
 }

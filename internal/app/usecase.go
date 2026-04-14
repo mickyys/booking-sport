@@ -37,6 +37,8 @@ type BookingRepository interface {
 	FindByMPPaymentID(ctx context.Context, paymentID string) (*domain.Booking, error)
 	FindByBookingCode(ctx context.Context, code string) (*domain.Booking, error)
 	UpdateStatus(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus) error
+	ConfirmPayment(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paidAmount, pendingAmount float64) error
+	MarkBalanceAsPaid(ctx context.Context, id primitive.ObjectID) error
 	UpdateCancellation(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, cancelledBy string, reason string) error
 	UpdateFintocPaymentIntentID(ctx context.Context, id primitive.ObjectID, paymentIntentID string) error
 	UpdateMPPaymentID(ctx context.Context, id primitive.ObjectID, mpPaymentID string) error

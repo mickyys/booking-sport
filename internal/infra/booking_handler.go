@@ -631,13 +631,16 @@ func (h *BookingHandler) GetAdminDashboard(c *gin.Context) {
 // ==================== MercadoPago Handlers ====================
 
 func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
-	var booking domain.Booking
-	if err := c.ShouldBindJSON(&booking); err != nil {
+	var input struct {
+		domain.Booking
+		Partial bool `json:"partial"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	initPoint, err := h.useCase.CreateMercadoPagoPayment(c.Request.Context(), &booking)
+	initPoint, err := h.useCase.CreateMercadoPagoPayment(c.Request.Context(), &input.Booking, input.Partial)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -727,4 +730,27 @@ func (h *BookingHandler) MercadoPagoReturn(c *gin.Context) {
 
 	redirectURL := fmt.Sprintf("%s/booking/status?code=%s", url, code)
 	c.Redirect(http.StatusFound, redirectURL)
+}
+
+func (h *BookingHandler) MarkPartialPaymentAsPaid(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid booking id"})
+		return
+	}
+
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in token"})
+		return
+	}
+
+	err = h.useCase.MarkPartialPaymentAsPaid(c.Request.Context(), id, userID.(string))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Balance marked as paid successfully"})
 }
