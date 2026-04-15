@@ -4,6 +4,7 @@ package mongo
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -106,6 +107,9 @@ func (r *BookingRepository) FindByUserIDAndStatusPaged(ctx context.Context, user
 func (r *BookingRepository) Create(ctx context.Context, booking *domain.Booking) error {
 	res, err := r.collection.InsertOne(ctx, booking)
 	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return fmt.Errorf("ya existe un proceso de reserva o reserva confirmada para este horario")
+		}
 		return err
 	}
 	booking.ID = res.InsertedID.(primitive.ObjectID)

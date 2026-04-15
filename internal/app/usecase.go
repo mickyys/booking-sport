@@ -299,7 +299,6 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 				sch.PaidAmount = b.PaidAmount
 				sch.PendingAmount = b.PendingAmount
 				sch.PartialPaymentPaid = b.PartialPaymentPaid
-
 				// Diferenciar entre reserva interna y bloqueo
 				if b.PaymentMethod == "internal" {
 					if b.GuestDetails != nil && b.GuestDetails.Name != "" {
