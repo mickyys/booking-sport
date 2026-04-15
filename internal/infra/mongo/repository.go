@@ -234,13 +234,15 @@ func (r *SportCenterRepository) Update(ctx context.Context, center *domain.Sport
 	return err
 }
 
-func (r *SportCenterRepository) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug string, cancellationHours int, retentionPercent int) error {
+func (r *SportCenterRepository) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug string, cancellationHours int, retentionPercent int, partialPaymentEnabled bool, partialPaymentPercent int) error {
 	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
 		"$set": bson.M{
-			"slug":               slug,
-			"cancellation_hours": cancellationHours,
-			"retention_percent":  retentionPercent,
-			"updated_at":         time.Now(),
+			"slug":                    slug,
+			"cancellation_hours":      cancellationHours,
+			"retention_percent":       retentionPercent,
+			"partial_payment_enabled": partialPaymentEnabled,
+			"partial_payment_percent": partialPaymentPercent,
+			"updated_at":              time.Now(),
 		},
 	})
 	return err
