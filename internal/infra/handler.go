@@ -658,26 +658,18 @@ func (h *SportCenterHandler) GetAdminSchedulesWithBookings(c *gin.Context) {
 
 	all := c.Query("all") == "true"
 
-	// Construir respuesta: para cada centro retornar sus schedules enriquecidos
-	type CenterSchedules struct {
-		SportCenter domain.SportCenter          `json:"sport_center"`
-		Schedules   []app.CourtScheduleResponse `json:"schedules"`
-	}
-
-	var response []CenterSchedules
+	// Collect all schedules from all centers (same format as public endpoint)
+	var allSchedules []app.CourtScheduleResponse
 	for _, center := range centers {
 		schedules, err := h.useCase.GetSportCenterSchedulesWithBookingDetails(c.Request.Context(), center.ID, date, all)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		response = append(response, CenterSchedules{
-			SportCenter: center,
-			Schedules:   schedules,
-		})
+		allSchedules = append(allSchedules, schedules...)
 	}
 
-	c.JSON(http.StatusOK, response)
+	c.JSON(http.StatusOK, allSchedules)
 }
 
 type UserHandler struct {
