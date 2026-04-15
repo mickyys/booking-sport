@@ -754,3 +754,26 @@ func (h *BookingHandler) MarkPartialPaymentAsPaid(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"message": "Balance marked as paid successfully"})
 }
+
+func (h *BookingHandler) UndoBalancePayment(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid booking id"})
+		return
+	}
+
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in token"})
+		return
+	}
+
+	err = h.useCase.UndoBalancePayment(c.Request.Context(), id, userID.(string))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Balance payment undone successfully"})
+}

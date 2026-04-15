@@ -344,6 +344,10 @@ func (r *BookingRepository) FindByUserIDPaged(ctx context.Context, userID string
 			"payment_method":     bson.M{"$ifNull": []interface{}{"$payment_method", "fintoc"}},
 			"cancellation_hours": bson.M{"$ifNull": []interface{}{"$sport_center_info.cancellation_hours", 3}},
 			"retention_percent":  bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
+			"paid_amount":       bson.M{"$ifNull": []interface{}{"$paid_amount", 0}},
+			"pending_amount":    bson.M{"$ifNull": []interface{}{"$pending_amount", "$price"}},
+			"is_partial_payment": bson.M{"$ifNull": []interface{}{"$is_partial_payment", false}},
+			"partial_payment_paid": bson.M{"$ifNull": []interface{}{"$partial_payment_paid", false}},
 		}}},
 		{{Key: "$project", Value: bson.M{
 			"id":                 "$_id",
@@ -358,6 +362,10 @@ func (r *BookingRepository) FindByUserIDPaged(ctx context.Context, userID string
 			"payment_method":     1,
 			"cancellation_hours": 1,
 			"retention_percent":  1,
+			"paid_amount":       1,
+			"pending_amount":    1,
+			"is_partial_payment": 1,
+			"partial_payment_paid": 1,
 		}}},
 	}
 
@@ -741,6 +749,10 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 			"cancelled_by":       bson.M{"$ifNull": []interface{}{"$cancelled_by", ""}},
 			"cancellation_hours": bson.M{"$ifNull": []interface{}{"$sport_center_info.cancellation_hours", 3}},
 			"retention_percent":  bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
+			"paid_amount":       bson.M{"$ifNull": []interface{}{"$paid_amount", 0}},
+			"pending_amount":    bson.M{"$ifNull": []interface{}{"$pending_amount", "$price"}},
+			"is_partial_payment": bson.M{"$ifNull": []interface{}{"$is_partial_payment", false}},
+			"partial_payment_paid": bson.M{"$ifNull": []interface{}{"$partial_payment_paid", false}},
 		}}},
 		{{Key: "$project", Value: bson.M{
 			"id":                 "$_id",
@@ -760,6 +772,10 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 			"cancelled_by":       1,
 			"cancellation_hours": 1,
 			"retention_percent":  1,
+			"paid_amount":       1,
+			"pending_amount":    1,
+			"is_partial_payment": 1,
+			"partial_payment_paid": 1,
 		}}},
 	}
 
@@ -805,13 +821,42 @@ func (r *BookingRepository) ConfirmPayment(ctx context.Context, id primitive.Obj
 	return err
 }
 
-func (r *BookingRepository) MarkBalanceAsPaid(ctx context.Context, id primitive.ObjectID) error {
+func (r *BookingRepository) MarkBalanceAsPaid(ctx context.Context, id primitive.ObjectID, modifiedBy string) error {
+	now := time.Now()
 	filter := bson.M{"_id": id}
 	update := bson.M{"$set": bson.M{
 		"pending_amount":       0,
 		"partial_payment_paid": true,
-		"updated_at":           time.Now(),
+		"modified_by":          modifiedBy,
+		"modified_at":          &now,
+		"updated_at":           now,
 	}}
 	_, err := r.collection.UpdateOne(ctx, filter, update)
+	return err
+}
+
+func (r *BookingRepository) UndoBalancePayment(ctx context.Context, id primitive.ObjectID, modifiedBy string) error {
+	now := time.Now()
+	// Recuperamos la reserva para calcular el saldo pendiente original
+	var booking domain.Booking
+	err := r.collection.FindOne(ctx, bson.M{"_id": id}).Decode(&booking)
+	if err != nil {
+		return err
+	}
+
+	pendingAmount := booking.Price - booking.PaidAmount
+	if pendingAmount < 0 {
+		pendingAmount = 0
+	}
+
+	filter := bson.M{"_id": id}
+	update := bson.M{"$set": bson.M{
+		"pending_amount":       pendingAmount,
+		"partial_payment_paid": false,
+		"modified_by":          modifiedBy,
+		"modified_at":          &now,
+		"updated_at":           now,
+	}}
+	_, err = r.collection.UpdateOne(ctx, filter, update)
 	return err
 }

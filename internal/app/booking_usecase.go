@@ -982,5 +982,39 @@ func (uc *BookingUseCase) MarkPartialPaymentAsPaid(ctx context.Context, id primi
 		return fmt.Errorf("balance already paid")
 	}
 
-	return uc.repo.MarkBalanceAsPaid(ctx, id)
+	return uc.repo.MarkBalanceAsPaid(ctx, id, userID)
+}
+
+func (uc *BookingUseCase) UndoBalancePayment(ctx context.Context, id primitive.ObjectID, userID string) error {
+	booking, err := uc.repo.FindByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("booking not found: %w", err)
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
+	if err != nil {
+		return fmt.Errorf("sport center not found: %w", err)
+	}
+
+	isAdmin := false
+	for _, u := range center.Users {
+		if u == userID {
+			isAdmin = true
+			break
+		}
+	}
+
+	if !isAdmin {
+		return fmt.Errorf("unauthorized: only admins can undo balance payments")
+	}
+
+	if !booking.IsPartialPayment {
+		return fmt.Errorf("booking is not a partial payment")
+	}
+
+	if !booking.PartialPaymentPaid {
+		return fmt.Errorf("balance is not marked as paid")
+	}
+
+	return uc.repo.UndoBalancePayment(ctx, id, userID)
 }

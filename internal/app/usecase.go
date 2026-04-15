@@ -38,7 +38,8 @@ type BookingRepository interface {
 	FindByBookingCode(ctx context.Context, code string) (*domain.Booking, error)
 	UpdateStatus(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus) error
 	ConfirmPayment(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paidAmount, pendingAmount float64) error
-	MarkBalanceAsPaid(ctx context.Context, id primitive.ObjectID) error
+	MarkBalanceAsPaid(ctx context.Context, id primitive.ObjectID, modifiedBy string) error
+	UndoBalancePayment(ctx context.Context, id primitive.ObjectID, modifiedBy string) error
 	UpdateCancellation(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, cancelledBy string, reason string) error
 	UpdateFintocPaymentIntentID(ctx context.Context, id primitive.ObjectID, paymentIntentID string) error
 	UpdateMPPaymentID(ctx context.Context, id primitive.ObjectID, mpPaymentID string) error
@@ -82,6 +83,11 @@ type EnrichedCourtSchedule struct {
 	CustomerPhone string `json:"customer_phone,omitempty"`
 	BookingCode   string `json:"booking_code,omitempty"`
 	PaymentMethod string `json:"payment_method,omitempty"`
+	// Información de pago parcial
+	PaidAmount         float64 `json:"paid_amount,omitempty"`
+	PendingAmount      float64 `json:"pending_amount,omitempty"`
+	IsPartialPayment   bool    `json:"is_partial_payment"`
+	PartialPaymentPaid bool    `json:"partial_payment_paid"`
 }
 
 type CourtScheduleResponse struct {
@@ -159,6 +165,17 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 			if bID, exists := bookedHours[s.Hour]; exists {
 				sch.Status = "booked"
 				sch.BookingID = bID
+
+				// Obtener info básica de pago si existe la reserva
+				for _, b := range allBookings {
+					if b.ID == *bID {
+						sch.IsPartialPayment = b.IsPartialPayment
+						sch.PaidAmount = b.PaidAmount
+						sch.PendingAmount = b.PendingAmount
+						sch.PartialPaymentPaid = b.PartialPaymentPaid
+						break
+					}
+				}
 			}
 
 			if all || (sch.Status == "available") {
@@ -253,6 +270,13 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 				}
 				sch.BookingCode = b.BookingCode
 				sch.PaymentMethod = b.PaymentMethod
+
+				// Info de pago parcial
+				sch.IsPartialPayment = b.IsPartialPayment
+				sch.PaidAmount = b.PaidAmount
+				sch.PendingAmount = b.PendingAmount
+				sch.PartialPaymentPaid = b.PartialPaymentPaid
+
 				// Diferenciar entre reserva interna y bloqueo
 				if b.PaymentMethod == "internal" {
 					if b.GuestDetails != nil && b.GuestDetails.Name != "" {
@@ -666,12 +690,14 @@ func (uc *CourtUseCase) GetSportCenterSchedulesWithBookings(ctx context.Context,
 		enrichedSchedules := []EnrichedCourtSchedule{}
 		for _, s := range schedules {
 			enrichedSchedules = append(enrichedSchedules, EnrichedCourtSchedule{
-				Hour:            s.Hour,
-				Minutes:         s.Minutes,
-				Price:           s.Price,
-				Status:          s.Status,
-				PaymentRequired: s.PaymentRequired,
-				PaymentOptional: s.PaymentOptional,
+				Hour:               s.Hour,
+				Minutes:            s.Minutes,
+				Price:              s.Price,
+				Status:             s.Status,
+				PaymentRequired:    s.PaymentRequired,
+				PaymentOptional:    s.PaymentOptional,
+				IsPartialPayment:   false,
+				PartialPaymentPaid: false,
 			})
 		}
 

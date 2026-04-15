@@ -186,6 +186,8 @@ type Booking struct {
 	CustomerPhone         string             `bson:"customer_phone,omitempty" json:"customer_phone,omitempty"`
 	SeriesID              string             `bson:"series_id,omitempty" json:"series_id,omitempty"`
 	RecurringID           string             `bson:"recurring_id,omitempty" json:"recurring_id,omitempty"`
+	ModifiedBy            string             `bson:"modified_by,omitempty" json:"modified_by,omitempty"`
+	ModifiedAt            *time.Time         `bson:"modified_at,omitempty" json:"modified_at,omitempty"`
 	CreatedAt             time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt             time.Time          `bson:"updated_at" json:"updated_at"`
 }
