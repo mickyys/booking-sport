@@ -4,6 +4,7 @@ package mongo
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -106,6 +107,9 @@ func (r *BookingRepository) FindByUserIDAndStatusPaged(ctx context.Context, user
 func (r *BookingRepository) Create(ctx context.Context, booking *domain.Booking) error {
 	res, err := r.collection.InsertOne(ctx, booking)
 	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return fmt.Errorf("ya existe un proceso de reserva o reserva confirmada para este horario")
+		}
 		return err
 	}
 	booking.ID = res.InsertedID.(primitive.ObjectID)
@@ -344,6 +348,10 @@ func (r *BookingRepository) FindByUserIDPaged(ctx context.Context, userID string
 			"payment_method":     bson.M{"$ifNull": []interface{}{"$payment_method", "fintoc"}},
 			"cancellation_hours": bson.M{"$ifNull": []interface{}{"$sport_center_info.cancellation_hours", 3}},
 			"retention_percent":  bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
+			"paid_amount":       bson.M{"$ifNull": []interface{}{"$paid_amount", 0}},
+			"pending_amount":    bson.M{"$ifNull": []interface{}{"$pending_amount", "$price"}},
+			"is_partial_payment": bson.M{"$ifNull": []interface{}{"$is_partial_payment", false}},
+			"partial_payment_paid": bson.M{"$ifNull": []interface{}{"$partial_payment_paid", false}},
 		}}},
 		{{Key: "$project", Value: bson.M{
 			"id":                 "$_id",
@@ -358,6 +366,10 @@ func (r *BookingRepository) FindByUserIDPaged(ctx context.Context, userID string
 			"payment_method":     1,
 			"cancellation_hours": 1,
 			"retention_percent":  1,
+			"paid_amount":       1,
+			"pending_amount":    1,
+			"is_partial_payment": 1,
+			"partial_payment_paid": 1,
 		}}},
 	}
 

@@ -80,8 +80,12 @@ type EnrichedCourtSchedule struct {
 	CustomerName  string `json:"customer_name,omitempty"`
 	CustomerEmail string `json:"customer_email,omitempty"`
 	CustomerPhone string `json:"customer_phone,omitempty"`
-	BookingCode   string `json:"booking_code,omitempty"`
-	PaymentMethod string `json:"payment_method,omitempty"`
+	BookingCode        string  `json:"booking_code,omitempty"`
+	PaymentMethod      string  `json:"payment_method,omitempty"`
+	IsPartialPayment   bool    `json:"is_partial_payment,omitempty"`
+	PaidAmount         float64 `json:"paid_amount,omitempty"`
+	PendingAmount      float64 `json:"pending_amount,omitempty"`
+	PartialPaymentPaid bool    `json:"partial_payment_paid,omitempty"`
 }
 
 type CourtScheduleResponse struct {
@@ -253,6 +257,10 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 				}
 				sch.BookingCode = b.BookingCode
 				sch.PaymentMethod = b.PaymentMethod
+				sch.IsPartialPayment = b.IsPartialPayment
+				sch.PaidAmount = b.PaidAmount
+				sch.PendingAmount = b.PendingAmount
+				sch.PartialPaymentPaid = b.PartialPaymentPaid
 				// Diferenciar entre reserva interna y bloqueo
 				if b.PaymentMethod == "internal" {
 					if b.GuestDetails != nil && b.GuestDetails.Name != "" {
