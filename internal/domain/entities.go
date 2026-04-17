@@ -112,6 +112,10 @@ type BookingSummary struct {
 	PaymentMethod     string             `bson:"payment_method" json:"payment_method"`
 	CancellationHours int                `bson:"cancellation_hours" json:"cancellation_hours"`
 	RetentionPercent  int                `bson:"retention_percent" json:"retention_percent"`
+	PaidAmount        float64            `bson:"paid_amount" json:"paid_amount"`
+	PendingAmount     float64            `bson:"pending_amount" json:"pending_amount"`
+	IsPartialPayment  bool               `bson:"is_partial_payment" json:"is_partial_payment"`
+	PartialPaymentPaid bool              `bson:"partial_payment_paid" json:"partial_payment_paid"`
 }
 
 type RecurringSeries struct {
@@ -174,8 +178,13 @@ type Booking struct {
 	CancellationReason    string             `bson:"cancellation_reason,omitempty" json:"cancellation_reason,omitempty"`
 	CustomerName          string             `bson:"customer_name,omitempty" json:"customer_name,omitempty"`
 	CustomerPhone         string             `bson:"customer_phone,omitempty" json:"customer_phone,omitempty"`
+	CustomerEmail         string             `bson:"customer_email,omitempty" json:"customer_email,omitempty"`
 	SeriesID              string             `bson:"series_id,omitempty" json:"series_id,omitempty"`
 	RecurringID           string             `bson:"recurring_id,omitempty" json:"recurring_id,omitempty"`
+	PaidAmount            float64            `bson:"paid_amount" json:"paid_amount"`
+	PendingAmount         float64            `bson:"pending_amount" json:"pending_amount"`
+	IsPartialPayment      bool               `bson:"is_partial_payment" json:"is_partial_payment"`
+	PartialPaymentPaid    bool               `bson:"partial_payment_paid" json:"partial_payment_paid"`
 	CreatedAt             time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt             time.Time          `bson:"updated_at" json:"updated_at"`
 }
