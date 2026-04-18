@@ -63,7 +63,8 @@ func (h *BookingHandler) GetRecurringSeries(c *gin.Context) {
 	}
 
 	userIDStr := userID.(string)
-	centerID := c.Query("sport_center_id")
+	// El sport_center_id ahora se obtiene desde el usuario en la capa de usecase
+	centerID := ""
 
 	series, err := h.useCase.GetRecurringSeries(c.Request.Context(), userIDStr, centerID)
 	if err != nil {

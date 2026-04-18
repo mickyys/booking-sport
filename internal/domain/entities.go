@@ -57,6 +57,7 @@ type SportCenter struct {
 	RetentionPercent      int                `bson:"retention_percent" json:"retention_percent"`
 	PartialPaymentEnabled bool               `bson:"partial_payment_enabled" json:"partial_payment_enabled"`
 	PartialPaymentPercent int                `bson:"partial_payment_percent" json:"partial_payment_percent"`
+	IsPrivate            bool               `bson:"is_private" json:"is_private"`
 	Users                 []string           `bson:"users" json:"users"`
 	CreatedAt             time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt             time.Time          `bson:"updated_at" json:"updated_at"`
