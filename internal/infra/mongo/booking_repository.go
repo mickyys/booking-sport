@@ -516,7 +516,6 @@ func (r *BookingRepository) GetRecurringSeries(ctx context.Context, centerIDs []
 
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: match}},
-		{{Key: "$sort", Value: bson.M{"date": 1}}},
 		{{Key: "$lookup", Value: bson.M{
 			"from":         "courts",
 			"localField":   "court_id",
@@ -539,6 +538,19 @@ func (r *BookingRepository) GetRecurringSeries(ctx context.Context, centerIDs []
 			"end_date":        bson.M{"$max": "$date"},
 			"bookings_count":  bson.M{"$sum": 1},
 			"price":           bson.M{"$first": "$price"},
+		}}},
+		{{Key: "$addFields", Value: bson.M{
+			"dayOfWeek": bson.M{
+				"$cond": []interface{}{
+					bson.M{"$eq": []interface{}{bson.M{"$dayOfWeek": "$start_date"}, 1}},
+					7, // Domingo -> 7
+					bson.M{"$dayOfWeek": "$start_date"}, // Lunes(2) a Sábado(7) -> No, MongoDB dayOfWeek es 1=Domingo, 2=Lunes...
+				},
+			},
+		}}},
+		{{Key: "$sort", Value: bson.M{
+			"dayOfWeek": 1,
+			"hour":       1,
 		}}},
 	}
 
