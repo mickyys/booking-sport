@@ -234,16 +234,32 @@ func (r *SportCenterRepository) Update(ctx context.Context, center *domain.Sport
 	return err
 }
 
-func (r *SportCenterRepository) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug string, cancellationHours int, retentionPercent int, partialPaymentEnabled bool, partialPaymentPercent int) error {
+func (r *SportCenterRepository) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string) error {
+	updateData := bson.M{
+		"updated_at": time.Now(),
+	}
+
+	if slug != nil {
+		updateData["slug"] = *slug
+	}
+	if cancellationHours != nil {
+		updateData["cancellation_hours"] = *cancellationHours
+	}
+	if retentionPercent != nil {
+		updateData["retention_percent"] = *retentionPercent
+	}
+	if partialPaymentEnabled != nil {
+		updateData["partial_payment_enabled"] = *partialPaymentEnabled
+	}
+	if partialPaymentPercent != nil {
+		updateData["partial_payment_percent"] = *partialPaymentPercent
+	}
+	if imageURL != nil {
+		updateData["image_url"] = *imageURL
+	}
+
 	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
-		"$set": bson.M{
-			"slug":                    slug,
-			"cancellation_hours":      cancellationHours,
-			"retention_percent":       retentionPercent,
-			"partial_payment_enabled": partialPaymentEnabled,
-			"partial_payment_percent": partialPaymentPercent,
-			"updated_at":              time.Now(),
-		},
+		"$set": updateData,
 	})
 	return err
 }
