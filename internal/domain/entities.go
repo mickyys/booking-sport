@@ -53,6 +53,7 @@ type SportCenter struct {
 	CourtsCount           int                `bson:"courts_count" json:"courts"`
 	Fintoc                *FintocConfig      `bson:"fintoc,omitempty" json:"-"`
 	MercadoPago           *MercadoPagoConfig `bson:"mercadopago,omitempty" json:"-"`
+	ImageURL              string             `bson:"image_url" json:"image_url"`
 	CancellationHours     int                `bson:"cancellation_hours" json:"cancellation_hours"`
 	RetentionPercent      int                `bson:"retention_percent" json:"retention_percent"`
 	PartialPaymentEnabled bool               `bson:"partial_payment_enabled" json:"partial_payment_enabled"`

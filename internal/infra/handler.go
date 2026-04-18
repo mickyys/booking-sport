@@ -172,18 +172,19 @@ func (h *SportCenterHandler) UpdateSettings(c *gin.Context) {
 	}
 
 	var body struct {
-		Slug                  string `json:"slug"`
-		CancellationHours     int    `json:"cancellation_hours"`
-		RetentionPercent      int    `json:"retention_percent"`
-		PartialPaymentEnabled bool   `json:"partial_payment_enabled"`
-		PartialPaymentPercent int    `json:"partial_payment_percent"`
+		Slug                  *string `json:"slug"`
+		CancellationHours     *int    `json:"cancellation_hours"`
+		RetentionPercent      *int    `json:"retention_percent"`
+		PartialPaymentEnabled *bool   `json:"partial_payment_enabled"`
+		PartialPaymentPercent *int    `json:"partial_payment_percent"`
+		ImageURL              *string `json:"image_url"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := h.useCase.UpdateSettings(c.Request.Context(), id, body.Slug, body.CancellationHours, body.RetentionPercent, body.PartialPaymentEnabled, body.PartialPaymentPercent); err != nil {
+	if err := h.useCase.UpdateSettings(c.Request.Context(), id, body.Slug, body.CancellationHours, body.RetentionPercent, body.PartialPaymentEnabled, body.PartialPaymentPercent, body.ImageURL); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
