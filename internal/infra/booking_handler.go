@@ -392,11 +392,15 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 			"booking_code":      booking.BookingCode,
 			"created_at":        booking.CreatedAt,
 			"updated_at":        booking.UpdatedAt,
+			"paid_amount":       booking.PaidAmount,
+			"pending_amount":    booking.PendingAmount,
+			"is_partial_payment": booking.IsPartialPayment,
+			"partial_payment_paid": booking.PartialPaymentPaid,
 		},
 		"hours_until_match": hoursUntilMatch,
 		"can_cancel":        canCancel,
 		"refund_percentage": refundPercentage,
-		"amount_paid":       booking.Price,
+		"amount_paid":       booking.PaidAmount,
 		"max_refund_amount": maxRefundAmount,
 		"cancellation_policy": gin.H{
 			"limit_hours":       configCancellationHours,
@@ -501,11 +505,15 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 			"booking_code":      booking.BookingCode,
 			"created_at":        booking.CreatedAt,
 			"updated_at":        booking.UpdatedAt,
+			"paid_amount":       booking.PaidAmount,
+			"pending_amount":    booking.PendingAmount,
+			"is_partial_payment": booking.IsPartialPayment,
+			"partial_payment_paid": booking.PartialPaymentPaid,
 		},
 		"hours_until_match": hoursUntilMatch,
 		"can_cancel":        canCancel,
 		"refund_percentage": refundPercentage,
-		"amount_paid":       booking.Price,
+		"amount_paid":       booking.PaidAmount,
 		"max_refund_amount": maxRefundAmount,
 		"cancellation_policy": gin.H{
 			"limit_hours":       configCancellationHours,
@@ -631,13 +639,16 @@ func (h *BookingHandler) GetAdminDashboard(c *gin.Context) {
 // ==================== MercadoPago Handlers ====================
 
 func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
-	var booking domain.Booking
-	if err := c.ShouldBindJSON(&booking); err != nil {
+	var input struct {
+		domain.Booking
+		Partial bool `json:"partial"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	initPoint, err := h.useCase.CreateMercadoPagoPayment(c.Request.Context(), &booking)
+	initPoint, err := h.useCase.CreateMercadoPagoPayment(c.Request.Context(), &input.Booking, input.Partial)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -727,4 +738,50 @@ func (h *BookingHandler) MercadoPagoReturn(c *gin.Context) {
 
 	redirectURL := fmt.Sprintf("%s/booking/status?code=%s", url, code)
 	c.Redirect(http.StatusFound, redirectURL)
+}
+
+func (h *BookingHandler) MarkPartialPaymentAsPaid(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid booking id"})
+		return
+	}
+
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in token"})
+		return
+	}
+
+	err = h.useCase.MarkPartialPaymentAsPaid(c.Request.Context(), id, userID.(string))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Balance marked as paid successfully"})
+}
+
+func (h *BookingHandler) UndoBalancePayment(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid booking id"})
+		return
+	}
+
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in token"})
+		return
+	}
+
+	err = h.useCase.UndoBalancePayment(c.Request.Context(), id, userID.(string))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Balance payment undone successfully"})
 }

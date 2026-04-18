@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/hamp/booking-sport/internal/domain"
@@ -12,7 +13,7 @@ import (
 type SportCenterRepository interface {
 	Create(ctx context.Context, center *domain.SportCenter) error
 	Update(ctx context.Context, center *domain.SportCenter) error
-	UpdateSettings(ctx context.Context, id primitive.ObjectID, slug string, cancellationHours int, retentionPercent int) error
+	UpdateSettings(ctx context.Context, id primitive.ObjectID, slug string, cancellationHours int, retentionPercent int, partialPaymentEnabled bool, partialPaymentPercent int) error
 	FindByID(ctx context.Context, id primitive.ObjectID) (*domain.SportCenter, error)
 	FindBySlug(ctx context.Context, slug string) (*domain.SportCenter, error)
 	FindAll(ctx context.Context) ([]domain.SportCenter, error)
@@ -37,6 +38,9 @@ type BookingRepository interface {
 	FindByMPPaymentID(ctx context.Context, paymentID string) (*domain.Booking, error)
 	FindByBookingCode(ctx context.Context, code string) (*domain.Booking, error)
 	UpdateStatus(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus) error
+	ConfirmPayment(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paidAmount, pendingAmount float64) error
+	MarkBalanceAsPaid(ctx context.Context, id primitive.ObjectID, modifiedBy string) error
+	UndoBalancePayment(ctx context.Context, id primitive.ObjectID, modifiedBy string) error
 	UpdateCancellation(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, cancelledBy string, reason string) error
 	UpdateFintocPaymentIntentID(ctx context.Context, id primitive.ObjectID, paymentIntentID string) error
 	UpdateMPPaymentID(ctx context.Context, id primitive.ObjectID, mpPaymentID string) error
@@ -80,6 +84,12 @@ type EnrichedCourtSchedule struct {
 	CustomerPhone string `json:"customer_phone,omitempty"`
 	BookingCode   string `json:"booking_code,omitempty"`
 	PaymentMethod string `json:"payment_method,omitempty"`
+	// Información de pago parcial
+	PaidAmount            float64 `json:"paid_amount,omitempty"`
+	PendingAmount         float64 `json:"pending_amount,omitempty"`
+	IsPartialPayment      bool    `json:"is_partial_payment"`
+	PartialPaymentPaid    bool    `json:"partial_payment_paid"`
+	PartialPaymentEnabled *bool   `json:"partial_payment_enabled,omitempty"`
 }
 
 type CourtScheduleResponse struct {
@@ -96,12 +106,28 @@ func (uc *SportCenterUseCase) FindBySlug(ctx context.Context, slug string) (*dom
 	return uc.repo.FindBySlug(ctx, slug)
 }
 
-func (uc *SportCenterUseCase) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug string, cancellationHours int, retentionPercent int) error {
-	_, err := uc.repo.FindByID(ctx, id)
+func (uc *SportCenterUseCase) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug string, cancellationHours int, retentionPercent int, partialPaymentEnabled bool, partialPaymentPercent int) error {
+	center, err := uc.repo.FindByID(ctx, id)
 	if err != nil {
 		return err
 	}
-	return uc.repo.UpdateSettings(ctx, id, slug, cancellationHours, retentionPercent)
+
+	err = uc.repo.UpdateSettings(ctx, id, slug, cancellationHours, retentionPercent, partialPaymentEnabled, partialPaymentPercent)
+	if err != nil {
+		return err
+	}
+
+	wasEnabled := center.PartialPaymentEnabled
+	if wasEnabled != partialPaymentEnabled {
+		syncedCount, err := uc.courtRepo.SyncPartialPaymentSlots(ctx, id, partialPaymentEnabled)
+		if err != nil {
+			log.Printf("[SYNC] Error syncing partial payment slots: %v", err)
+		} else {
+			log.Printf("[SYNC] Synced %d courts with partial payment = %v", syncedCount, partialPaymentEnabled)
+		}
+	}
+
+	return nil
 }
 
 func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, centerID primitive.ObjectID, date time.Time, all bool) ([]CourtScheduleResponse, error) {
@@ -147,6 +173,11 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 				PaymentOptional: s.PaymentOptional,
 			}
 
+			// Agregar partial_payment_enabled del slot
+			if s.PartialPaymentEnabled != nil {
+				sch.PartialPaymentEnabled = s.PartialPaymentEnabled
+			}
+
 			// Check if slot has already passed
 			// Forcing Chile timezone comparison to match the user's local experience
 			slotTime := time.Date(date.Year(), date.Month(), date.Day(), s.Hour, s.Minutes, 0, 0, loc)
@@ -157,6 +188,17 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 			if bID, exists := bookedHours[s.Hour]; exists {
 				sch.Status = "booked"
 				sch.BookingID = bID
+
+				// Obtener info básica de pago si existe la reserva
+				for _, b := range allBookings {
+					if b.ID == *bID {
+						sch.IsPartialPayment = b.IsPartialPayment
+						sch.PaidAmount = b.PaidAmount
+						sch.PendingAmount = b.PendingAmount
+						sch.PartialPaymentPaid = b.PartialPaymentPaid
+						break
+					}
+				}
 			}
 
 			if all || (sch.Status == "available") {
@@ -251,6 +293,12 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 				}
 				sch.BookingCode = b.BookingCode
 				sch.PaymentMethod = b.PaymentMethod
+
+				// Info de pago parcial
+				sch.IsPartialPayment = b.IsPartialPayment
+				sch.PaidAmount = b.PaidAmount
+				sch.PendingAmount = b.PendingAmount
+				sch.PartialPaymentPaid = b.PartialPaymentPaid
 				// Diferenciar entre reserva interna y bloqueo
 				if b.PaymentMethod == "internal" {
 					if b.GuestDetails != nil && b.GuestDetails.Name != "" {
@@ -378,6 +426,7 @@ type CourtRepository interface {
 	FindByID(ctx context.Context, id primitive.ObjectID) (*domain.Court, error)
 	FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.Court, error)
 	FindAllPaged(ctx context.Context, page, limit int) ([]domain.Court, int64, error)
+	SyncPartialPaymentSlots(ctx context.Context, centerID primitive.ObjectID, partialPaymentEnabled bool) (int64, error)
 }
 
 type CourtUseCase struct {
@@ -642,6 +691,17 @@ func (uc *CourtUseCase) GetCourtsByAdminUser(ctx context.Context, userID string)
 		if courts == nil {
 			courts = []domain.Court{}
 		}
+
+		// Asignar false por defecto si no tiene valor el slot
+		for i := range courts {
+			for j := range courts[i].Schedule {
+				if courts[i].Schedule[j].PartialPaymentEnabled == nil {
+					defaultValue := false
+					courts[i].Schedule[j].PartialPaymentEnabled = &defaultValue
+				}
+			}
+		}
+
 		result = append(result, CenterCourtsResponse{
 			SportCenter: center,
 			Courts:      courts,
@@ -664,12 +724,14 @@ func (uc *CourtUseCase) GetSportCenterSchedulesWithBookings(ctx context.Context,
 		enrichedSchedules := []EnrichedCourtSchedule{}
 		for _, s := range schedules {
 			enrichedSchedules = append(enrichedSchedules, EnrichedCourtSchedule{
-				Hour:            s.Hour,
-				Minutes:         s.Minutes,
-				Price:           s.Price,
-				Status:          s.Status,
-				PaymentRequired: s.PaymentRequired,
-				PaymentOptional: s.PaymentOptional,
+				Hour:               s.Hour,
+				Minutes:            s.Minutes,
+				Price:              s.Price,
+				Status:             s.Status,
+				PaymentRequired:    s.PaymentRequired,
+				PaymentOptional:    s.PaymentOptional,
+				IsPartialPayment:   false,
+				PartialPaymentPaid: false,
 			})
 		}
 

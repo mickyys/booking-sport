@@ -42,23 +42,24 @@ type MercadoPagoConfig struct {
 }
 
 type SportCenter struct {
-	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
-	Slug        string             `bson:"slug" json:"slug"`
-	Name        string             `bson:"name" json:"name"`
-	City        string             `bson:"city" json:"city"`
-	Address     string             `bson:"address" json:"address"`
-	Coordinates Coordinates        `bson:"coordinates" json:"coordinates"`
-	Services    []string           `bson:"services" json:"services"`
-	Contact     Contact            `bson:"contact" json:"contact"`
-	// Courts: cantidad de canchas asociadas al centro
-	CourtsCount       int                `bson:"courts_count" json:"courts"`
-	Fintoc            *FintocConfig      `bson:"fintoc,omitempty" json:"-"`
-	MercadoPago       *MercadoPagoConfig `bson:"mercadopago,omitempty" json:"-"`
-	CancellationHours int                `bson:"cancellation_hours" json:"cancellation_hours"`
-	RetentionPercent  int                `bson:"retention_percent" json:"retention_percent"`
-	Users             []string           `bson:"users" json:"users"` // Usuarios asociados al centro
-	CreatedAt         time.Time          `bson:"created_at" json:"created_at"`
-	UpdatedAt         time.Time          `bson:"updated_at" json:"updated_at"`
+	ID                     primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	Slug                   string             `bson:"slug" json:"slug"`
+	Name                   string             `bson:"name" json:"name"`
+	City                   string             `bson:"city" json:"city"`
+	Address                string             `bson:"address" json:"address"`
+	Coordinates            Coordinates        `bson:"coordinates" json:"coordinates"`
+	Services               []string           `bson:"services" json:"services"`
+	Contact                Contact            `bson:"contact" json:"contact"`
+	CourtsCount            int                `bson:"courts_count" json:"courts"`
+	Fintoc                 *FintocConfig      `bson:"fintoc,omitempty" json:"-"`
+	MercadoPago            *MercadoPagoConfig `bson:"mercadopago,omitempty" json:"-"`
+	CancellationHours      int                `bson:"cancellation_hours" json:"cancellation_hours"`
+	RetentionPercent       int                `bson:"retention_percent" json:"retention_percent"`
+	PartialPaymentEnabled  bool               `bson:"partial_payment_enabled" json:"partial_payment_enabled"`
+	PartialPaymentPercent  int                `bson:"partial_payment_percent" json:"partial_payment_percent"`
+	Users                  []string           `bson:"users" json:"users"`
+	CreatedAt              time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt              time.Time          `bson:"updated_at" json:"updated_at"`
 }
 
 type Court struct {
@@ -72,18 +73,19 @@ type Court struct {
 }
 
 type CourtSchedule struct {
-	Hour            int     `bson:"hour" json:"hour"`       // 0 - 23
-	Minutes         int     `bson:"minutes" json:"minutes"` // 0 - 59
-	Price           float64 `bson:"price" json:"price"`     // Valor por hora
-	Status          string  `bson:"status" json:"status"`   // "available", "booked", "closed"
-	PaymentRequired bool    `bson:"payment_required" json:"payment_required"`
-	PaymentOptional bool    `bson:"payment_optional" json:"payment_optional"`
+	Hour                  int     `bson:"hour" json:"hour"`
+	Minutes               int     `bson:"minutes" json:"minutes"`
+	Price                 float64 `bson:"price" json:"price"`
+	Status                string  `bson:"status" json:"status"`
+	PaymentRequired       bool    `bson:"payment_required" json:"payment_required"`
+	PaymentOptional       bool    `bson:"payment_optional" json:"payment_optional"`
+	PartialPaymentEnabled *bool   `bson:"partial_payment_enabled" json:"partial_payment_enabled"`
 }
 
 type User struct {
 	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
 	Username  string             `bson:"username" json:"username"`
-	Password  string             `bson:"password" json:"-"` // Ocultar password en JSON
+	Password  string             `bson:"password" json:"-"`
 	Role      UserRole           `bson:"role" json:"role"`
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
 }
@@ -97,21 +99,25 @@ type PagedResponse struct {
 }
 
 type BookingSummary struct {
-	ID                primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	SportCenterName   string             `bson:"sport_center_name" json:"sport_center_name"`
-	CustomerName      string             `bson:"customer_name" json:"customer_name"`
-	CustomerPhone     string             `bson:"customer_phone" json:"customer_phone"`
-	CustomerEmail     string             `bson:"customer_email" json:"customer_email"`
-	BookingCode       string             `bson:"booking_code" json:"booking_code"`
-	Date              time.Time          `bson:"date" json:"date"`
-	Hour              int                `bson:"hour" json:"hour"`
-	CourtName         string             `bson:"court_name" json:"court_name"`
-	Status            BookingStatus      `bson:"status" json:"status"`
-	Price             float64            `bson:"price" json:"price"`
-	FinalPrice        float64            `bson:"final_price" json:"final_price"`
-	PaymentMethod     string             `bson:"payment_method" json:"payment_method"`
-	CancellationHours int                `bson:"cancellation_hours" json:"cancellation_hours"`
-	RetentionPercent  int                `bson:"retention_percent" json:"retention_percent"`
+	ID                 primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	SportCenterName    string             `bson:"sport_center_name" json:"sport_center_name"`
+	CustomerName       string             `bson:"customer_name" json:"customer_name"`
+	CustomerPhone      string             `bson:"customer_phone" json:"customer_phone"`
+	CustomerEmail      string             `bson:"customer_email" json:"customer_email"`
+	BookingCode        string             `bson:"booking_code" json:"booking_code"`
+	Date               time.Time          `bson:"date" json:"date"`
+	Hour               int                `bson:"hour" json:"hour"`
+	CourtName          string             `bson:"court_name" json:"court_name"`
+	Status             BookingStatus      `bson:"status" json:"status"`
+	Price              float64            `bson:"price" json:"price"`
+	FinalPrice         float64            `bson:"final_price" json:"final_price"`
+	PaidAmount         float64            `bson:"paid_amount" json:"paid_amount"`
+	PendingAmount      float64            `bson:"pending_amount" json:"pending_amount"`
+	IsPartialPayment   bool               `bson:"is_partial_payment" json:"is_partial_payment"`
+	PartialPaymentPaid bool               `bson:"partial_payment_paid" json:"partial_payment_paid"`
+	PaymentMethod      string             `bson:"payment_method" json:"payment_method"`
+	CancellationHours  int                `bson:"cancellation_hours" json:"cancellation_hours"`
+	RetentionPercent   int                `bson:"retention_percent" json:"retention_percent"`
 }
 
 type RecurringSeries struct {
@@ -161,6 +167,10 @@ type Booking struct {
 	Hour                  int                `bson:"hour" json:"hour"`
 	FinalPrice            float64            `bson:"final_price" json:"final_price"`
 	Price                 float64            `bson:"price" json:"price"`
+	PaidAmount            float64            `bson:"paid_amount" json:"paid_amount"`
+	PendingAmount         float64            `bson:"pending_amount" json:"pending_amount"`
+	IsPartialPayment      bool               `bson:"is_partial_payment" json:"is_partial_payment"`
+	PartialPaymentPaid    bool               `bson:"partial_payment_paid" json:"partial_payment_paid"`
 	Status                BookingStatus      `bson:"status" json:"status"`
 	BookingCode           string             `bson:"booking_code,omitempty" json:"booking_code,omitempty"`
 	PaymentMethod         string             `bson:"payment_method,omitempty" json:"payment_method,omitempty"`
@@ -176,6 +186,8 @@ type Booking struct {
 	CustomerPhone         string             `bson:"customer_phone,omitempty" json:"customer_phone,omitempty"`
 	SeriesID              string             `bson:"series_id,omitempty" json:"series_id,omitempty"`
 	RecurringID           string             `bson:"recurring_id,omitempty" json:"recurring_id,omitempty"`
+	ModifiedBy            string             `bson:"modified_by,omitempty" json:"modified_by,omitempty"`
+	ModifiedAt            *time.Time         `bson:"modified_at,omitempty" json:"modified_at,omitempty"`
 	CreatedAt             time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt             time.Time          `bson:"updated_at" json:"updated_at"`
 }

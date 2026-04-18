@@ -234,13 +234,15 @@ func (r *SportCenterRepository) Update(ctx context.Context, center *domain.Sport
 	return err
 }
 
-func (r *SportCenterRepository) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug string, cancellationHours int, retentionPercent int) error {
+func (r *SportCenterRepository) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug string, cancellationHours int, retentionPercent int, partialPaymentEnabled bool, partialPaymentPercent int) error {
 	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
 		"$set": bson.M{
-			"slug":               slug,
-			"cancellation_hours": cancellationHours,
-			"retention_percent":  retentionPercent,
-			"updated_at":         time.Now(),
+			"slug":                    slug,
+			"cancellation_hours":      cancellationHours,
+			"retention_percent":       retentionPercent,
+			"partial_payment_enabled": partialPaymentEnabled,
+			"partial_payment_percent": partialPaymentPercent,
+			"updated_at":              time.Now(),
 		},
 	})
 	return err
@@ -432,6 +434,26 @@ func (r *CourtRepository) FindAllPaged(ctx context.Context, page, limit int) ([]
 	}
 
 	return courts, total, nil
+}
+
+func (r *CourtRepository) SyncPartialPaymentSlots(ctx context.Context, centerID primitive.ObjectID, partialPaymentEnabled bool) (int64, error) {
+	result, err := r.collection.UpdateMany(
+		ctx,
+		bson.M{
+			"sport_center_id":                  centerID,
+			"schedule.partial_payment_enabled": nil,
+		},
+		bson.M{
+			"$set": bson.M{
+				"schedule.$[].partial_payment_enabled": partialPaymentEnabled,
+				"updated_at":                           time.Now(),
+			},
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.ModifiedCount, nil
 }
 
 type UserRepository struct {
