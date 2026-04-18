@@ -505,7 +505,11 @@ func (r *BookingRepository) GetRecurringSeries(ctx context.Context, centerIDs []
 		"series_id": bson.M{"$exists": true, "$ne": ""},
 	}
 	if sportCenterID != "" {
-		match["sport_center_id"] = sportCenterID
+		objID, err := primitive.ObjectIDFromHex(sportCenterID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid sport_center_id: %w", err)
+		}
+		match["sport_center_id"] = objID
 	} else {
 		match["sport_center_id"] = bson.M{"$in": centerIDs}
 	}
