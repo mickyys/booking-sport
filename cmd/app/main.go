@@ -71,7 +71,6 @@ func main() {
 
 	// 4. Inicializar Casos de Uso (Application Layer)
 	sportCenterUC := app.NewSportCenterUseCase(sportCenterRepo, courtRepo, userRepo, bookingRepo, recurringReservationRepo)
-	courtUC := app.NewCourtUseCase(courtRepo, sportCenterRepo, bookingRepo)
 	// Inicializar Mailer (Mailgun) si está configurado
 	var bookingMailer app.Mailer
 	mailgunAPIKey := os.Getenv("MAILGUN_API_KEY")
@@ -88,6 +87,7 @@ func main() {
 
 	bookingUC := app.NewBookingUseCase(bookingRepo, courtRepo, sportCenterRepo, userRepo, bookingMailer, recurringReservationRepo)
 
+	courtUC := app.NewCourtUseCase(courtRepo, sportCenterRepo, bookingRepo, bookingUC)
 	// 5. Inicializar Manejadores (Presentation Layer)
 	sportCenterHandler := infra.NewSportCenterHandler(sportCenterUC)
 	courtHandler := infra.NewCourtHandler(courtUC)
@@ -163,6 +163,7 @@ func main() {
 		api.PUT("/admin/courts/:id", courtHandler.UpdateAdminCourt)
 		api.DELETE("/admin/courts/:id", courtHandler.DeleteAdminCourt)
 		api.PUT("/admin/courts/:id/schedule", courtHandler.ConfigureSchedule)
+		api.POST("/admin/courts/:id/schedule/preview", courtHandler.GetAffectedBookings)
 		api.PATCH("/admin/courts/:id/schedule/slot", courtHandler.UpdateScheduleSlot)
 		api.PUT("/admin/sport-centers/:id", sportCenterHandler.Update)
 		api.PATCH("/admin/sport-centers/:id/settings", sportCenterHandler.UpdateSettings)

@@ -52,6 +52,7 @@ type BookingRepository interface {
 	FindByUserIDPaged(ctx context.Context, userID string, page, limit int, isOld bool) ([]domain.BookingSummary, int64, error)
 	CountConfirmedByUserID(ctx context.Context, userID string) (int64, error)
 	FindByUserIDAndStatusPaged(ctx context.Context, userID string, cancelled domain.BookingStatus, page int, limit int) ([]domain.BookingSummary, int64, error)
+	FindByCourtAndDateRange(ctx context.Context, courtID primitive.ObjectID, start, end time.Time) ([]domain.Booking, error)
 	Delete(ctx context.Context, id primitive.ObjectID) error
 	DeleteBySeriesID(ctx context.Context, seriesID string) error
 	GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name string, code string, status string) (*domain.AdminDashboardData, error)
@@ -537,12 +538,13 @@ type CourtRepository interface {
 
 type CourtUseCase struct {
 	repo        CourtRepository
+	bookingUseCase *BookingUseCase
 	centerRepo  SportCenterRepository
 	bookingRepo BookingRepository
 }
 
-func NewCourtUseCase(repo CourtRepository, centerRepo SportCenterRepository, bookingRepo BookingRepository) *CourtUseCase {
-	return &CourtUseCase{repo: repo, centerRepo: centerRepo, bookingRepo: bookingRepo}
+func NewCourtUseCase(repo CourtRepository, centerRepo SportCenterRepository, bookingRepo BookingRepository, bookingUC *BookingUseCase) *CourtUseCase {
+	return &CourtUseCase{repo: repo, centerRepo: centerRepo, bookingRepo: bookingRepo, bookingUseCase: bookingUC}
 }
 
 func (uc *CourtUseCase) CreateCourt(ctx context.Context, court *domain.Court) error {
@@ -850,4 +852,110 @@ func (uc *CourtUseCase) GetSportCenterSchedulesWithBookings(ctx context.Context,
 		})
 	}
 	return result, nil
+}
+
+func (uc *CourtUseCase) GetAffectedBookings(ctx context.Context, courtID primitive.ObjectID, dayOfWeek *int, newSchedule []domain.CourtSchedule) ([]domain.Booking, error) {
+	loc, _ := time.LoadLocation("America/Santiago")
+	now := time.Now().In(loc)
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	end := start.AddDate(1, 0, 0) // Look up to 1 year ahead
+
+	bookings, err := uc.bookingRepo.FindByCourtAndDateRange(ctx, courtID, start, end)
+	if err != nil {
+		return nil, err
+	}
+
+	affected := []domain.Booking{}
+	for _, b := range bookings {
+		if b.Status != domain.BookingStatusConfirmed {
+			continue
+		}
+
+		// Check if it matches the day of week (if provided)
+		if dayOfWeek != nil && int(b.Date.Weekday()) != *dayOfWeek {
+			continue
+		}
+
+		// Check if it's in the future
+		bookingTime := time.Date(b.Date.Year(), b.Date.Month(), b.Date.Day(), b.Hour, b.Minutes, 0, 0, loc)
+		if bookingTime.Before(now) {
+			continue
+		}
+
+		// Check if it matches any slot in the new schedule
+		found := false
+		for _, s := range newSchedule {
+			if s.Hour == b.Hour && s.Minutes == b.Minutes {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			affected = append(affected, b)
+		}
+	}
+
+	return affected, nil
+}
+
+func (uc *CourtUseCase) ConfigureScheduleV2(ctx context.Context, courtID primitive.ObjectID, schedule []domain.CourtSchedule, dayOfWeek *int, userID string) error {
+	court, err := uc.repo.FindByID(ctx, courtID)
+	if err != nil {
+		return err
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
+	if err != nil {
+		return err
+	}
+
+	// Verify permissions
+	isOwner := false
+	for _, u := range center.Users {
+		if u == userID {
+			isOwner = true
+			break
+		}
+	}
+	if !isOwner {
+		return fmt.Errorf("user is not authorized to configure schedule for this court")
+	}
+
+	// Find affected bookings
+	affected, err := uc.GetAffectedBookings(ctx, courtID, dayOfWeek, schedule)
+	if err != nil {
+		return err
+	}
+
+	// Cancel affected bookings
+	for _, b := range affected {
+		if uc.bookingUseCase != nil {
+			// El userID aquí es el del admin que está configurando, lo cual está bien
+			// CancelBooking ya maneja la lógica de reembolso y notificación
+			_ = uc.bookingUseCase.CancelBooking(ctx, b.ID, userID)
+		}
+	}
+
+	if dayOfWeek == nil {
+		court.Schedule = schedule
+	} else {
+		found := false
+		for i, ds := range court.DaySchedules {
+			if ds.DayOfWeek == *dayOfWeek {
+				court.DaySchedules[i].Schedule = schedule
+				found = true
+				break
+			}
+		}
+		if !found {
+			court.DaySchedules = append(court.DaySchedules, domain.DaySchedule{
+				DayOfWeek: *dayOfWeek,
+				Schedule:  schedule,
+			})
+		}
+	}
+
+	court.UpdatedAt = time.Now()
+	return uc.repo.Update(ctx, court)
 }

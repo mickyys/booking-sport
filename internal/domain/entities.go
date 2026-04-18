@@ -74,6 +74,12 @@ type Court struct {
 	CreatedAt     time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt     time.Time          `bson:"updated_at" json:"updated_at"`
 	Schedule      []CourtSchedule    `bson:"schedule" json:"schedule"`
+	DaySchedules  []DaySchedule      `bson:"day_schedules,omitempty" json:"day_schedules,omitempty"`
+}
+
+type DaySchedule struct {
+	DayOfWeek int             `bson:"day_of_week" json:"day_of_week"`
+	Schedule  []CourtSchedule `bson:"schedule" json:"schedule"`
 }
 
 type CourtSchedule struct {
@@ -111,6 +117,7 @@ type BookingSummary struct {
 	BookingCode        string             `bson:"booking_code" json:"booking_code"`
 	Date               time.Time          `bson:"date" json:"date"`
 	Hour               int                `bson:"hour" json:"hour"`
+	Minutes            int                `bson:"minutes" json:"minutes"`
 	CourtName          string             `bson:"court_name" json:"court_name"`
 	Status             BookingStatus      `bson:"status" json:"status"`
 	Price              float64            `bson:"price" json:"price"`
@@ -132,6 +139,7 @@ type RecurringSeries struct {
 	CourtName     string             `bson:"court_name" json:"court_name"`
 	SportCenterID primitive.ObjectID `bson:"sport_center_id,omitempty" json:"sport_center_id"`
 	Hour          int                `bson:"hour" json:"hour"`
+	Minutes       int                `bson:"minutes" json:"minutes"`
 	StartDate     time.Time          `bson:"start_date" json:"start_date"`
 	EndDate       time.Time          `bson:"end_date" json:"end_date"`
 	BookingsCount int                `bson:"bookings_count" json:"bookings_count"`
@@ -173,6 +181,7 @@ type Booking struct {
 	GuestDetails          *GuestDetails      `bson:"guest_details,omitempty" json:"guest_details,omitempty"`
 	Date                  time.Time          `bson:"date" json:"date"`
 	Hour                  int                `bson:"hour" json:"hour"`
+	Minutes               int                `bson:"minutes" json:"minutes"`
 	FinalPrice            float64            `bson:"final_price" json:"final_price"`
 	Price                 float64            `bson:"price" json:"price"`
 	PaidAmount            float64            `bson:"paid_amount" json:"paid_amount"`
@@ -254,6 +263,6 @@ type RecurringReservationResponse struct {
 	Status          RecurringReservationStatus `bson:"status" json:"status"`
 	CancelledBy     string                     `bson:"cancelled_by,omitempty" json:"cancelled_by,omitempty"`
 	CancelReason    string                     `bson:"cancel_reason,omitempty" json:"cancel_reason,omitempty"`
-	CreatedAt       time.Time                  `bson:"created_at" json:"created_at"`
-	UpdatedAt       time.Time                  `bson:"updated_at" json:"updated_at"`
+	CreatedAt     time.Time                  `bson:"created_at" json:"created_at"`
+	UpdatedAt     time.Time                  `bson:"updated_at" json:"updated_at"`
 }

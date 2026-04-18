@@ -887,3 +887,23 @@ func (r *BookingRepository) UndoBalancePayment(ctx context.Context, id primitive
 	_, err = r.collection.UpdateOne(ctx, filter, update)
 	return err
 }
+
+func (r *BookingRepository) FindByCourtAndDateRange(ctx context.Context, courtID primitive.ObjectID, start, end time.Time) ([]domain.Booking, error) {
+	cursor, err := r.collection.Find(ctx, bson.M{
+		"court_id": courtID,
+		"date": bson.M{
+			"$gte": start,
+			"$lte": end,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var bookings []domain.Booking
+	if err := cursor.All(ctx, &bookings); err != nil {
+		return nil, err
+	}
+	return bookings, nil
+}

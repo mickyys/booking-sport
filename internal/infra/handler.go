@@ -286,14 +286,24 @@ func (h *CourtHandler) ConfigureSchedule(c *gin.Context) {
 		return
 	}
 
-	var schedule []domain.CourtSchedule
-	if err := c.ShouldBindJSON(&schedule); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+	var req struct {
+		DayOfWeek *int                   `json:"day_of_week"`
+		Schedule  []domain.CourtSchedule `json:"schedule"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		// Fallback for old clients sending only schedule array
+		var schedule []domain.CourtSchedule
+		if err2 := c.ShouldBindJSON(&schedule); err2 == nil {
+			req.Schedule = schedule
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	// Validar horarios (0 a 23 y 0 a 59)
-	for _, s := range schedule {
+	for _, s := range req.Schedule {
 		if s.Hour < 0 || s.Hour > 23 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Hour must be between 0 and 23"})
 			return
@@ -304,13 +314,45 @@ func (h *CourtHandler) ConfigureSchedule(c *gin.Context) {
 		}
 	}
 
-	if err := h.useCase.ConfigureSchedule(c.Request.Context(), courtID, schedule, userIDStr); err != nil {
+	if err := h.useCase.ConfigureScheduleV2(c.Request.Context(), courtID, req.Schedule, req.DayOfWeek, userIDStr); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusNoContent, nil)
 }
+func (h *CourtHandler) GetAffectedBookings(c *gin.Context) {
+	idStr := c.Param("id")
+	courtID, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid court ID format"})
+		return
+	}
+
+	dayOfWeekStr := c.Query("day_of_week")
+	var dayOfWeek *int
+	if dayOfWeekStr != "" {
+		val, err := strconv.Atoi(dayOfWeekStr)
+		if err == nil {
+			dayOfWeek = &val
+		}
+	}
+
+	var schedule []domain.CourtSchedule
+	if err := c.ShouldBindJSON(&schedule); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	affected, err := h.useCase.GetAffectedBookings(c.Request.Context(), courtID, dayOfWeek, schedule)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, affected)
+}
+
 
 func (h *CourtHandler) UpdateScheduleSlot(c *gin.Context) {
 	idStr := c.Param("id")
