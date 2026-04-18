@@ -422,6 +422,8 @@ func (h *CourtHandler) CreateAdminCourt(c *gin.Context) {
 		SportCenterID primitive.ObjectID `json:"sport_center_id"`
 		Name          string             `json:"name"`
 		Description   string             `json:"description"`
+		ImageURL      string             `json:"image_url"`
+		YPosition     int                `json:"y_position"`
 	}
 
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -433,6 +435,8 @@ func (h *CourtHandler) CreateAdminCourt(c *gin.Context) {
 		SportCenterID: body.SportCenterID,
 		Name:          body.Name,
 		Description:   body.Description,
+		ImageURL:      body.ImageURL,
+		YPosition:     body.YPosition,
 	}
 
 	if err := h.useCase.CreateAdminCourt(c.Request.Context(), court, userIDStr); err != nil {
@@ -466,6 +470,8 @@ func (h *CourtHandler) UpdateAdminCourt(c *gin.Context) {
 	var body struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
+		ImageURL    string `json:"image_url"`
+		YPosition   int    `json:"y_position"`
 	}
 
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -476,6 +482,8 @@ func (h *CourtHandler) UpdateAdminCourt(c *gin.Context) {
 	updatedCourt := &domain.Court{
 		Name:        body.Name,
 		Description: body.Description,
+		ImageURL:    body.ImageURL,
+		YPosition:   body.YPosition,
 	}
 
 	if err := h.useCase.UpdateAdminCourt(c.Request.Context(), courtID, updatedCourt, userIDStr); err != nil {
@@ -620,7 +628,7 @@ func (h *SportCenterHandler) GetSchedulesWithBookings(c *gin.Context) {
 }
 
 // GetAdminSchedulesWithBookings retorna schedules con detalles del cliente
-// para los centros asociados al usuario autenticado. No requiere el id del centro.
+// para los centros asociados al usuario autenticado. Si se pasa centerId, solo retorna ese centro.
 func (h *SportCenterHandler) GetAdminSchedulesWithBookings(c *gin.Context) {
 	// Obtener user_id del contexto
 	userID, exists := c.Get("user_id")
@@ -645,7 +653,8 @@ func (h *SportCenterHandler) GetAdminSchedulesWithBookings(c *gin.Context) {
 		return
 	}
 
-	// Parámetros de fecha y 'all'
+	// Parámetros de fecha, 'all' y 'centerId' opcional
+	centerIDParam := c.Query("centerId")
 	dateStr := c.Query("date")
 	loc, _ := time.LoadLocation("America/Santiago")
 	date := time.Now().In(loc)
@@ -658,9 +667,29 @@ func (h *SportCenterHandler) GetAdminSchedulesWithBookings(c *gin.Context) {
 
 	all := c.Query("all") == "true"
 
-	// Collect all schedules from all centers (same format as public endpoint)
+	// Si se pasó centerId, filtrar solo ese centro
+	var filteredCenters []domain.SportCenter
+	if centerIDParam != "" {
+		centerID, err := primitive.ObjectIDFromHex(centerIDParam)
+		if err == nil {
+			for _, c := range centers {
+				if c.ID == centerID {
+					filteredCenters = append(filteredCenters, c)
+					break
+				}
+			}
+		}
+		if len(filteredCenters) == 0 {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Centro no autorizado"})
+			return
+		}
+	} else {
+		filteredCenters = centers
+	}
+
+	// Collect all schedules from filtered centers (same format as public endpoint)
 	var allSchedules []app.CourtScheduleResponse
-	for _, center := range centers {
+	for _, center := range filteredCenters {
 		schedules, err := h.useCase.GetSportCenterSchedulesWithBookingDetails(c.Request.Context(), center.ID, date, all)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

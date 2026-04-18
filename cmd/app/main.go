@@ -67,9 +67,10 @@ func main() {
 	courtRepo := mongo.NewCourtRepository(db)
 	userRepo := mongo.NewUserRepository(db)
 	bookingRepo := mongo.NewBookingRepository(db)
+	recurringReservationRepo := mongo.NewRecurringReservationRepository(db)
 
 	// 4. Inicializar Casos de Uso (Application Layer)
-	sportCenterUC := app.NewSportCenterUseCase(sportCenterRepo, courtRepo, userRepo, bookingRepo)
+	sportCenterUC := app.NewSportCenterUseCase(sportCenterRepo, courtRepo, userRepo, bookingRepo, recurringReservationRepo)
 	courtUC := app.NewCourtUseCase(courtRepo, sportCenterRepo, bookingRepo)
 	// Inicializar Mailer (Mailgun) si está configurado
 	var bookingMailer app.Mailer
@@ -85,7 +86,7 @@ func main() {
 		log.Println("Mailgun mailer initialized")
 	}
 
-	bookingUC := app.NewBookingUseCase(bookingRepo, courtRepo, sportCenterRepo, userRepo, bookingMailer)
+	bookingUC := app.NewBookingUseCase(bookingRepo, courtRepo, sportCenterRepo, userRepo, bookingMailer, recurringReservationRepo)
 
 	// 5. Inicializar Manejadores (Presentation Layer)
 	sportCenterHandler := infra.NewSportCenterHandler(sportCenterUC)
@@ -170,6 +171,13 @@ func main() {
 		api.POST("/admin/bookings/:id/pay-balance", bookingHandler.MarkPartialPaymentAsPaid)
 		api.PATCH("/admin/bookings/:id/undo-pay-balance", bookingHandler.UndoBalancePayment)
 		api.DELETE("/admin/bookings/:id", bookingHandler.DeleteBooking)
+
+		// Recurring Reservation routes
+		api.POST("/admin/recurring", bookingHandler.CreateRecurringReservation)
+		api.GET("/admin/recurring", bookingHandler.GetRecurringReservationsByCenter)
+		api.GET("/admin/recurring/:id", bookingHandler.GetRecurringReservation)
+		api.GET("/admin/recurring/court/:courtId", bookingHandler.GetRecurringReservationsByCourt)
+		api.DELETE("/admin/recurring/:id", bookingHandler.CancelRecurringReservation)
 	}
 
 	// 7. Iniciar Servidor
