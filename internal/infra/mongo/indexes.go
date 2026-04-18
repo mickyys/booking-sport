@@ -32,6 +32,10 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 		return err
 	}
 
+	if err := ensureRecurringReservationIndexes(ctx, db); err != nil {
+		return err
+	}
+
 	log.Println("[MONGODB] All indexes created successfully")
 	return nil
 }
@@ -205,5 +209,41 @@ func ensureUserIndexes(ctx context.Context, db *mongo.Database) error {
 	}
 
 	log.Println("[MONGODB] users indexes created")
+	return nil
+}
+
+func ensureRecurringReservationIndexes(ctx context.Context, db *mongo.Database) error {
+	collection := db.Collection("recurring_reservations")
+
+	indexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}},
+			Options: options.Index().SetName("idx_recurring_sport_center_id"),
+		},
+		{
+			Keys:    bson.D{{Key: "court_id", Value: 1}},
+			Options: options.Index().SetName("idx_recurring_court_id"),
+		},
+		{
+			Keys: bson.D{
+				{Key: "court_id", Value: 1},
+				{Key: "hour", Value: 1},
+				{Key: "status", Value: 1},
+			},
+			Options: options.Index().SetName("idx_recurring_court_hour_status"),
+		},
+		{
+			Keys:    bson.D{{Key: "status", Value: 1}},
+			Options: options.Index().SetName("idx_recurring_status"),
+		},
+	}
+
+	_, err := collection.Indexes().CreateMany(ctx, indexes)
+	if err != nil {
+		log.Printf("[MONGODB] Error creating recurring_reservations indexes: %v", err)
+		return err
+	}
+
+	log.Println("[MONGODB] recurring_reservations indexes created")
 	return nil
 }

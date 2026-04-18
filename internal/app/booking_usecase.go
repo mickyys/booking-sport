@@ -25,20 +25,22 @@ func generateBookingCode() string {
 }
 
 type BookingUseCase struct {
-	repo       BookingRepository
-	courtRepo  CourtRepository
-	centerRepo SportCenterRepository
-	userRepo   UserRepository
-	mailer     Mailer
+	repo                     BookingRepository
+	courtRepo                CourtRepository
+	centerRepo               SportCenterRepository
+	userRepo                 UserRepository
+	mailer                   Mailer
+	recurringReservationRepo RecurringReservationRepository
 }
 
-func NewBookingUseCase(repo BookingRepository, courtRepo CourtRepository, centerRepo SportCenterRepository, userRepo UserRepository, mailer Mailer) *BookingUseCase {
+func NewBookingUseCase(repo BookingRepository, courtRepo CourtRepository, centerRepo SportCenterRepository, userRepo UserRepository, mailer Mailer, recurringRepo RecurringReservationRepository) *BookingUseCase {
 	return &BookingUseCase{
-		repo:       repo,
-		courtRepo:  courtRepo,
-		centerRepo: centerRepo,
-		userRepo:   userRepo,
-		mailer:     mailer,
+		repo:                     repo,
+		courtRepo:                courtRepo,
+		centerRepo:               centerRepo,
+		userRepo:                 userRepo,
+		mailer:                   mailer,
+		recurringReservationRepo: recurringRepo,
 	}
 }
 
@@ -51,7 +53,16 @@ func (uc *BookingUseCase) DeleteSeries(ctx context.Context, seriesID string) err
 	return uc.repo.DeleteBySeriesID(ctx, seriesID)
 }
 
-func (uc *BookingUseCase) GetRecurringSeries(ctx context.Context, userID string) ([]domain.RecurringSeries, error) {
+func (uc *BookingUseCase) GetRecurringSeries(ctx context.Context, userID string, sportCenterID string) ([]domain.RecurringSeries, error) {
+	// Si se especifica un centro, filtramos solo por ese centro
+	if sportCenterID != "" {
+		centerID, err := primitive.ObjectIDFromHex(sportCenterID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid sport_center_id: %w", err)
+		}
+		return uc.repo.GetRecurringSeries(ctx, []primitive.ObjectID{centerID}, sportCenterID)
+	}
+
 	// Buscamos los centros deportivos asociados al usuario
 	centers, err := uc.centerRepo.FindByUserID(ctx, userID)
 	if err != nil {
@@ -69,7 +80,7 @@ func (uc *BookingUseCase) GetRecurringSeries(ctx context.Context, userID string)
 		centerIDs = append(centerIDs, c.ID)
 	}
 
-	return uc.repo.GetRecurringSeries(ctx, centerIDs)
+	return uc.repo.GetRecurringSeries(ctx, centerIDs, "")
 }
 
 func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking *domain.Booking) (string, error) {
@@ -1017,4 +1028,218 @@ func (uc *BookingUseCase) UndoBalancePayment(ctx context.Context, id primitive.O
 	}
 
 	return uc.repo.UndoBalancePayment(ctx, id, userID)
+}
+
+// ==================== Recurring Reservation Methods ====================
+
+func (uc *BookingUseCase) CreateRecurringReservation(ctx context.Context, reservation *domain.RecurringReservation, date time.Time) error {
+	court, err := uc.courtRepo.FindByID(ctx, reservation.CourtID)
+	if err != nil {
+		return fmt.Errorf("court not found: %w", err)
+	}
+
+	// Calcular el día de la semana (0=domingo, 1=lunes, ..., 6=sábado)
+	dayOfWeek := int(date.Weekday())
+	dayNames := []string{"domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"}
+
+	reservation.DayOfWeek = dayOfWeek
+	reservation.DayOfWeekName = dayNames[dayOfWeek]
+
+	// Verificar si ya existe una reserva recurrente activa para esta cancha, hora y día de la semana
+	existing, err := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, reservation.CourtID, reservation.Hour, dayOfWeek)
+	if err == nil && existing != nil {
+		return fmt.Errorf("ya existe una reserva recurrente semanal para esta cancha, hora y día")
+	}
+
+	// Verificar que el precio no sea 0
+	if reservation.Price <= 0 {
+		// Obtener precio del schedule
+		for _, s := range court.Schedule {
+			if s.Hour == reservation.Hour {
+				reservation.Price = s.Price
+				break
+			}
+		}
+	}
+
+	reservation.SportCenterID = court.SportCenterID
+	reservation.Status = domain.RecurringReservationStatusActive
+	reservation.CreatedAt = time.Now()
+	reservation.UpdatedAt = time.Now()
+
+	if err := uc.recurringReservationRepo.Create(ctx, reservation); err != nil {
+		return err
+	}
+
+	log.Printf("[RECURRING] Created weekly recurring reservation for court %s at %d:00 every %s - Customer: %s\n",
+		court.Name, reservation.Hour, reservation.DayOfWeekName, reservation.CustomerName)
+
+	return nil
+}
+
+func (uc *BookingUseCase) GetRecurringReservationByID(ctx context.Context, id primitive.ObjectID) (*domain.RecurringReservationResponse, error) {
+	reservation, err := uc.recurringReservationRepo.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	court, err := uc.courtRepo.FindByID(ctx, reservation.CourtID)
+	if err != nil {
+		return nil, fmt.Errorf("court not found: %w", err)
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
+	if err != nil {
+		return nil, fmt.Errorf("sport center not found: %w", err)
+	}
+
+	return &domain.RecurringReservationResponse{
+		ID:              reservation.ID,
+		SportCenterID:   reservation.SportCenterID,
+		SportCenterName: center.Name,
+		CourtID:         reservation.CourtID,
+		CourtName:       court.Name,
+		CustomerName:    reservation.CustomerName,
+		CustomerPhone:   reservation.CustomerPhone,
+		Hour:            reservation.Hour,
+		DayOfWeek:       reservation.DayOfWeek,
+		DayOfWeekName:   reservation.DayOfWeekName,
+		Price:           reservation.Price,
+		Notes:           reservation.Notes,
+		Status:          reservation.Status,
+		CancelledBy:     reservation.CancelledBy,
+		CancelReason:    reservation.CancelReason,
+		CreatedAt:       reservation.CreatedAt,
+		UpdatedAt:       reservation.UpdatedAt,
+	}, nil
+}
+
+func (uc *BookingUseCase) GetRecurringReservationsByCenter(ctx context.Context, userID string) ([]domain.RecurringReservationResponse, error) {
+	centers, err := uc.centerRepo.FindByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(centers) == 0 {
+		return []domain.RecurringReservationResponse{}, nil
+	}
+
+	centerID := centers[0].ID
+
+	reservations, err := uc.recurringReservationRepo.FindByCenterID(ctx, centerID)
+	if err != nil {
+		return nil, err
+	}
+
+	court, err := uc.courtRepo.FindByCenterID(ctx, centerID)
+	if err != nil {
+		return nil, err
+	}
+	courtMap := make(map[primitive.ObjectID]string)
+	for _, c := range court {
+		courtMap[c.ID] = c.Name
+	}
+
+	centerName := centers[0].Name
+
+	results := make([]domain.RecurringReservationResponse, 0, len(reservations))
+	for _, r := range reservations {
+		results = append(results, domain.RecurringReservationResponse{
+			ID:              r.ID,
+			SportCenterID:   r.SportCenterID,
+			SportCenterName: centerName,
+			CourtID:         r.CourtID,
+			CourtName:       courtMap[r.CourtID],
+			CustomerName:    r.CustomerName,
+			CustomerPhone:   r.CustomerPhone,
+			Hour:            r.Hour,
+			DayOfWeek:       r.DayOfWeek,
+			DayOfWeekName:   r.DayOfWeekName,
+			Price:           r.Price,
+			Notes:           r.Notes,
+			Status:          r.Status,
+			CancelledBy:     r.CancelledBy,
+			CancelReason:    r.CancelReason,
+			CreatedAt:       r.CreatedAt,
+			UpdatedAt:       r.UpdatedAt,
+		})
+	}
+
+	return results, nil
+}
+
+func (uc *BookingUseCase) GetRecurringReservationsByCourt(ctx context.Context, courtID primitive.ObjectID) ([]domain.RecurringReservationResponse, error) {
+	reservations, err := uc.recurringReservationRepo.FindByCourtID(ctx, courtID)
+	if err != nil {
+		return nil, err
+	}
+
+	court, err := uc.courtRepo.FindByID(ctx, courtID)
+	if err != nil {
+		return nil, fmt.Errorf("court not found: %w", err)
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
+	centerName := ""
+	if err == nil {
+		centerName = center.Name
+	}
+
+	dayNames := []string{"domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"}
+
+	results := make([]domain.RecurringReservationResponse, 0, len(reservations))
+	for _, r := range reservations {
+		dayOfWeekName := ""
+		if r.DayOfWeek >= 0 && r.DayOfWeek <= 6 {
+			dayOfWeekName = dayNames[r.DayOfWeek]
+		}
+
+		results = append(results, domain.RecurringReservationResponse{
+			ID:              r.ID,
+			SportCenterID:   r.SportCenterID,
+			SportCenterName: centerName,
+			CourtID:         r.CourtID,
+			CourtName:       court.Name,
+			CustomerName:    r.CustomerName,
+			CustomerPhone:   r.CustomerPhone,
+			Hour:            r.Hour,
+			DayOfWeek:       r.DayOfWeek,
+			DayOfWeekName:   dayOfWeekName,
+			Price:           r.Price,
+			Notes:           r.Notes,
+			Status:          r.Status,
+			CancelledBy:     r.CancelledBy,
+			CancelReason:    r.CancelReason,
+			CreatedAt:       r.CreatedAt,
+			UpdatedAt:       r.UpdatedAt,
+		})
+	}
+
+	return results, nil
+}
+
+func (uc *BookingUseCase) CancelRecurringReservation(ctx context.Context, id primitive.ObjectID, cancelledBy string, reason string) error {
+	reservation, err := uc.recurringReservationRepo.FindByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("recurring reservation not found: %w", err)
+	}
+
+	if reservation.Status == domain.RecurringReservationStatusCancelled {
+		return fmt.Errorf("recurring reservation is already cancelled")
+	}
+
+	return uc.recurringReservationRepo.Cancel(ctx, id, cancelledBy, reason)
+}
+
+func (uc *BookingUseCase) IsSlotAvailableForRecurring(ctx context.Context, courtID primitive.ObjectID, hour int) (bool, error) {
+	// Check if there's already an active recurring reservation
+	existing, err := uc.recurringReservationRepo.FindActiveByCourtAndHour(ctx, courtID, hour)
+	if err == nil && existing != nil {
+		return false, nil
+	}
+
+	// Check for confirmed bookings today (or any day since it's weekly recurring)
+	// For recurring reservations, we don't check specific date bookings
+	// because they would override this anyway
+	return true, nil
 }

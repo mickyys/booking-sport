@@ -495,15 +495,19 @@ func (r *BookingRepository) Delete(ctx context.Context, id primitive.ObjectID) e
 	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": id})
 	return err
 }
-func (r *BookingRepository) GetRecurringSeries(ctx context.Context, centerIDs []primitive.ObjectID) ([]domain.RecurringSeries, error) {
+func (r *BookingRepository) GetRecurringSeries(ctx context.Context, centerIDs []primitive.ObjectID, sportCenterID string) ([]domain.RecurringSeries, error) {
 	// Si no tiene centros, devolvemos lista vacía
-	if len(centerIDs) == 0 {
+	if len(centerIDs) == 0 && sportCenterID == "" {
 		return []domain.RecurringSeries{}, nil
 	}
 
 	match := bson.M{
-		"series_id":       bson.M{"$exists": true, "$ne": ""},
-		"sport_center_id": bson.M{"$in": centerIDs},
+		"series_id": bson.M{"$exists": true, "$ne": ""},
+	}
+	if sportCenterID != "" {
+		match["sport_center_id"] = sportCenterID
+	} else {
+		match["sport_center_id"] = bson.M{"$in": centerIDs}
 	}
 
 	pipeline := mongo.Pipeline{
@@ -520,14 +524,17 @@ func (r *BookingRepository) GetRecurringSeries(ctx context.Context, centerIDs []
 			"preserveNullAndEmptyArrays": true,
 		}}},
 		{{Key: "$group", Value: bson.M{
-			"_id":            "$series_id",
-			"customer_name":  bson.M{"$first": "$customer_name"},
-			"customer_phone": bson.M{"$first": "$customer_phone"},
-			"court_name":     bson.M{"$first": "$court_info.name"},
-			"hour":           bson.M{"$first": "$hour"},
-			"start_date":     bson.M{"$min": "$date"},
-			"end_date":       bson.M{"$max": "$date"},
-			"bookings_count": bson.M{"$sum": 1},
+			"_id":             "$series_id",
+			"customer_name":   bson.M{"$first": "$customer_name"},
+			"customer_phone":  bson.M{"$first": "$customer_phone"},
+			"court_name":      bson.M{"$first": "$court_info.name"},
+			"court_id":        bson.M{"$first": "$court_id"},
+			"sport_center_id": bson.M{"$first": "$sport_center_id"},
+			"hour":            bson.M{"$first": "$hour"},
+			"start_date":      bson.M{"$min": "$date"},
+			"end_date":        bson.M{"$max": "$date"},
+			"bookings_count":  bson.M{"$sum": 1},
+			"price":           bson.M{"$first": "$price"},
 		}}},
 	}
 

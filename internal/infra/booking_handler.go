@@ -63,14 +63,35 @@ func (h *BookingHandler) GetRecurringSeries(c *gin.Context) {
 	}
 
 	userIDStr := userID.(string)
+	centerID := c.Query("sport_center_id")
 
-	series, err := h.useCase.GetRecurringSeries(c.Request.Context(), userIDStr)
+	series, err := h.useCase.GetRecurringSeries(c.Request.Context(), userIDStr, centerID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": series})
+	// Map to frontend format
+	response := make([]map[string]interface{}, len(series))
+	for i, s := range series {
+		response[i] = map[string]interface{}{
+			"id":                 s.SeriesID,
+			"customer_name":      s.CustomerName,
+			"customer_phone":     s.CustomerPhone,
+			"court_name":         s.CourtName,
+			"court_id":           s.CourtID.Hex(),
+			"sport_center_id":    s.SportCenterID.Hex(),
+			"hour":               s.Hour,
+			"start_date":         s.StartDate.Format("2006-01-02"),
+			"end_date":           s.EndDate.Format("2006-01-02"),
+			"total_bookings":     s.BookingsCount,
+			"confirmed_bookings": s.BookingsCount,
+			"price":              s.Price,
+			"created_at":         s.StartDate.Format(time.RFC3339),
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": response})
 }
 
 func (h *BookingHandler) CreateFintocPaymentIntent(c *gin.Context) {
@@ -378,23 +399,23 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 	// Nueva estructura de respuesta para evitar exponer IDs sensibles y agregar nombres
 	response := gin.H{
 		"booking_detail": gin.H{
-			"id":                booking.ID,
-			"user_id":           booking.UserID,
-			"court_id":          booking.CourtID,
-			"court_name":        court.Name,
-			"sport_center_id":   court.SportCenterID,
-			"sport_center_name": center.Name,
-			"date":              booking.Date,
-			"hour":              booking.Hour,
-			"price":             booking.Price,
-			"status":            booking.Status,
-			"payment_method":    booking.PaymentMethod,
-			"booking_code":      booking.BookingCode,
-			"created_at":        booking.CreatedAt,
-			"updated_at":        booking.UpdatedAt,
-			"paid_amount":       booking.PaidAmount,
-			"pending_amount":    booking.PendingAmount,
-			"is_partial_payment": booking.IsPartialPayment,
+			"id":                   booking.ID,
+			"user_id":              booking.UserID,
+			"court_id":             booking.CourtID,
+			"court_name":           court.Name,
+			"sport_center_id":      court.SportCenterID,
+			"sport_center_name":    center.Name,
+			"date":                 booking.Date,
+			"hour":                 booking.Hour,
+			"price":                booking.Price,
+			"status":               booking.Status,
+			"payment_method":       booking.PaymentMethod,
+			"booking_code":         booking.BookingCode,
+			"created_at":           booking.CreatedAt,
+			"updated_at":           booking.UpdatedAt,
+			"paid_amount":          booking.PaidAmount,
+			"pending_amount":       booking.PendingAmount,
+			"is_partial_payment":   booking.IsPartialPayment,
 			"partial_payment_paid": booking.PartialPaymentPaid,
 		},
 		"hours_until_match": hoursUntilMatch,
@@ -491,23 +512,23 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 
 	response := gin.H{
 		"booking_detail": gin.H{
-			"id":                booking.ID,
-			"user_id":           booking.UserID,
-			"court_id":          booking.CourtID,
-			"court_name":        court.Name,
-			"sport_center_id":   court.SportCenterID,
-			"sport_center_name": center.Name,
-			"date":              booking.Date,
-			"hour":              booking.Hour,
-			"price":             booking.Price,
-			"status":            booking.Status,
-			"payment_method":    booking.PaymentMethod,
-			"booking_code":      booking.BookingCode,
-			"created_at":        booking.CreatedAt,
-			"updated_at":        booking.UpdatedAt,
-			"paid_amount":       booking.PaidAmount,
-			"pending_amount":    booking.PendingAmount,
-			"is_partial_payment": booking.IsPartialPayment,
+			"id":                   booking.ID,
+			"user_id":              booking.UserID,
+			"court_id":             booking.CourtID,
+			"court_name":           court.Name,
+			"sport_center_id":      court.SportCenterID,
+			"sport_center_name":    center.Name,
+			"date":                 booking.Date,
+			"hour":                 booking.Hour,
+			"price":                booking.Price,
+			"status":               booking.Status,
+			"payment_method":       booking.PaymentMethod,
+			"booking_code":         booking.BookingCode,
+			"created_at":           booking.CreatedAt,
+			"updated_at":           booking.UpdatedAt,
+			"paid_amount":          booking.PaidAmount,
+			"pending_amount":       booking.PendingAmount,
+			"is_partial_payment":   booking.IsPartialPayment,
 			"partial_payment_paid": booking.PartialPaymentPaid,
 		},
 		"hours_until_match": hoursUntilMatch,
@@ -550,13 +571,17 @@ func (h *BookingHandler) CancelByBookingCode(c *gin.Context) {
 }
 
 func (h *BookingHandler) CreateInternalBooking(c *gin.Context) {
-	var booking domain.Booking
+	var booking struct {
+		domain.Booking
+		SeriesID string `json:"series_id"`
+	}
 	if err := c.ShouldBindJSON(&booking); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	booking.Booking.SeriesID = booking.SeriesID
 
-	err := h.useCase.CreateInternalBooking(c.Request.Context(), &booking, "internal")
+	err := h.useCase.CreateInternalBooking(c.Request.Context(), &booking.Booking, "internal")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -784,4 +809,114 @@ func (h *BookingHandler) UndoBalancePayment(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Balance payment undone successfully"})
+}
+
+// ==================== Recurring Reservation Handlers ====================
+
+func (h *BookingHandler) CreateRecurringReservation(c *gin.Context) {
+	var input struct {
+		domain.RecurringReservation
+		Date string `json:"date"` // Format: "2006-01-02"
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Parsear la fecha
+	date, err := time.Parse("2006-01-02", input.Date)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date format, expected YYYY-MM-DD"})
+		return
+	}
+
+	err = h.useCase.CreateRecurringReservation(c.Request.Context(), &input.RecurringReservation, date)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, input.RecurringReservation)
+}
+
+func (h *BookingHandler) GetRecurringReservation(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid recurring reservation id"})
+		return
+	}
+
+	reservation, err := h.useCase.GetRecurringReservationByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "recurring reservation not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, reservation)
+}
+
+func (h *BookingHandler) GetRecurringReservationsByCenter(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in token"})
+		return
+	}
+
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid user_id type"})
+		return
+	}
+
+	reservations, err := h.useCase.GetRecurringReservationsByCenter(c.Request.Context(), userIDStr)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": reservations})
+}
+
+func (h *BookingHandler) GetRecurringReservationsByCourt(c *gin.Context) {
+	courtIDStr := c.Param("courtId")
+	courtID, err := primitive.ObjectIDFromHex(courtIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid court id"})
+		return
+	}
+
+	reservations, err := h.useCase.GetRecurringReservationsByCourt(c.Request.Context(), courtID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": reservations})
+}
+
+func (h *BookingHandler) CancelRecurringReservation(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid recurring reservation id"})
+		return
+	}
+
+	var body struct {
+		CancelledBy string `json:"cancelled_by"`
+		Reason      string `json:"reason"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		body.CancelledBy = "admin"
+		body.Reason = "Cancelled by admin"
+	}
+
+	err = h.useCase.CancelRecurringReservation(c.Request.Context(), id, body.CancelledBy, body.Reason)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
 }

@@ -55,7 +55,20 @@ type BookingRepository interface {
 	Delete(ctx context.Context, id primitive.ObjectID) error
 	DeleteBySeriesID(ctx context.Context, seriesID string) error
 	GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name string, code string, status string) (*domain.AdminDashboardData, error)
-	GetRecurringSeries(ctx context.Context, centerIDs []primitive.ObjectID) ([]domain.RecurringSeries, error)
+	GetRecurringSeries(ctx context.Context, centerIDs []primitive.ObjectID, sportCenterID string) ([]domain.RecurringSeries, error)
+}
+
+type RecurringReservationRepository interface {
+	Create(ctx context.Context, reservation *domain.RecurringReservation) error
+	FindByID(ctx context.Context, id primitive.ObjectID) (*domain.RecurringReservation, error)
+	FindByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int) (*domain.RecurringReservation, error)
+	FindByCourtHourAndDay(ctx context.Context, courtID primitive.ObjectID, hour int, dayOfWeek int) (*domain.RecurringReservation, error)
+	FindActiveByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int) (*domain.RecurringReservation, error)
+	FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error)
+	FindByCourtID(ctx context.Context, courtID primitive.ObjectID) ([]domain.RecurringReservation, error)
+	Update(ctx context.Context, reservation *domain.RecurringReservation) error
+	Cancel(ctx context.Context, id primitive.ObjectID, cancelledBy string, reason string) error
+	Delete(ctx context.Context, id primitive.ObjectID) error
 }
 
 // Mailer envía correos transaccionales (p. ej. confirmación de reserva)
@@ -65,10 +78,11 @@ type Mailer interface {
 	SendContactEmail(ctx context.Context, to string, name string, email string, phone string, sportCenterName string, message string) error
 }
 type SportCenterUseCase struct {
-	repo        SportCenterRepository
-	courtRepo   CourtRepository
-	userRepo    UserRepository
-	bookingRepo BookingRepository
+	repo                     SportCenterRepository
+	courtRepo                CourtRepository
+	userRepo                 UserRepository
+	bookingRepo              BookingRepository
+	recurringReservationRepo RecurringReservationRepository
 }
 type EnrichedCourtSchedule struct {
 	Hour            int                 `json:"hour"`
@@ -90,6 +104,9 @@ type EnrichedCourtSchedule struct {
 	IsPartialPayment      bool    `json:"is_partial_payment"`
 	PartialPaymentPaid    bool    `json:"partial_payment_paid"`
 	PartialPaymentEnabled *bool   `json:"partial_payment_enabled,omitempty"`
+	// Información de reserva recurrente semanal
+	IsRecurringWeekly      bool   `json:"is_recurring_weekly,omitempty"`
+	RecurringReservationID string `json:"recurring_reservation_id,omitempty"`
 }
 
 type CourtScheduleResponse struct {
@@ -153,6 +170,32 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 		bookingsByCourt[b.CourtID][b.Hour] = &id
 	}
 
+	// Obtener todas las reservas recurrentes activas para este centro
+	var recurringReservations []domain.RecurringReservation
+	if uc.recurringReservationRepo != nil {
+		recurringReservations, _ = uc.recurringReservationRepo.FindByCenterID(ctx, centerID)
+	}
+
+	// Calcular día de la semana de la fecha consultada
+	dayOfWeek := int(searchDate.Weekday())
+
+	// Agrupar reservas recurrentes por courtID y hora (filtrar por día de la semana)
+	recurringByCourt := make(map[primitive.ObjectID]map[int]bool)
+	for i := range recurringReservations {
+		r := &recurringReservations[i]
+		if r.Status != domain.RecurringReservationStatusActive {
+			continue
+		}
+		// Solo incluir si coincide el día de la semana
+		if r.DayOfWeek != dayOfWeek {
+			continue
+		}
+		if recurringByCourt[r.CourtID] == nil {
+			recurringByCourt[r.CourtID] = make(map[int]bool)
+		}
+		recurringByCourt[r.CourtID][r.Hour] = true
+	}
+
 	nowInLoc := time.Now().In(loc)
 
 	result := []CourtScheduleResponse{}
@@ -161,6 +204,8 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 		if bookedHours == nil {
 			bookedHours = make(map[int]*primitive.ObjectID)
 		}
+
+		recurringHours := recurringByCourt[court.ID]
 
 		schedules := []EnrichedCourtSchedule{}
 		for _, s := range court.Schedule {
@@ -185,7 +230,14 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 				sch.Status = "passed"
 			}
 
-			if bID, exists := bookedHours[s.Hour]; exists {
+			// Check for recurring reservation first (takes priority)
+			if recurringHours != nil && recurringHours[s.Hour] {
+				if slotTime.Before(nowInLoc) {
+					sch.Status = "passed"
+				} else {
+					sch.Status = "unavailable" // Reservado semanalmente
+				}
+			} else if bID, exists := bookedHours[s.Hour]; exists {
 				sch.Status = "booked"
 				sch.BookingID = bID
 
@@ -216,13 +268,14 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 			Schedule: schedules,
 		})
 	}
+
 	return result, nil
 }
 
 // GetSportCenterSchedulesWithBookingDetails retorna schedules enriquecidos
 // con información del cliente (nombre, email, teléfono y código de reserva)
 // para un centro y fecha específica. Solo incluye información de reservas
-// confirmadas.
+// confirmadas. También incluye información de reservas recurrentes semanales.
 func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx context.Context, centerID primitive.ObjectID, date time.Time, all bool) ([]CourtScheduleResponse, error) {
 	courts, err := uc.courtRepo.FindByCenterID(ctx, centerID)
 	if err != nil {
@@ -248,6 +301,28 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 		bookingsByCourt[b.CourtID][b.Hour] = &b
 	}
 
+	// Obtener todas las reservas recurrentes activas para este centro
+	var recurringReservations []domain.RecurringReservation
+	if uc.recurringReservationRepo != nil {
+		recurringReservations, _ = uc.recurringReservationRepo.FindByCenterID(ctx, centerID)
+	}
+
+	// Calcular día de la semana de la fecha consultada
+	dayOfWeek := int(searchDate.Weekday())
+
+	// Agrupar reservas recurrentes por courtID, hora y día de la semana
+	recurringByCourt := make(map[primitive.ObjectID]map[int]*domain.RecurringReservation)
+	for i := range recurringReservations {
+		r := &recurringReservations[i]
+		if r.Status != domain.RecurringReservationStatusActive {
+			continue
+		}
+		if recurringByCourt[r.CourtID] == nil {
+			recurringByCourt[r.CourtID] = make(map[int]*domain.RecurringReservation)
+		}
+		recurringByCourt[r.CourtID][r.Hour] = r
+	}
+
 	nowInLoc := time.Now().In(loc)
 
 	result := []CourtScheduleResponse{}
@@ -255,6 +330,11 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 		bookedHours := bookingsByCourt[court.ID]
 		if bookedHours == nil {
 			bookedHours = make(map[int]*domain.Booking)
+		}
+
+		recurringHours := recurringByCourt[court.ID]
+		if recurringHours == nil {
+			recurringHours = make(map[int]*domain.RecurringReservation)
 		}
 
 		schedules := []EnrichedCourtSchedule{}
@@ -272,6 +352,24 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 			slotTime := time.Date(date.Year(), date.Month(), date.Day(), s.Hour, s.Minutes, 0, 0, loc)
 			if slotTime.Before(nowInLoc) && sch.Status == "available" {
 				sch.Status = "passed"
+			}
+
+			// Check for recurring reservation first (takes priority for availability)
+			// Solo considerar si coincide el día de la semana
+			if recurring, exists := recurringHours[s.Hour]; exists && recurring != nil && recurring.DayOfWeek == dayOfWeek {
+				sch.IsRecurringWeekly = true
+				sch.RecurringReservationID = recurring.ID.Hex()
+				sch.CustomerName = recurring.CustomerName
+				sch.CustomerPhone = recurring.CustomerPhone
+				sch.Price = recurring.Price
+				// Si no hay reserva específica para esta fecha, marcar como reservado recurrente
+				if _, hasBooking := bookedHours[s.Hour]; !hasBooking {
+					if slotTime.Before(nowInLoc) {
+						sch.Status = "passed_booked"
+					} else {
+						sch.Status = "recurring_booked"
+					}
+				}
 			}
 
 			if b, exists := bookedHours[s.Hour]; exists && b != nil {
@@ -309,7 +407,7 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 				}
 			}
 
-			if all || (sch.Status == "available" || sch.Status == "booked" || sch.Status == "passed_booked" || sch.Status == "closed" || sch.Status == "passed") {
+			if all || (sch.Status == "available" || sch.Status == "booked" || sch.Status == "passed_booked" || sch.Status == "closed" || sch.Status == "passed" || sch.Status == "recurring_booked") {
 				schedules = append(schedules, sch)
 			}
 		}
@@ -327,8 +425,14 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 	return result, nil
 }
 
-func NewSportCenterUseCase(repo SportCenterRepository, courtRepo CourtRepository, userRepo UserRepository, bookingRepo BookingRepository) *SportCenterUseCase {
-	return &SportCenterUseCase{repo: repo, courtRepo: courtRepo, userRepo: userRepo, bookingRepo: bookingRepo}
+func NewSportCenterUseCase(repo SportCenterRepository, courtRepo CourtRepository, userRepo UserRepository, bookingRepo BookingRepository, recurringRepo RecurringReservationRepository) *SportCenterUseCase {
+	return &SportCenterUseCase{
+		repo:                     repo,
+		courtRepo:                courtRepo,
+		userRepo:                 userRepo,
+		bookingRepo:              bookingRepo,
+		recurringReservationRepo: recurringRepo,
+	}
 }
 
 func (uc *SportCenterUseCase) CreateSportCenter(ctx context.Context, center *domain.SportCenter) error {
@@ -496,6 +600,8 @@ func (uc *CourtUseCase) UpdateAdminCourt(ctx context.Context, courtID primitive.
 
 	existing.Name = updatedCourt.Name
 	existing.Description = updatedCourt.Description
+	existing.ImageURL = updatedCourt.ImageURL
+	existing.YPosition = updatedCourt.YPosition
 	existing.UpdatedAt = time.Now()
 
 	return uc.repo.Update(ctx, existing)
