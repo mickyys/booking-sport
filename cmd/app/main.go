@@ -165,7 +165,7 @@ func main() {
 		api.PUT("/admin/courts/:id/schedule", courtHandler.ConfigureSchedule)
 		api.PATCH("/admin/courts/:id/schedule/slot", courtHandler.UpdateScheduleSlot)
 		api.PUT("/admin/sport-centers/:id", sportCenterHandler.Update)
-		api.PATCH("/admin/sport-centers/:id/settings", sportCenterHandler.UpdateSettings)
+		api.PATCH("/admin/sport-centers/:id/settings", sportCenterHandler.UpdateSportCenterSettings)
 		api.GET("/admin/sport-centers/:id", sportCenterHandler.GetByID)
 		api.POST("/admin/bookings/internal", bookingHandler.CreateInternalBooking)
 		api.POST("/admin/bookings/:id/pay-balance", bookingHandler.MarkPartialPaymentAsPaid)

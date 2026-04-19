@@ -163,7 +163,8 @@ func (h *SportCenterHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"center": center, "cancellation_policy": cancellationPolicy})
 }
 
-func (h *SportCenterHandler) UpdateSettings(c *gin.Context) {
+// UpdateSportCenterSettings actualiza la configuración de un centro deportivo
+func (h *SportCenterHandler) UpdateSportCenterSettings(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := primitive.ObjectIDFromHex(idStr)
 	if err != nil {
@@ -537,7 +538,7 @@ func (h *SportCenterHandler) GetSchedules(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid sport center identifier"})
 			return
 		}
-		centerID = center.ID
+centerID = center.ID
 	}
 
 	loc, _ := time.LoadLocation("America/Santiago")

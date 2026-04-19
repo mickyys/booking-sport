@@ -41,6 +41,11 @@ type MercadoPagoConfig struct {
 	AccessToken string `bson:"access_token" json:"access_token"`
 }
 
+type TimeSlot struct {
+	StartTime string `bson:"start_time" json:"start_time"`
+	EndTime   string `bson:"end_time" json:"end_time"`
+}
+
 type SportCenter struct {
 	ID                    primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
 	Slug                  string             `bson:"slug" json:"slug"`
@@ -53,7 +58,6 @@ type SportCenter struct {
 	CourtsCount           int                `bson:"courts_count" json:"courts"`
 	Fintoc                *FintocConfig      `bson:"fintoc,omitempty" json:"-"`
 	MercadoPago           *MercadoPagoConfig `bson:"mercadopago,omitempty" json:"-"`
-	ImageURL              string             `bson:"image_url" json:"image_url"`
 	CancellationHours     int                `bson:"cancellation_hours" json:"cancellation_hours"`
 	RetentionPercent      int                `bson:"retention_percent" json:"retention_percent"`
 	PartialPaymentEnabled bool               `bson:"partial_payment_enabled" json:"partial_payment_enabled"`
@@ -84,6 +88,7 @@ type CourtSchedule struct {
 	PaymentRequired       bool    `bson:"payment_required" json:"payment_required"`
 	PaymentOptional       bool    `bson:"payment_optional" json:"payment_optional"`
 	PartialPaymentEnabled *bool   `bson:"partial_payment_enabled" json:"partial_payment_enabled"`
+	DayOfWeek             *int    `bson:"day_of_week" json:"day_of_week"`
 }
 
 type User struct {
