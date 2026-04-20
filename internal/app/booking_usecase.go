@@ -823,11 +823,15 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 	// For internal bookings, we don't strict check availability if admin wants to force it,
 	// but let's check it for safety or just set it.
 	price := 0.0
+	minutes := booking.Minutes
+	if minutes == 0 {
+		minutes = 0
+	}
 	for _, s := range court.Schedule {
-		if s.Hour == booking.Hour {
+		if s.Hour == booking.Hour && s.Minutes == minutes {
 			// Check if slot has already passed
 			loc, _ := time.LoadLocation("America/Santiago")
-			bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, loc)
+			bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, minutes, 0, 0, loc)
 			if bookingDateTime.Before(time.Now().In(loc)) {
 				return fmt.Errorf("cannot book a past slot")
 			}

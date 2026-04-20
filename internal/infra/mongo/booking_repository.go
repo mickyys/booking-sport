@@ -5,6 +5,7 @@ package mongo
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -255,6 +256,8 @@ func (r *BookingRepository) FindBySportCenterAndDate(ctx context.Context, center
 	loc, _ := time.LoadLocation("America/Santiago")
 	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
 	endDate := startDate.AddDate(0, 0, 1)
+
+	log.Printf("🔍 FindBySportCenterAndDate: centerID=%s, date=%s, startDate=%s, endDate=%s", centerID, date, startDate, endDate)
 
 	cursor, err := r.collection.Find(ctx, bson.M{
 		"sport_center_id": centerID,

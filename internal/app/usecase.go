@@ -84,6 +84,7 @@ type SportCenterUseCase struct {
 	bookingRepo              BookingRepository
 	recurringReservationRepo RecurringReservationRepository
 }
+
 type EnrichedCourtSchedule struct {
 	Hour            int                 `json:"hour"`
 	Minutes         int                 `json:"minutes"`
@@ -209,8 +210,110 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 
 		recurringHours := recurringByCourt[court.ID]
 
-		schedules := []EnrichedCourtSchedule{}
+		// Recolectar todos los slots primero para detectar overlaps
+		allSlots := []struct {
+			slot       domain.CourtSchedule
+			startMin   int
+			endMin     int
+		}{}
+
 		for _, s := range court.Schedule {
+			// Filtrar por day_of_week si está definido
+			if s.DayOfWeek != nil && *s.DayOfWeek != dayOfWeek {
+				continue // Skip slots that don't match the current day of week
+			}
+
+			// Calcular minutos de inicio y fin del slot (asumiendo duración de 1 hora)
+			startMin := s.Hour*60 + s.Minutes
+			endMin := startMin + 60 // Duración de 1 hora
+
+			allSlots = append(allSlots, struct {
+				slot       domain.CourtSchedule
+				startMin   int
+				endMin     int
+			}{s, startMin, endMin})
+		}
+
+		// Crear set de slots que tienen overlapping (no disponibles)
+		// Regla: slots específicos (day_of_week != nil) nunca se bloquean
+		// Slots generales (day_of_week == nil) se bloquean si overlapan con específicos
+		blockedSlots := make(map[int]map[int]bool)
+
+		fmt.Printf("DEBUG: Processing court %s with %d slots\n", court.Name, len(allSlots))
+
+		for i := range allSlots {
+			for j := i + 1; j < len(allSlots); j++ {
+				slotA := allSlots[i]
+				slotB := allSlots[j]
+
+				if !(slotA.startMin < slotB.endMin && slotB.startMin < slotA.endMin) {
+					continue
+				}
+
+				fmt.Printf("DEBUG: Overlap found: A(%d:%d,dow=%v) vs B(%d:%d,dow=%v)\n", 
+					slotA.slot.Hour, slotA.slot.Minutes, slotA.slot.DayOfWeek,
+					slotB.slot.Hour, slotB.slot.Minutes, slotB.slot.DayOfWeek)
+
+				// Si A es específico, bloquear B si es general
+				if slotA.slot.DayOfWeek != nil {
+					if slotB.slot.DayOfWeek == nil {
+						if blockedSlots[slotB.slot.Hour] == nil {
+							blockedSlots[slotB.slot.Hour] = make(map[int]bool)
+						}
+						blockedSlots[slotB.slot.Hour][slotB.slot.Minutes] = true
+						fmt.Printf("DEBUG: Blocking B(%d:%d) - B general, A specific\n", slotB.slot.Hour, slotB.slot.Minutes)
+					}
+					continue
+				}
+
+				// Si B es específico, bloquear A si es general
+				if slotB.slot.DayOfWeek != nil {
+					if slotA.slot.DayOfWeek == nil {
+						if blockedSlots[slotA.slot.Hour] == nil {
+							blockedSlots[slotA.slot.Hour] = make(map[int]bool)
+						}
+						blockedSlots[slotA.slot.Hour][slotA.slot.Minutes] = true
+						fmt.Printf("DEBUG: Blocking A(%d:%d) - A general, B specific\n", slotA.slot.Hour, slotA.slot.Minutes)
+					}
+					continue
+				}
+
+				// Ambos generales, bloquear ambos
+				if blockedSlots[slotA.slot.Hour] == nil {
+					blockedSlots[slotA.slot.Hour] = make(map[int]bool)
+				}
+				blockedSlots[slotA.slot.Hour][slotA.slot.Minutes] = true
+
+				if blockedSlots[slotB.slot.Hour] == nil {
+					blockedSlots[slotB.slot.Hour] = make(map[int]bool)
+				}
+				blockedSlots[slotB.slot.Hour][slotB.slot.Minutes] = true
+			}
+		}
+
+		fmt.Printf("DEBUG: Blocked slots for court %s: %+v\n", court.Name, blockedSlots)
+
+schedules := []EnrichedCourtSchedule{}
+		for _, s := range court.Schedule {
+			// Filtrar por day_of_week si está definido
+			if s.DayOfWeek != nil && *s.DayOfWeek != dayOfWeek {
+				continue
+			}
+
+			fmt.Printf("DEBUG: Processing slot hour=%d min=%d dow=%v blocked=%v\n", 
+				s.Hour, s.Minutes, s.DayOfWeek, blockedSlots[s.Hour] != nil && blockedSlots[s.Hour][s.Minutes])
+
+			// Skip slots que tienen overlap con otro slot
+			// Si el slot es específico (day_of_week != nil), siempre se muestra
+			if s.DayOfWeek != nil {
+				fmt.Printf("DEBUG: Slot %d:%d is specific - SHOWING\n", s.Hour, s.Minutes)
+			} else if blockedSlots[s.Hour] != nil && blockedSlots[s.Hour][s.Minutes] {
+				fmt.Printf("DEBUG: Slot %d:%d is general and BLOCKED - SKIPPING\n", s.Hour, s.Minutes)
+				continue
+			} else {
+				fmt.Printf("DEBUG: Slot %d:%d is general and NOT blocked - SHOWING\n", s.Hour, s.Minutes)
+			}
+
 			sch := EnrichedCourtSchedule{
 				Hour:            s.Hour,
 				Minutes:         s.Minutes,
@@ -334,13 +437,96 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 			bookedHours = make(map[int]*domain.Booking)
 		}
 
-		recurringHours := recurringByCourt[court.ID]
+recurringHours := recurringByCourt[court.ID]
 		if recurringHours == nil {
 			recurringHours = make(map[int]*domain.RecurringReservation)
 		}
 
-		schedules := []EnrichedCourtSchedule{}
+		// Recolectar todos los slots primero para detectar overlaps
+		allSlots := []struct {
+			slot       domain.CourtSchedule
+			startMin   int
+			endMin     int
+		}{}
+
 		for _, s := range court.Schedule {
+			// Filtrar por day_of_week si está definido
+			if s.DayOfWeek != nil && *s.DayOfWeek != dayOfWeek {
+				continue
+			}
+
+			startMin := s.Hour*60 + s.Minutes
+			endMin := startMin + 60
+
+			allSlots = append(allSlots, struct {
+				slot       domain.CourtSchedule
+				startMin   int
+				endMin     int
+			}{s, startMin, endMin})
+		}
+
+		// Detectar overlaps: slots específicos (day_of_week != nil) nunca se bloquean
+		// Slots generales (day_of_week == nil) se bloquean si overlapan con específicos
+		blockedSlots := make(map[int]map[int]bool)
+		for i := range allSlots {
+			for j := i + 1; j < len(allSlots); j++ {
+				slotA := allSlots[i]
+				slotB := allSlots[j]
+
+				if !(slotA.startMin < slotB.endMin && slotB.startMin < slotA.endMin) {
+					continue
+				}
+
+				// Si A es específico, bloquear B si es general
+				if slotA.slot.DayOfWeek != nil {
+					if slotB.slot.DayOfWeek == nil {
+						if blockedSlots[slotB.slot.Hour] == nil {
+							blockedSlots[slotB.slot.Hour] = make(map[int]bool)
+						}
+						blockedSlots[slotB.slot.Hour][slotB.slot.Minutes] = true
+					}
+					continue
+				}
+
+				// Si B es específico, bloquear A si es general
+				if slotB.slot.DayOfWeek != nil {
+					if slotA.slot.DayOfWeek == nil {
+						if blockedSlots[slotA.slot.Hour] == nil {
+							blockedSlots[slotA.slot.Hour] = make(map[int]bool)
+						}
+						blockedSlots[slotA.slot.Hour][slotA.slot.Minutes] = true
+					}
+					continue
+				}
+
+				// Ambos generales, bloquear ambos
+				if blockedSlots[slotA.slot.Hour] == nil {
+					blockedSlots[slotA.slot.Hour] = make(map[int]bool)
+				}
+				blockedSlots[slotA.slot.Hour][slotA.slot.Minutes] = true
+
+				if blockedSlots[slotB.slot.Hour] == nil {
+					blockedSlots[slotB.slot.Hour] = make(map[int]bool)
+				}
+				blockedSlots[slotB.slot.Hour][slotB.slot.Minutes] = true
+			}
+		}
+
+schedules := []EnrichedCourtSchedule{}
+		for _, s := range court.Schedule {
+			// Filtrar por day_of_week si está definido
+			if s.DayOfWeek != nil && *s.DayOfWeek != dayOfWeek {
+				continue
+			}
+
+			// Skip slots que tienen overlap con otro slot
+			// Si el slot es específico (day_of_week != nil), siempre se muestra
+			if s.DayOfWeek != nil {
+				// Es específico, mostrar siempre
+			} else if blockedSlots[s.Hour] != nil && blockedSlots[s.Hour][s.Minutes] {
+				continue
+			}
+
 			sch := EnrichedCourtSchedule{
 				Hour:            s.Hour,
 				Minutes:         s.Minutes,
