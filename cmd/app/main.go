@@ -149,6 +149,7 @@ func main() {
 		// Endpoint seguro para obtener schedules con detalles de reservas
 		api.GET("/sport-centers/:id/schedules/bookings", sportCenterHandler.GetSchedulesWithBookings)
 		// Endpoint para administradores: obtener agenda automáticamente sin pasar id
+		api.GET("/admin/my-sport-center", sportCenterHandler.GetMySportCenter)
 		api.GET("/admin/sport-centers/schedules/bookings", sportCenterHandler.GetAdminSchedulesWithBookings)
 		api.GET("/bookings/:id", bookingHandler.GetBookingDetail)
 		api.GET("/bookings/my-bookings", bookingHandler.GetUserBookings)
@@ -178,6 +179,10 @@ func main() {
 		api.GET("/admin/recurring/:id", bookingHandler.GetRecurringReservation)
 		api.GET("/admin/recurring/court/:courtId", bookingHandler.GetRecurringReservationsByCourt)
 		api.DELETE("/admin/recurring/:id", bookingHandler.CancelRecurringReservation)
+
+		// Users management routes
+		api.GET("/admin/users", sportCenterHandler.GetCenterUsers)
+		api.DELETE("/admin/users/:userId", sportCenterHandler.RemoveCenterUser)
 	}
 
 	// 7. Iniciar Servidor

@@ -120,6 +120,16 @@ func EnsureValidToken(domain, audience string) gin.HandlerFunc {
 
 		// Establecer el user_id en el contexto de Gin para que los handlers lo usen
 		c.Set("user_id", claims["sub"])
+		// Guardar claims completos para usar en handlers
+		if name, ok := claims["name"].(string); ok {
+			c.Set("user_name", name)
+		}
+		if email, ok := claims["email"].(string); ok {
+			c.Set("user_email", email)
+		}
+		if picture, ok := claims["picture"].(string); ok {
+			c.Set("user_picture", picture)
+		}
 		c.Next()
 	}
 }
