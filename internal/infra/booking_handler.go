@@ -581,6 +581,12 @@ func (h *BookingHandler) CreateInternalBooking(c *gin.Context) {
 		return
 	}
 	booking.Booking.SeriesID = booking.SeriesID
+	// Asegurar que minutes tenga valor por defecto
+	if booking.Booking.Minutes == 0 {
+		booking.Booking.Minutes = 0
+	}
+
+	log.Printf("📝 CreateInternalBooking: date=%s, hour=%d, minutes=%d", booking.Booking.Date, booking.Booking.Hour, booking.Booking.Minutes)
 
 	err := h.useCase.CreateInternalBooking(c.Request.Context(), &booking.Booking, "internal")
 	if err != nil {

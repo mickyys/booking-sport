@@ -178,6 +178,7 @@ type Booking struct {
 	GuestDetails          *GuestDetails      `bson:"guest_details,omitempty" json:"guest_details,omitempty"`
 	Date                  time.Time          `bson:"date" json:"date"`
 	Hour                  int                `bson:"hour" json:"hour"`
+	Minutes               int                `bson:"minutes" json:"minutes"`
 	FinalPrice            float64            `bson:"final_price" json:"final_price"`
 	Price                 float64            `bson:"price" json:"price"`
 	PaidAmount            float64            `bson:"paid_amount" json:"paid_amount"`
