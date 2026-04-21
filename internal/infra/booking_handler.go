@@ -830,6 +830,11 @@ func (h *BookingHandler) CreateRecurringReservation(c *gin.Context) {
 		return
 	}
 
+	// Dump del body para debug
+	body, _ := c.GetRawData()
+	log.Printf("[CreateRecurringReservation] raw body: %s", string(body))
+	log.Printf("[CreateRecurringReservation] received: hour=%d, minutes=%d, courtID=%s", input.Hour, input.Minutes, input.CourtID.Hex())
+
 	// Parsear la fecha
 	date, err := time.Parse("2006-01-02", input.Date)
 	if err != nil {
