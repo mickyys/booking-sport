@@ -171,9 +171,9 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 		if bookingsByCourt[b.CourtID] == nil {
 			bookingsByCourt[b.CourtID] = make(map[int]*primitive.ObjectID)
 		}
-		id := b.ID
 		key := b.Hour*60 + b.Minutes
-		bookingsByCourt[b.CourtID][key] = &id
+		bookingCopy := b
+		bookingsByCourt[b.CourtID][key] = &bookingCopy.ID
 	}
 
 	// Obtener todas las reservas recurrentes activas para este centro
@@ -437,7 +437,8 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 		}
 		// Usar hour*60 + minutes como clave para considerar horas personalizadas como 19:30
 		key := b.Hour*60 + b.Minutes
-		bookingsByCourt[b.CourtID][key] = b
+		bookingCopy := b
+		bookingsByCourt[b.CourtID][key] = &bookingCopy
 	}
 
 	log.Printf("[GetSportCenterSchedulesWithBookingDetails] centerID=%s, date=%s, dayOfWeek=%d, totalRecurringReservations=%d",
