@@ -262,9 +262,16 @@ func (r *BookingRepository) FindBySportCenterAndDate(ctx context.Context, center
 
 	cursor, err := r.collection.Find(ctx, bson.M{
 		"sport_center_id": centerID,
-		"date": bson.M{
-			"$gte": startDate,
-			"$lt":  endDate,
+		"$or": []bson.M{
+			{
+				"date": bson.M{
+					"$gte": startDate,
+					"$lt":  endDate,
+				},
+			},
+			{
+				"day_of_week": dayOfWeek,
+			},
 		},
 		"status": bson.M{"$in": []string{string(domain.BookingStatusConfirmed), "active"}},
 	})

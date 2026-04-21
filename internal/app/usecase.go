@@ -172,7 +172,8 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 			bookingsByCourt[b.CourtID] = make(map[int]*primitive.ObjectID)
 		}
 		id := b.ID
-		bookingsByCourt[b.CourtID][b.Hour] = &id
+		key := b.Hour*60 + b.Minutes
+		bookingsByCourt[b.CourtID][key] = &id
 	}
 
 	// Obtener todas las reservas recurrentes activas para este centro
@@ -426,9 +427,9 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 
 	// Agrupar bookings por CourtID y hora (en minutos)
 	bookingsByCourt := make(map[primitive.ObjectID]map[int]*domain.Booking)
-	for i := range allBookings {
-		b := &allBookings[i]
-		if b.Status != domain.BookingStatusConfirmed {
+	for _, b := range allBookings {
+		// Incluir confirmadas y activas (reservas de tipo serie/bloqueos permanentes)
+		if b.Status != domain.BookingStatusConfirmed && b.Status != "active" {
 			continue
 		}
 		if bookingsByCourt[b.CourtID] == nil {
