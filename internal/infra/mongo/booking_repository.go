@@ -261,16 +261,15 @@ func (r *BookingRepository) FindBySportCenterAndDate(ctx context.Context, center
 	log.Printf("🔍 FindBySportCenterAndDate: centerID=%s, date=%s, startDate=%s, endDate=%s, dayOfWeek=%d", centerID, date, startDate, endDate, dayOfWeek)
 
 	cursor, err := r.collection.Find(ctx, bson.M{
+		"sport_center_id": centerID,
 		"$or": []bson.M{
 			{
-				"sport_center_id": centerID,
 				"date": bson.M{
 					"$gte": startDate,
 					"$lt":  endDate,
 				},
 			},
 			{
-				"sport_center_id": centerID,
 				"day_of_week": dayOfWeek,
 			},
 		},
