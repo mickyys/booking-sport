@@ -108,6 +108,24 @@ func (r *RecurringReservationRepository) FindByCourtID(ctx context.Context, cour
 	return reservations, nil
 }
 
+func (r *RecurringReservationRepository) FindByCenterIDAndDayOfWeek(ctx context.Context, centerID primitive.ObjectID, dayOfWeek int) ([]domain.RecurringReservation, error) {
+	cursor, err := r.collection.Find(ctx, bson.M{
+		"sport_center_id": centerID,
+		"day_of_week":   dayOfWeek,
+		"status":        domain.RecurringReservationStatusActive,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var reservations []domain.RecurringReservation
+	if err := cursor.All(ctx, &reservations); err != nil {
+		return nil, err
+	}
+	return reservations, nil
+}
+
 func (r *RecurringReservationRepository) Update(ctx context.Context, reservation *domain.RecurringReservation) error {
 	filter := bson.M{"_id": reservation.ID}
 	update := bson.M{"$set": reservation}

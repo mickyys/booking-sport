@@ -256,16 +256,25 @@ func (r *BookingRepository) FindBySportCenterAndDate(ctx context.Context, center
 	loc, _ := time.LoadLocation("America/Santiago")
 	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
 	endDate := startDate.AddDate(0, 0, 1)
+	dayOfWeek := int(date.Weekday())
 
-	log.Printf("🔍 FindBySportCenterAndDate: centerID=%s, date=%s, startDate=%s, endDate=%s", centerID, date, startDate, endDate)
+	log.Printf("🔍 FindBySportCenterAndDate: centerID=%s, date=%s, startDate=%s, endDate=%s, dayOfWeek=%d", centerID, date, startDate, endDate, dayOfWeek)
 
 	cursor, err := r.collection.Find(ctx, bson.M{
-		"sport_center_id": centerID,
-		"date": bson.M{
-			"$gte": startDate,
-			"$lt":  endDate,
+		"$or": []bson.M{
+			{
+				"sport_center_id": centerID,
+				"date": bson.M{
+					"$gte": startDate,
+					"$lt":  endDate,
+				},
+			},
+			{
+				"sport_center_id": centerID,
+				"day_of_week": dayOfWeek,
+			},
 		},
-		"status": domain.BookingStatusConfirmed,
+		"status": bson.M{"$in": []string{string(domain.BookingStatusConfirmed), "active"}},
 	})
 	if err != nil {
 		return nil, err
