@@ -53,6 +53,7 @@ type SportCenter struct {
 	City                  string             `bson:"city" json:"city"`
 	Address               string             `bson:"address" json:"address"`
 	Coordinates           Coordinates        `bson:"coordinates" json:"coordinates"`
+	ImageURL             string             `bson:"image_url" json:"image_url"`
 	Services              []string           `bson:"services" json:"services"`
 	Contact               Contact            `bson:"contact" json:"contact"`
 	CourtsCount           int                `bson:"courts_count" json:"courts"`
@@ -63,7 +64,7 @@ type SportCenter struct {
 	PartialPaymentEnabled bool               `bson:"partial_payment_enabled" json:"partial_payment_enabled"`
 	PartialPaymentPercent int                `bson:"partial_payment_percent" json:"partial_payment_percent"`
 	IsPrivate            bool               `bson:"is_private" json:"is_private"`
-	Users                 []string           `bson:"users" json:"users"`
+	Users                 []string           `bson:"users" json:"-"`
 	CreatedAt             time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt             time.Time          `bson:"updated_at" json:"updated_at"`
 }
@@ -233,6 +234,7 @@ type RecurringReservation struct {
 	CustomerName  string                     `bson:"customer_name" json:"customer_name"`
 	CustomerPhone string                     `bson:"customer_phone" json:"customer_phone"`
 	Hour          int                        `bson:"hour" json:"hour"`
+	Minutes      int                        `bson:"minutes" json:"minutes"`
 	Price         float64                    `bson:"price" json:"price"`
 	DayOfWeek     int                        `bson:"day_of_week" json:"day_of_week"`           // 0=domingo, 1=lunes, ..., 6=sábado
 	DayOfWeekName string                     `bson:"day_of_week_name" json:"day_of_week_name"` // "lunes", "martes", etc.
@@ -253,6 +255,7 @@ type RecurringReservationResponse struct {
 	CustomerName    string                     `bson:"customer_name" json:"customer_name"`
 	CustomerPhone   string                     `bson:"customer_phone" json:"customer_phone"`
 	Hour            int                        `bson:"hour" json:"hour"`
+	Minutes        int                        `bson:"minutes" json:"minutes"`
 	DayOfWeek       int                        `bson:"day_of_week" json:"day_of_week"`
 	DayOfWeekName   string                     `bson:"day_of_week_name,omitempty" json:"day_of_week_name,omitempty"`
 	Price           float64                    `bson:"price" json:"price"`

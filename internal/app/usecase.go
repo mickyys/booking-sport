@@ -197,7 +197,8 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 		if recurringByCourt[r.CourtID] == nil {
 			recurringByCourt[r.CourtID] = make(map[int]bool)
 		}
-		recurringByCourt[r.CourtID][r.Hour] = true
+		key := r.Hour*60 + r.Minutes
+		recurringByCourt[r.CourtID][key] = true
 	}
 
 	nowInLoc := time.Now().In(loc)
@@ -332,18 +333,19 @@ schedules := []EnrichedCourtSchedule{}
 			// Check if slot has already passed
 			// Forcing Chile timezone comparison to match the user's local experience
 			slotTime := time.Date(date.Year(), date.Month(), date.Day(), s.Hour, s.Minutes, 0, 0, loc)
+			slotKey := s.Hour*60 + s.Minutes
 			if slotTime.Before(nowInLoc) && sch.Status == "available" {
 				sch.Status = "passed"
 			}
 
 			// Check for recurring reservation first (takes priority)
-			if recurringHours != nil && recurringHours[s.Hour] {
+			if recurringHours != nil && recurringHours[slotKey] {
 				if slotTime.Before(nowInLoc) {
 					sch.Status = "passed"
 				} else {
 					sch.Status = "unavailable" // Reservado semanalmente
 				}
-			} else if bID, exists := bookedHours[s.Hour]; exists {
+			} else if bID, exists := bookedHours[slotKey]; exists {
 				sch.Status = "booked"
 				sch.BookingID = bID
 
@@ -395,7 +397,7 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 	// Obtener todas las reservas confirmadas para este centro y fecha
 	allBookings, _ := uc.bookingRepo.FindBySportCenterAndDate(ctx, centerID, searchDate)
 
-	// Agrupar bookings por CourtID y hora
+	// Agrupar bookings por CourtID y hora (en minutos)
 	bookingsByCourt := make(map[primitive.ObjectID]map[int]*domain.Booking)
 	for _, b := range allBookings {
 		if b.Status != domain.BookingStatusConfirmed {
@@ -404,7 +406,9 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 		if bookingsByCourt[b.CourtID] == nil {
 			bookingsByCourt[b.CourtID] = make(map[int]*domain.Booking)
 		}
-		bookingsByCourt[b.CourtID][b.Hour] = &b
+		// Usar hour*60 + minutes como clave para considerar horas personalizadas como 19:30
+		key := b.Hour*60 + b.Minutes
+		bookingsByCourt[b.CourtID][key] = &b
 	}
 
 	// Calcular día de la semana de la fecha consultada
@@ -424,7 +428,7 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 			i, r.CourtID.Hex(), r.Hour, r.DayOfWeek, r.Status)
 	}
 
-	// Agrupar reservas recurrentes por courtID, hora y día de la semana
+	// Agrupar reservas recurrentes por courtID, hora (en minutos) y día de la semana
 	recurringByCourt := make(map[primitive.ObjectID]map[int]*domain.RecurringReservation)
 	for i := range recurringReservations {
 		r := &recurringReservations[i]
@@ -434,7 +438,9 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 		if recurringByCourt[r.CourtID] == nil {
 			recurringByCourt[r.CourtID] = make(map[int]*domain.RecurringReservation)
 		}
-		recurringByCourt[r.CourtID][r.Hour] = r
+		// Usar hour*60 + minutes como clave para considerar horas personalizadas como 19:30
+		key := r.Hour*60 + r.Minutes
+		recurringByCourt[r.CourtID][key] = r
 	}
 
 	nowInLoc := time.Now().In(loc)
@@ -553,23 +559,25 @@ schedules := []EnrichedCourtSchedule{}
 
 			// Check for recurring reservation first (takes priority for availability)
 			// Solo considerar si coincide el día de la semana
-			if recurring, exists := recurringHours[s.Hour]; exists && recurring != nil && recurring.DayOfWeek == dayOfWeek {
+			slotKey := s.Hour*60 + s.Minutes
+			if recurring, exists := recurringHours[slotKey]; exists && recurring != nil && recurring.DayOfWeek == dayOfWeek {
 				sch.IsRecurringWeekly = true
 				sch.RecurringReservationID = recurring.ID.Hex()
 				sch.CustomerName = recurring.CustomerName
 				sch.CustomerPhone = recurring.CustomerPhone
 				sch.Price = recurring.Price
 				// Si no hay reserva específica para esta fecha, marcar como reservado recurrente
-				if _, hasBooking := bookedHours[s.Hour]; !hasBooking {
+				if _, hasBooking := bookedHours[slotKey]; !hasBooking {
 					if slotTime.Before(nowInLoc) {
 						sch.Status = "passed_booked"
 					} else {
 						sch.Status = "recurring_booked"
+						sch.PaymentMethod = "presential"
 					}
 				}
 			}
 
-			if b, exists := bookedHours[s.Hour]; exists && b != nil {
+			if b, exists := bookedHours[slotKey]; exists && b != nil {
 				// Si hay una reserva, mostramos la información sin importar si la hora ya pasó
 				sch.Status = "booked"
 				if slotTime.Before(nowInLoc) {
@@ -923,7 +931,8 @@ func (uc *CourtUseCase) GetCourtSchedule(ctx context.Context, courtID primitive.
 	bookedHours := make(map[int]bool)
 	for _, b := range bookings {
 		if b.Status == domain.BookingStatusConfirmed {
-			bookedHours[b.Hour] = true
+			key := b.Hour*60 + b.Minutes
+			bookedHours[key] = true
 		}
 	}
 
@@ -931,7 +940,8 @@ func (uc *CourtUseCase) GetCourtSchedule(ctx context.Context, courtID primitive.
 	result := []domain.CourtSchedule{}
 	for _, s := range court.Schedule {
 		sch := s
-		if bookedHours[s.Hour] {
+		slotKey := s.Hour*60 + s.Minutes
+		if bookedHours[slotKey] {
 			sch.Status = "booked"
 		}
 
