@@ -221,6 +221,14 @@ func ensureRecurringReservationIndexes(ctx context.Context, db *mongo.Database) 
 			Options: options.Index().SetName("idx_recurring_sport_center_id"),
 		},
 		{
+			Keys: bson.D{
+				{Key: "sport_center_id", Value: 1},
+				{Key: "day_of_week", Value: 1},
+				{Key: "status", Value: 1},
+			},
+			Options: options.Index().SetName("idx_recurring_center_day_status"),
+		},
+		{
 			Keys:    bson.D{{Key: "court_id", Value: 1}},
 			Options: options.Index().SetName("idx_recurring_court_id"),
 		},
