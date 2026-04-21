@@ -65,6 +65,7 @@ type RecurringReservationRepository interface {
 	FindByCourtHourAndDay(ctx context.Context, courtID primitive.ObjectID, hour int, dayOfWeek int) (*domain.RecurringReservation, error)
 	FindActiveByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int) (*domain.RecurringReservation, error)
 	FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error)
+	FindByCenterIDAndDayOfWeek(ctx context.Context, centerID primitive.ObjectID, dayOfWeek int) ([]domain.RecurringReservation, error)
 	FindByCourtID(ctx context.Context, courtID primitive.ObjectID) ([]domain.RecurringReservation, error)
 	Update(ctx context.Context, reservation *domain.RecurringReservation) error
 	Cancel(ctx context.Context, id primitive.ObjectID, cancelledBy string, reason string) error
@@ -406,14 +407,22 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 		bookingsByCourt[b.CourtID][b.Hour] = &b
 	}
 
-	// Obtener todas las reservas recurrentes activas para este centro
-	var recurringReservations []domain.RecurringReservation
-	if uc.recurringReservationRepo != nil {
-		recurringReservations, _ = uc.recurringReservationRepo.FindByCenterID(ctx, centerID)
-	}
-
 	// Calcular día de la semana de la fecha consultada
 	dayOfWeek := int(searchDate.Weekday())
+
+	// Obtener reservas recurrentes activas para este centro y día de la semana
+	var recurringReservations []domain.RecurringReservation
+	if uc.recurringReservationRepo != nil {
+		recurringReservations, _ = uc.recurringReservationRepo.FindByCenterIDAndDayOfWeek(ctx, centerID, dayOfWeek)
+	}
+
+	log.Printf("[GetSportCenterSchedulesWithBookingDetails] centerID=%s, date=%s, dayOfWeek=%d, totalRecurringReservations=%d",
+		centerID.Hex(), searchDate.Format("2006-01-02"), dayOfWeek, len(recurringReservations))
+
+	for i, r := range recurringReservations {
+		log.Printf("[GetSportCenterSchedulesWithBookingDetails] recurring[%d]: courtID=%s, hour=%d, dayOfWeek=%d, status=%s",
+			i, r.CourtID.Hex(), r.Hour, r.DayOfWeek, r.Status)
+	}
 
 	// Agrupar reservas recurrentes por courtID, hora y día de la semana
 	recurringByCourt := make(map[primitive.ObjectID]map[int]*domain.RecurringReservation)
