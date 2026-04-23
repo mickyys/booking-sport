@@ -28,6 +28,41 @@ func NewBookingHandler(uc *app.BookingUseCase) *BookingHandler {
 }
 
 // GetUserCancelledBookings retorna solo las reservas canceladas del usuario autenticado
+func (h *BookingHandler) RegisterDevice(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in token"})
+		return
+	}
+
+	var req struct {
+		Token      string `json:"token" binding:"required"`
+		Platform   string `json:"platform" binding:"required"`
+		DeviceName string `json:"device_name"`
+		OSVersion  string `json:"os_version"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	var userRoles []string
+	if r, exists := c.Get("user_roles"); exists {
+		if roles, ok := r.([]string); ok {
+			userRoles = roles
+		}
+	}
+
+	err := h.useCase.RegisterDevice(c.Request.Context(), userID.(string), req.Token, req.Platform, req.DeviceName, req.OSVersion, userRoles)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
 func (h *BookingHandler) GetUserCancelledBookings(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {

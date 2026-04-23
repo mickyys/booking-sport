@@ -130,6 +130,31 @@ func EnsureValidToken(domain, audience string) gin.HandlerFunc {
 		if picture, ok := claims["picture"].(string); ok {
 			c.Set("user_picture", picture)
 		}
+
+		// Extraer roles (pueden venir como claim directo "roles" o con namespace de Auth0)
+		var roles []string
+		if r, ok := claims["roles"].([]interface{}); ok {
+			for _, role := range r {
+				if roleStr, ok := role.(string); ok {
+					roles = append(roles, roleStr)
+				}
+			}
+		} else {
+			// Buscar claims con namespace (ej: https://reservaloya.cl/roles)
+			for key, val := range claims {
+				if strings.HasSuffix(key, "/roles") {
+					if r, ok := val.([]interface{}); ok {
+						for _, role := range r {
+							if roleStr, ok := role.(string); ok {
+								roles = append(roles, roleStr)
+							}
+						}
+					}
+				}
+			}
+		}
+		c.Set("user_roles", roles)
+
 		c.Next()
 	}
 }

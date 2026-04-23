@@ -33,3 +33,4 @@ go.work.sum
 
 main
 *.log
+firebase-adminsdk.json
