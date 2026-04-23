@@ -68,10 +68,27 @@ func main() {
 	userRepo := mongo.NewUserRepository(db)
 	bookingRepo := mongo.NewBookingRepository(db)
 	recurringReservationRepo := mongo.NewRecurringReservationRepository(db)
+	userDeviceRepo := mongo.NewUserDeviceRepository(db)
 
 	// 4. Inicializar Casos de Uso (Application Layer)
 	sportCenterUC := app.NewSportCenterUseCase(sportCenterRepo, courtRepo, userRepo, bookingRepo, recurringReservationRepo)
 	courtUC := app.NewCourtUseCase(courtRepo, sportCenterRepo, bookingRepo)
+
+	// Inicializar Notifier (Firebase)
+	var notifier app.NotificationService
+	firebaseCredentialsFile := os.Getenv("FIREBASE_CREDENTIALS_FILE")
+	if firebaseCredentialsFile != "" {
+		fcmService, err := infra.NewFirebaseNotificationService(context.Background(), firebaseCredentialsFile)
+		if err != nil {
+			log.Printf("Warning: Error inicializando Firebase: %v", err)
+		} else {
+			notifier = fcmService
+			log.Println("Firebase Cloud Messaging initialized")
+		}
+	} else {
+		log.Println("Firebase credentials not configured, push notifications disabled")
+	}
+
 	// Inicializar Mailer (Mailgun) si está configurado
 	var bookingMailer app.Mailer
 	mailgunAPIKey := os.Getenv("MAILGUN_API_KEY")
@@ -86,7 +103,7 @@ func main() {
 		log.Println("Mailgun mailer initialized")
 	}
 
-	bookingUC := app.NewBookingUseCase(bookingRepo, courtRepo, sportCenterRepo, userRepo, bookingMailer, recurringReservationRepo)
+	bookingUC := app.NewBookingUseCase(bookingRepo, courtRepo, sportCenterRepo, userRepo, userDeviceRepo, bookingMailer, notifier, recurringReservationRepo)
 
 	// 5. Inicializar Manejadores (Presentation Layer)
 	sportCenterHandler := infra.NewSportCenterHandler(sportCenterUC)
@@ -146,6 +163,9 @@ func main() {
 	api := r.Group("/api")
 	api.Use(authMiddleware)
 	{
+		// Registro de dispositivos para notificaciones
+		api.POST("/users/devices", bookingHandler.RegisterDevice)
+
 		// Endpoint seguro para obtener schedules con detalles de reservas
 		api.GET("/sport-centers/:id/schedules/bookings", sportCenterHandler.GetSchedulesWithBookings)
 		// Endpoint para administradores: obtener agenda automáticamente sin pasar id
