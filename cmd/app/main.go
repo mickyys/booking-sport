@@ -95,10 +95,11 @@ func main() {
 	mailgunDomain := os.Getenv("MAILGUN_DOMAIN")
 	mailgunFrom := os.Getenv("MAILGUN_FROM")
 	mailgunTemplate := os.Getenv("MAILGUN_TEMPLATE_CONFIRMATION")
+	mailgunTemplatePaid := os.Getenv("MAILGUN_TEMPLATE_PAID")
 	mailgunTemplateCancel := os.Getenv("MAILGUN_TEMPLATE_CANCEL")
 
 	if mailgunAPIKey != "" && mailgunDomain != "" && mailgunFrom != "" {
-		mgMailer := mg.NewMailgunMailer(mailgunAPIKey, mailgunDomain, mailgunFrom, mailgunTemplate, mailgunTemplateCancel)
+		mgMailer := mg.NewMailgunMailer(mailgunAPIKey, mailgunDomain, mailgunFrom, mailgunTemplate, mailgunTemplatePaid, mailgunTemplateCancel)
 		bookingMailer = mgMailer
 		log.Println("Mailgun mailer initialized")
 	}

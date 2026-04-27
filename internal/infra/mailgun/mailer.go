@@ -13,13 +13,14 @@ import (
 )
 
 type MailgunMailer struct {
-	mg              mg.Mailgun
-	from            string
-	templateConfirm string
-	templateCancel  string
+	mg                  mg.Mailgun
+	from                string
+	templateConfirm     string
+	templateConfirmPaid string
+	templateCancel      string
 }
 
-func NewMailgunMailer(apiKey, domain, from, templateConfirm, templateCancel string) *MailgunMailer {
+func NewMailgunMailer(apiKey, domain, from, templateConfirm, templateConfirmPaid, templateCancel string) *MailgunMailer {
 	mgClient := mg.NewMailgun(domain, apiKey)
 	// Forzar el nombre "ReservaloYA" en el campo From
 	fromName := "ReservaloYA"
@@ -28,10 +29,10 @@ func NewMailgunMailer(apiKey, domain, from, templateConfirm, templateCancel stri
 		fromAddress = "reservas@reservaloya.cl"
 	}
 	fullFrom := fmt.Sprintf("%s <%s>", fromName, fromAddress)
-	return &MailgunMailer{mg: mgClient, from: fullFrom, templateConfirm: templateConfirm, templateCancel: templateCancel}
+	return &MailgunMailer{mg: mgClient, from: fullFrom, templateConfirm: templateConfirm, templateConfirmPaid: templateConfirmPaid, templateCancel: templateCancel}
 }
 
-func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *domain.Booking) error {
+func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *domain.Booking, cancellationHours, retentionPercent int, paidAmount, pendingAmount float64) error {
 	var to string
 	if booking.GuestDetails != nil && booking.GuestDetails.Email != "" {
 		to = booking.GuestDetails.Email
@@ -40,6 +41,24 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 		// No hay destinatario
 		return fmt.Errorf("no recipient email for booking %s", booking.BookingCode)
 	}
+
+	// Valores por defecto si no se proporcionan
+	if cancellationHours == 0 {
+		cancellationHours = 3
+	}
+	if retentionPercent == 0 {
+		retentionPercent = 10
+	}
+
+	// Determinar si está completamente pagado
+	isPaid := pendingAmount <= 0 || paidAmount >= booking.FinalPrice
+	paymentMessage := "Recuerda que el saldo pendiente debe ser pagado en el recinto antes de utilizar la cancha."
+	if isPaid {
+		paymentMessage = "Tu reserva se encuentra completamente pagada. No necesitas realizar pagos adicionales."
+	}
+
+	// Política de cancelación
+	policyMessage := fmt.Sprintf("Puedes cancelar hasta %d horas antes de la reserva para recibir reembolso completo. Si cancelas con menos de %d horas, se retendrá el %d%% del monto como cargo por cancelación.", cancellationHours, cancellationHours, retentionPercent)
 
 	// Cargar zona horaria de Santiago
 	loc, err := time.LoadLocation("America/Santiago")
@@ -53,11 +72,21 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 	// Añadir sufijo " hrs" tal como se solicita (ej. "16:00 hrs").
 	timeWithSuffix := fmt.Sprintf("%s hrs", timeStr)
 
+	// Formatear fecha
+	dateStr := booking.Date.In(loc).Format("02-01-2006")
+
 	subject := fmt.Sprintf("Reserva confirmada - %s", booking.SportCenterName)
 
 	message := m.mg.NewMessage(m.from, subject, "", to)
-	if m.templateConfirm != "" {
-		message.SetTemplate(m.templateConfirm)
+
+	// Seleccionar template: usar paid si hay monto pagado mayor a 0
+	templateToUse := m.templateConfirm
+	if paidAmount > 0 && m.templateConfirmPaid != "" {
+		templateToUse = m.templateConfirmPaid
+	}
+
+	if templateToUse != "" {
+		message.SetTemplate(templateToUse)
 		// Variables de plantilla
 		// Construir URL pública de cancelación usando la URL del frontend
 		frontendURL := os.Getenv("URL_FRONTEND")
@@ -68,14 +97,18 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 		cancelURL := fmt.Sprintf("%s/booking/cancel?code=%s", frontendURL, booking.BookingCode)
 
 		vars := map[string]interface{}{
-			"booking_code":  booking.BookingCode,
-			"center_name":   booking.SportCenterName,
-			"court_name":    booking.CourtName,
-			"date":          booking.Date.In(loc).Format("02-01-2006"),
-			"hour":          timeWithSuffix,
-			"price":         booking.FinalPrice,
-			"customer_name": booking.CustomerName,
-			"link_cancel":   cancelURL,
+			"booking_code":    booking.BookingCode,
+			"center_name":     booking.SportCenterName,
+			"court_name":      booking.CourtName,
+			"date":            dateStr,
+			"hour":            timeWithSuffix,
+			"price":           booking.FinalPrice,
+			"customer_name":   booking.CustomerName,
+			"link_cancel":     cancelURL,
+			"amount":          paidAmount,
+			"amount_pending":  pendingAmount,
+			"payment_message": paymentMessage,
+			"policy_message":  policyMessage,
 		}
 		if b, err := json.Marshal(vars); err == nil {
 			message.AddHeader("X-Mailgun-Variables", string(b))
@@ -83,9 +116,14 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 			log.Printf("[MAILGUN] error marshaling template variables: %v\n", err)
 		}
 	} else {
-		// fallback simple body
-		// Usar booking.Date para formatear minutos si existen
-		body := fmt.Sprintf("Tu reserva %s en %s (cancha %s) para %s a las %s ha sido confirmada.", booking.BookingCode, booking.SportCenterName, booking.CourtName, booking.Date.In(loc).Format("2006-01-02"), timeWithSuffix)
+		// fallback simple body con política de cancelación
+		body := fmt.Sprintf("Tu reserva %s en %s (cancha %s) para el %s a las %s ha sido confirmada.\n\n",
+			booking.BookingCode, booking.SportCenterName, booking.CourtName, dateStr, timeWithSuffix)
+		body += fmt.Sprintf("Monto pagado: $%.0f\n\n", booking.FinalPrice)
+		body += fmt.Sprintf("Política de cancelación: Puedes cancelar hasta %d horas antes para recibir reembolso completo. ",
+			cancellationHours)
+		body += fmt.Sprintf("Si cancelas con menos de %d horas, se retendrá el %d%% como cargo por cancelación.\n",
+			cancellationHours, retentionPercent)
 		message.SetHtml(body)
 	}
 
