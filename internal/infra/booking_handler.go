@@ -636,12 +636,18 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 	var booking struct {
 		domain.Booking
 		SeriesID string `json:"series_id"`
+		Partial bool   `json:"partial"`
 	}
 	if err := c.ShouldBindJSON(&booking); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	booking.Booking.SeriesID = booking.SeriesID
+
+	if booking.Partial {
+		booking.Booking.IsPartialPayment = true
+		booking.Booking.PartialPaymentPaid = true
+	}
 
 	// Si hay un usuario autenticado (opcional), lo asociamos
 	if userID, exists := c.Get("user_id"); exists {
