@@ -933,11 +933,16 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 		mpClient := mercadopago.NewClient(center.MercadoPago.AccessToken)
 
 		var refundResult *mercadopago.RefundResult
-		retentionAmount := (booking.Price * float64(100-refundPercentage)) / 100
-		refundAmount := booking.PaidAmount - retentionAmount
-		if refundAmount <= 0 {
-			log.Printf("[CANCEL_BOOKING] PaidAmount %.2f is less or equal to retention %.2f, no refund processed\n", booking.PaidAmount, retentionAmount)
-			refundAmount = 0
+		var refundAmount float64
+		if booking.IsPartialPayment {
+			refundAmount = booking.PaidAmount
+		} else {
+			retentionAmount := (booking.Price * float64(100-refundPercentage)) / 100
+			refundAmount = booking.PaidAmount - retentionAmount
+			if refundAmount <= 0 {
+				log.Printf("[CANCEL_BOOKING] PaidAmount %.2f is less or equal to retention %.2f, no refund processed\n", booking.PaidAmount, retentionAmount)
+				refundAmount = 0
+			}
 		}
 
 		if refundAmount > 0 {
