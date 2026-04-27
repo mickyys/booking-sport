@@ -6,11 +6,29 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/hamp/booking-sport/internal/domain"
 	mg "github.com/mailgun/mailgun-go/v4"
 )
+
+func formatNumber(n float64) string {
+	s := fmt.Sprintf("%.0f", n)
+	var sb strings.Builder
+	neg := s[0] == '-'
+	if neg {
+		sb.WriteByte(s[0])
+		s = s[1:]
+	}
+	for i := 0; i < len(s); i++ {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			sb.WriteByte('.')
+		}
+		sb.WriteByte(s[i])
+	}
+	return sb.String()
+}
 
 type MailgunMailer struct {
 	mg                  mg.Mailgun
@@ -102,11 +120,11 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 			"court_name":      booking.CourtName,
 			"date":            dateStr,
 			"hour":            timeWithSuffix,
-			"price":           booking.FinalPrice,
+			"price":           fmt.Sprintf("$%s", formatNumber(booking.FinalPrice)),
 			"customer_name":   booking.CustomerName,
 			"link_cancel":     cancelURL,
-			"amount":          paidAmount,
-			"amount_pending":  pendingAmount,
+			"amount":          fmt.Sprintf("$%s", formatNumber(paidAmount)),
+			"amount_pending":  fmt.Sprintf("$%s", formatNumber(pendingAmount)),
 			"payment_message": paymentMessage,
 			"policy_message":  policyMessage,
 		}
