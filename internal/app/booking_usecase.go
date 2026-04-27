@@ -253,7 +253,6 @@ func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking
 	}
 
 	fintocSecret := center.Fintoc.Payment.SecretKey
-	urlPaymentCallback := os.Getenv("URL_PAYMENT_CALLBACK")
 
 	client := fintoc.NewClient(fintocSecret)
 
@@ -268,11 +267,21 @@ func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking
 		}
 	}
 
+	urlFrontend := os.Getenv("URL_FRONTEND")
+	if urlFrontend == "" {
+		urlFrontend = "http://localhost:5173"
+	}
+
 	// successURL apunta al backend para validar y redirigir
-	url := fmt.Sprintf("%s?id=%s", urlPaymentCallback, booking.BookingCode)
+	urlPaymentCallback := os.Getenv("URL_PAYMENT_CALLBACK")
+	if urlPaymentCallback == "" {
+		urlPaymentCallback = "http://localhost:3000/payment/callback"
+	}
+	successURL := fmt.Sprintf("%s?id=%s", urlPaymentCallback, booking.BookingCode)
+	cancelURL := fmt.Sprintf("%s/booking/failure?reason=cancelled", urlFrontend)
 
 	orderID := fmt.Sprintf("booking-%s-%d", booking.CourtID.Hex(), booking.Hour)
-	res, err := client.CreateCheckoutSession(int(booking.Price), "CLP", email, orderID, url, url)
+	res, err := client.CreateCheckoutSession(int(booking.Price), "CLP", email, orderID, successURL, cancelURL)
 	if err != nil {
 		return "", fmt.Errorf("error creating fintoc checkout: %w", err)
 	}
