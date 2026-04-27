@@ -382,8 +382,18 @@ func (uc *BookingUseCase) ValidateFintocPaymentAndGetCode(ctx context.Context, b
 				}
 				// Enviar correo de confirmación (si está configurado)
 				if uc.mailer != nil {
+					cancellationHours := center.CancellationHours
+					if cancellationHours == 0 {
+						cancellationHours = 3
+					}
+					retentionPercent := center.RetentionPercent
+					if retentionPercent == 0 {
+						retentionPercent = 10
+					}
+					paidAmount := booking.PaidAmount
+					pendingAmount := booking.FinalPrice - booking.PaidAmount
 					go func() {
-						if err := uc.mailer.SendBookingConfirmation(context.Background(), booking); err != nil {
+						if err := uc.mailer.SendBookingConfirmation(context.Background(), booking, cancellationHours, retentionPercent, paidAmount, pendingAmount); err != nil {
 							log.Printf("[MAIL ERROR] sending booking confirmation: %v\n", err)
 						}
 					}()
@@ -603,8 +613,16 @@ func (uc *BookingUseCase) HandleMercadoPagoWebhook(ctx context.Context, paymentI
 		uc.notifyAdmins(ctx, booking.SportCenterID, title, body, booking.ID.Hex())
 
 		if uc.mailer != nil {
+			cancellationHours := center.CancellationHours
+			if cancellationHours == 0 {
+				cancellationHours = 3
+			}
+			retentionPercent := center.RetentionPercent
+			if retentionPercent == 0 {
+				retentionPercent = 10
+			}
 			go func(b *domain.Booking) {
-				if err := uc.mailer.SendBookingConfirmation(context.Background(), b); err != nil {
+				if err := uc.mailer.SendBookingConfirmation(context.Background(), b, cancellationHours, retentionPercent, paidAmount, pendingAmount); err != nil {
 					log.Printf("[MAIL ERROR] sending booking confirmation: %v\n", err)
 				}
 			}(booking)
@@ -654,8 +672,18 @@ func (uc *BookingUseCase) ValidateMercadoPagoPaymentAndGetCode(ctx context.Conte
 				return booking.BookingCode, fmt.Errorf("error updating booking: %w", err)
 			}
 			if uc.mailer != nil {
+				cancellationHours := center.CancellationHours
+				if cancellationHours == 0 {
+					cancellationHours = 3
+				}
+				retentionPercent := center.RetentionPercent
+				if retentionPercent == 0 {
+					retentionPercent = 10
+				}
+				paidAmount := booking.PaidAmount
+				pendingAmount := booking.FinalPrice - booking.PaidAmount
 				go func() {
-					if err := uc.mailer.SendBookingConfirmation(context.Background(), booking); err != nil {
+					if err := uc.mailer.SendBookingConfirmation(context.Background(), booking, cancellationHours, retentionPercent, paidAmount, pendingAmount); err != nil {
 						log.Printf("[MAIL ERROR] sending booking confirmation: %v\n", err)
 					}
 				}()
@@ -769,8 +797,23 @@ func (uc *BookingUseCase) HandleFintocWebhook(ctx context.Context, id string, st
 		uc.notifyAdmins(ctx, booking.SportCenterID, title, body, booking.ID.Hex())
 
 		if uc.mailer != nil {
+			center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
+			cancellationHours := 3
+			retentionPercent := 10
+			paidAmount := booking.PaidAmount
+			pendingAmount := booking.FinalPrice - booking.PaidAmount
+			if err == nil && center != nil {
+				cancellationHours = center.CancellationHours
+				if cancellationHours == 0 {
+					cancellationHours = 3
+				}
+				retentionPercent = center.RetentionPercent
+				if retentionPercent == 0 {
+					retentionPercent = 10
+				}
+			}
 			go func(b *domain.Booking) {
-				if err := uc.mailer.SendBookingConfirmation(context.Background(), b); err != nil {
+				if err := uc.mailer.SendBookingConfirmation(context.Background(), b, cancellationHours, retentionPercent, paidAmount, pendingAmount); err != nil {
 					log.Printf("[MAIL ERROR] sending booking confirmation: %v\n", err)
 				}
 			}(booking)
@@ -1015,8 +1058,18 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 	uc.notifyAdmins(ctx, booking.SportCenterID, title, body, booking.ID.Hex())
 
 	if uc.mailer != nil {
+		cancellationHours := center.CancellationHours
+		if cancellationHours == 0 {
+			cancellationHours = 3
+		}
+		retentionPercent := center.RetentionPercent
+		if retentionPercent == 0 {
+			retentionPercent = 10
+		}
+		paidAmount := booking.PaidAmount
+		pendingAmount := booking.FinalPrice - booking.PaidAmount
 		go func(b *domain.Booking) {
-			if err := uc.mailer.SendBookingConfirmation(context.Background(), b); err != nil {
+			if err := uc.mailer.SendBookingConfirmation(context.Background(), b, cancellationHours, retentionPercent, paidAmount, pendingAmount); err != nil {
 				log.Printf("[MAIL ERROR] sending booking confirmation: %v\n", err)
 			}
 		}(booking)
@@ -1091,8 +1144,18 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 
 	if uc.mailer != nil {
 		log.Printf("[CREATE BOOKING] Enviando correo de confirmación para reserva %s\n", booking.ID.Hex())
+		cancellationHours := center.CancellationHours
+		if cancellationHours == 0 {
+			cancellationHours = 3
+		}
+		retentionPercent := center.RetentionPercent
+		if retentionPercent == 0 {
+			retentionPercent = 10
+		}
+		paidAmount := booking.PaidAmount
+		pendingAmount := booking.FinalPrice - booking.PaidAmount
 		go func(b *domain.Booking) {
-			if err := uc.mailer.SendBookingConfirmation(context.Background(), b); err != nil {
+			if err := uc.mailer.SendBookingConfirmation(context.Background(), b, cancellationHours, retentionPercent, paidAmount, pendingAmount); err != nil {
 				log.Printf("[MAIL ERROR] sending booking confirmation: %v\n", err)
 			}
 		}(booking)

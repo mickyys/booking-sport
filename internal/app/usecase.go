@@ -75,7 +75,7 @@ type RecurringReservationRepository interface {
 
 // Mailer envía correos transaccionales (p. ej. confirmación de reserva)
 type Mailer interface {
-	SendBookingConfirmation(ctx context.Context, booking *domain.Booking) error
+	SendBookingConfirmation(ctx context.Context, booking *domain.Booking, cancellationHours, retentionPercent int, paidAmount, pendingAmount float64) error
 	SendBookingCancellation(ctx context.Context, booking *domain.Booking) error
 	SendContactEmail(ctx context.Context, to string, name string, email string, phone string, sportCenterName string, message string) error
 }
