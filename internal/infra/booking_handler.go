@@ -430,7 +430,7 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 		}
 	}
 
-	maxRefundAmount := booking.Price
+	maxRefundAmount := booking.PaidAmount
 	if !booking.IsPartialPayment {
 		maxRefundAmount = (booking.Price * float64(refundPercentage)) / 100
 	}
@@ -547,7 +547,7 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 		}
 	}
 
-	maxRefundAmount := booking.Price
+	maxRefundAmount := booking.PaidAmount
 	if !booking.IsPartialPayment {
 		maxRefundAmount = (booking.Price * float64(refundPercentage)) / 100
 	}
