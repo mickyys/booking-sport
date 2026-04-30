@@ -50,15 +50,36 @@ func Tracing() gin.HandlerFunc {
 		}
 		c.Writer = rw
 
+		cfRay := c.GetHeader("Cf-Ray")
+		cfIPCountry := c.GetHeader("Cf-Ipcountry")
+		cfIPCity := c.GetHeader("Cf-Ipcity")
+		cfIPContinent := c.GetHeader("Cf-Ipcontinent")
+		cfIPLatitude := c.GetHeader("Cf-Iplatitude")
+		cfIPLongitude := c.GetHeader("Cf-Iplongitude")
+		cfConnectingIP := c.GetHeader("Cf-Connecting-IP")
+		cfVisitor := c.GetHeader("Cf-Visitor")
+
+		clientIP := c.ClientIP()
+		if cfConnectingIP != "" {
+			clientIP = cfConnectingIP
+		}
+
 		logger.FromContext(ctx).Infow("request_started",
-			"msg", fmt.Sprintf("Solicitud %s %s recibida desde %s", c.Request.Method, c.Request.URL.Path, c.ClientIP()),
+			"msg", fmt.Sprintf("Solicitud %s %s recibida desde %s", c.Request.Method, c.Request.URL.Path, clientIP),
 			"trace_id", traceID,
 			"span_id", spanID,
 			"method", c.Request.Method,
 			"path", c.Request.URL.Path,
 			"query", c.Request.URL.RawQuery,
-			"client_ip", c.ClientIP(),
+			"client_ip", clientIP,
 			"user_agent", c.Request.UserAgent(),
+			"cf_ray", cfRay,
+			"cf_ipcountry", cfIPCountry,
+			"cf_ipcity", cfIPCity,
+			"cf_ipcontinent", cfIPContinent,
+			"cf_iplatitude", cfIPLatitude,
+			"cf_iplongitude", cfIPLongitude,
+			"cf_visitor", cfVisitor,
 		)
 
 		c.Next()
@@ -76,7 +97,9 @@ func Tracing() gin.HandlerFunc {
 			"duration_ms", duration.Milliseconds(),
 			"duration_us", duration.Microseconds(),
 			"response_size", rw.size,
-			"client_ip", c.ClientIP(),
+			"client_ip", clientIP,
+			"cf_ray", cfRay,
+			"cf_ipcountry", cfIPCountry,
 		)
 	}
 }
