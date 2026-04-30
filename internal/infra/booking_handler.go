@@ -21,10 +21,14 @@ import (
 
 type BookingHandler struct {
 	useCase *app.BookingUseCase
+	baseHandler *BaseHandler
 }
 
 func NewBookingHandler(uc *app.BookingUseCase) *BookingHandler {
-	return &BookingHandler{useCase: uc}
+	return &BookingHandler{
+		useCase: uc,
+		baseHandler: NewBaseHandler(),
+	}
 }
 
 // GetUserCancelledBookings retorna solo las reservas canceladas del usuario autenticado
@@ -376,31 +380,43 @@ func (h *BookingHandler) DeleteBookingSeries(c *gin.Context) {
 }
 
 func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
-	log.Printf(" ========== GetBookingDetail ==========")
 	idStr := c.Param("id")
 	id, err := primitive.ObjectIDFromHex(idStr)
 	if err != nil {
+		h.baseHandler.GetLogger(c).Warnw("booking_detail_invalid_id",
+			"id", idStr,
+			"error", err,
+		)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid booking id"})
 		return
 	}
 
 	booking, err := h.useCase.GetByID(c.Request.Context(), id)
 	if err != nil {
+		h.baseHandler.GetLogger(c).Warnw("booking_detail_not_found",
+			"booking_id", idStr,
+			"error", err,
+		)
 		c.JSON(http.StatusNotFound, gin.H{"error": "booking not found"})
 		return
 	}
-	log.Printf("booking =========> %+v\n", booking)
+
 	court, err := h.useCase.GetCourtByID(c.Request.Context(), booking.CourtID)
 	if err != nil {
+		h.baseHandler.LogError(c, "booking_detail_court_error", err,
+			"booking_id", booking.ID.Hex(),
+			"court_id", booking.CourtID.Hex(),
+		)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get court info"})
 		return
 	}
 
-	log.Printf("court =========> %+v\n", court)
-
 	center, err := h.useCase.GetSportCenterByID(c.Request.Context(), court.SportCenterID)
 	if err != nil {
-		log.Printf("[GET_BOOKING_DETAIL] Error obteniendo centro %s para reserva %s: %v\n", court.SportCenterID.Hex(), booking.ID.Hex(), err)
+		h.baseHandler.LogError(c, "booking_detail_center_error", err,
+			"booking_id", booking.ID.Hex(),
+			"center_id", court.SportCenterID.Hex(),
+		)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":     "failed to get sport center info",
 			"details":   err.Error(),
@@ -474,28 +490,50 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 func (h *BookingHandler) CancelBooking(c *gin.Context) {
 	id := c.Param("id")
 	if id == "" {
+		h.baseHandler.GetLogger(c).Warnw("booking_cancel_missing_id")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "booking id is required"})
 		return
 	}
 
 	bookingID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
+		h.baseHandler.GetLogger(c).Warnw("booking_cancel_invalid_id",
+			"id", id,
+			"error", err,
+		)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid booking id format"})
 		return
 	}
 
 	userID, exists := c.Get("user_id")
 	if !exists {
+		h.baseHandler.GetLogger(c).Warnw("booking_cancel_unauthorized",
+			"booking_id", id,
+		)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in token"})
 		return
 	}
 
-	// El porcentaje de reembolso ahora se calcula en el backend
+	h.baseHandler.GetLogger(c).Infow("booking_cancel_started",
+		"booking_id", bookingID.Hex(),
+		"user_id", userID.(string),
+	)
+
 	err = h.useCase.CancelBooking(c.Request.Context(), bookingID, userID.(string))
 	if err != nil {
+		h.baseHandler.GetLogger(c).Errorw("booking_cancel_failed",
+			"booking_id", bookingID.Hex(),
+			"user_id", userID.(string),
+			"error", err,
+		)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	h.baseHandler.GetLogger(c).Infow("booking_cancel_success",
+		"booking_id", bookingID.Hex(),
+		"user_id", userID.(string),
+	)
 
 	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
 }
@@ -639,12 +677,17 @@ func (h *BookingHandler) CreateInternalBooking(c *gin.Context) {
 }
 
 func (h *BookingHandler) CreateBooking(c *gin.Context) {
+	log := h.baseHandler.GetLogger(c)
+	
 	var booking struct {
 		domain.Booking
 		SeriesID string `json:"series_id"`
 		Partial bool   `json:"partial"`
 	}
 	if err := c.ShouldBindJSON(&booking); err != nil {
+		log.Warnw("booking_create_invalid_json",
+			"error", err,
+		)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -655,16 +698,36 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 		booking.Booking.PartialPaymentPaid = true
 	}
 
-	// Si hay un usuario autenticado (opcional), lo asociamos
-	if userID, exists := c.Get("user_id"); exists {
-		booking.Booking.UserID = userID.(string)
+	userID := h.baseHandler.GetUserID(c)
+	if userID != "" {
+		booking.Booking.UserID = userID
 	}
+
+	log.Infow("booking_create_started",
+		"court_id", booking.Booking.CourtID.Hex(),
+		"center_id", booking.Booking.SportCenterID.Hex(),
+		"date", booking.Booking.Date,
+		"hour", booking.Booking.Hour,
+		"minutes", booking.Booking.Minutes,
+		"final_price", booking.Booking.FinalPrice,
+		"partial_payment", booking.Partial,
+		"user_id", userID,
+	)
 
 	err := h.useCase.CreateInternalBooking(c.Request.Context(), &booking.Booking, "presential")
 	if err != nil {
+		log.Errorw("booking_create_failed",
+			"error", err,
+			"court_id", booking.Booking.CourtID.Hex(),
+		)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	log.Infow("booking_create_success",
+		"booking_code", booking.Booking.BookingCode,
+		"final_price", booking.Booking.FinalPrice,
+	)
 
 	c.JSON(http.StatusCreated, booking)
 }

@@ -3,10 +3,10 @@ package infra
 import (
 	"context"
 	"fmt"
-	"log"
 
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/messaging"
+	"github.com/hamp/booking-sport/pkg/logger"
 	"google.golang.org/api/option"
 )
 
@@ -40,12 +40,30 @@ func NewFirebaseNotificationService(ctx context.Context, credentialsFile string)
 	}, nil
 }
 
-func (s *FirebaseNotificationService) SendPushNotification(ctx context.Context, tokens []string, title, body string, data map[string]string) error {
+func (s *FirebaseNotificationService) SendPushNotification(ctx context.Context, tokens []string, title, body string, data map[string]string, notificationType string) error {
 	if len(tokens) == 0 {
 		return nil
 	}
 
-	// FCM permits up to 500 tokens in a single multicast message
+	log := logger.FromContext(ctx)
+
+	if data == nil {
+		data = make(map[string]string)
+	}
+	data["notification_type"] = notificationType
+
+	centerName := data["center_name"]
+	if centerName == "" {
+		centerName = "unknown"
+	}
+
+	log.Infow("push_notification_sending",
+		"notification_type", notificationType,
+		"center_name", centerName,
+		"tokens_count", len(tokens),
+		"title", title,
+	)
+
 	message := &messaging.MulticastMessage{
 		Tokens: tokens,
 		Notification: &messaging.Notification{
@@ -57,39 +75,54 @@ func (s *FirebaseNotificationService) SendPushNotification(ctx context.Context, 
 			Priority: "high",
 			Notification: &messaging.AndroidNotification{
 				ClickAction: "FLUTTER_NOTIFICATION_CLICK",
+				Icon:        "notification_icon",
+				Color:       "#2C3345",
 			},
 		},
 		APNS: &messaging.APNSConfig{
 			Payload: &messaging.APNSPayload{
 				Aps: &messaging.Aps{
-					Sound: "default",
+					Sound:          "default",
+					MutableContent: true,
 				},
 			},
 		},
-		Webpush: &messaging.WebpushConfig{
-			Notification: &messaging.WebpushNotification{
-				Title: title,
-				Body:  body,
-				Icon:  "/logo/favicon-32x32.png",
-			},
-		},
 	}
 
-	log.Printf("[FCM] Sending multicast message to %d tokens. Title: %s", len(tokens), title)
 	response, err := s.client.SendEachForMulticast(ctx, message)
 	if err != nil {
+		log.Errorw("push_notification_failed",
+			"notification_type", notificationType,
+			"center_name", centerName,
+			"tokens_count", len(tokens),
+			"error", err,
+		)
 		return fmt.Errorf("error sending multicast message: %v", err)
 	}
 
-	log.Printf("[FCM] response: %+v", response)
-
 	if response.FailureCount > 0 {
-		log.Printf("Failed to send %d push notifications out of %d", response.FailureCount, len(tokens))
+		log.Warnw("push_notification_partial_failure",
+			"notification_type", notificationType,
+			"center_name", centerName,
+			"tokens_count", len(tokens),
+			"success_count", response.SuccessCount,
+			"failure_count", response.FailureCount,
+		)
 		for idx, resp := range response.Responses {
 			if !resp.Success {
-				log.Printf("Token %s failed: %v", tokens[idx], resp.Error)
+				log.Warnw("push_notification_token_failed",
+					"token_index", idx,
+					"error", resp.Error,
+				)
 			}
 		}
+	} else {
+		log.Infow("push_notification_success",
+			"notification_type", notificationType,
+			"center_name", centerName,
+			"tokens_count", len(tokens),
+			"success_count", response.SuccessCount,
+		)
 	}
 
 	return nil

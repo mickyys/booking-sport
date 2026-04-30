@@ -89,7 +89,7 @@ type UserDeviceRepository interface {
 }
 
 type NotificationService interface {
-	SendPushNotification(ctx context.Context, tokens []string, title, body string, data map[string]string) error
+	SendPushNotification(ctx context.Context, tokens []string, title, body string, data map[string]string, notificationType string) error
 }
 type SportCenterUseCase struct {
 	repo                     SportCenterRepository

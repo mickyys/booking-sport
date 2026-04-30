@@ -27,10 +27,14 @@ type Auth0User struct {
 
 type SportCenterHandler struct {
 	useCase *app.SportCenterUseCase
+	baseHandler *BaseHandler
 }
 
 func NewSportCenterHandler(uc *app.SportCenterUseCase) *SportCenterHandler {
-	return &SportCenterHandler{useCase: uc}
+	return &SportCenterHandler{
+		useCase: uc,
+		baseHandler: NewBaseHandler(),
+	}
 }
 
 func (h *SportCenterHandler) List(c *gin.Context) {
@@ -516,10 +520,14 @@ func fetchAuth0UserByID(domain, userID string) *Auth0User {
 
 type CourtHandler struct {
 	useCase *app.CourtUseCase
+	baseHandler *BaseHandler
 }
 
 func NewCourtHandler(uc *app.CourtUseCase) *CourtHandler {
-	return &CourtHandler{useCase: uc}
+	return &CourtHandler{
+		useCase: uc,
+		baseHandler: NewBaseHandler(),
+	}
 }
 
 func (h *CourtHandler) List(c *gin.Context) {

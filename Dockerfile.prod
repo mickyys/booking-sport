@@ -19,10 +19,16 @@ FROM alpine:latest
 
 WORKDIR /root/
 
-# Instalar tzdata
+# Instalar tzdata para zone horaria
 RUN apk add --no-cache tzdata
 
 COPY --from=builder /app/main .
+
+# Configurar variables de ambiente por defecto
+ENV LOG_LEVEL=info
+ENV LOG_FORMAT=json
+ENV GIN_MODE=release
+ENV ENVIRONMENT=production
 
 EXPOSE 8080
 
