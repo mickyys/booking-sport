@@ -75,9 +75,21 @@ type RecurringReservationRepository interface {
 
 // Mailer envía correos transaccionales (p. ej. confirmación de reserva)
 type Mailer interface {
-	SendBookingConfirmation(ctx context.Context, booking *domain.Booking) error
+	SendBookingConfirmation(ctx context.Context, booking *domain.Booking, cancellationHours, retentionPercent int, paidAmount, pendingAmount float64) error
 	SendBookingCancellation(ctx context.Context, booking *domain.Booking) error
 	SendContactEmail(ctx context.Context, to string, name string, email string, phone string, sportCenterName string, message string) error
+}
+
+type UserDeviceRepository interface {
+	Upsert(ctx context.Context, device *domain.UserDevice) error
+	FindByUserID(ctx context.Context, userID string) ([]domain.UserDevice, error)
+	FindBySportCenterID(ctx context.Context, centerID string) ([]domain.UserDevice, error)
+	DeleteByToken(ctx context.Context, token string) error
+	UpdateLastActivity(ctx context.Context, userID string, token string) error
+}
+
+type NotificationService interface {
+	SendPushNotification(ctx context.Context, tokens []string, title, body string, data map[string]string, notificationType string) error
 }
 type SportCenterUseCase struct {
 	repo                     SportCenterRepository
@@ -216,9 +228,9 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 
 		// Recolectar todos los slots primero para detectar overlaps
 		allSlots := []struct {
-			slot       domain.CourtSchedule
-			startMin   int
-			endMin     int
+			slot     domain.CourtSchedule
+			startMin int
+			endMin   int
 		}{}
 
 		for _, s := range court.Schedule {
@@ -232,9 +244,9 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 			endMin := startMin + 60 // Duración de 1 hora
 
 			allSlots = append(allSlots, struct {
-				slot       domain.CourtSchedule
-				startMin   int
-				endMin     int
+				slot     domain.CourtSchedule
+				startMin int
+				endMin   int
 			}{s, startMin, endMin})
 		}
 
@@ -242,8 +254,6 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 		// Regla: slots específicos (day_of_week != nil) nunca se bloquean
 		// Slots generales (day_of_week == nil) se bloquean si overlapan con específicos
 		blockedSlots := make(map[int]map[int]bool)
-
-		fmt.Printf("DEBUG: Processing court %s with %d slots\n", court.Name, len(allSlots))
 
 		for i := range allSlots {
 			for j := i + 1; j < len(allSlots); j++ {
@@ -254,10 +264,6 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 					continue
 				}
 
-				fmt.Printf("DEBUG: Overlap found: A(%d:%d,dow=%v) vs B(%d:%d,dow=%v)\n", 
-					slotA.slot.Hour, slotA.slot.Minutes, slotA.slot.DayOfWeek,
-					slotB.slot.Hour, slotB.slot.Minutes, slotB.slot.DayOfWeek)
-
 				// Si A es específico, bloquear B si es general
 				if slotA.slot.DayOfWeek != nil {
 					if slotB.slot.DayOfWeek == nil {
@@ -265,7 +271,6 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 							blockedSlots[slotB.slot.Hour] = make(map[int]bool)
 						}
 						blockedSlots[slotB.slot.Hour][slotB.slot.Minutes] = true
-						fmt.Printf("DEBUG: Blocking B(%d:%d) - B general, A specific\n", slotB.slot.Hour, slotB.slot.Minutes)
 					}
 					continue
 				}
@@ -277,7 +282,6 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 							blockedSlots[slotA.slot.Hour] = make(map[int]bool)
 						}
 						blockedSlots[slotA.slot.Hour][slotA.slot.Minutes] = true
-						fmt.Printf("DEBUG: Blocking A(%d:%d) - A general, B specific\n", slotA.slot.Hour, slotA.slot.Minutes)
 					}
 					continue
 				}
@@ -295,27 +299,18 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 			}
 		}
 
-		fmt.Printf("DEBUG: Blocked slots for court %s: %+v\n", court.Name, blockedSlots)
-
-schedules := []EnrichedCourtSchedule{}
+		schedules := []EnrichedCourtSchedule{}
 		for _, s := range court.Schedule {
 			// Filtrar por day_of_week si está definido
 			if s.DayOfWeek != nil && *s.DayOfWeek != dayOfWeek {
 				continue
 			}
 
-			fmt.Printf("DEBUG: Processing slot hour=%d min=%d dow=%v blocked=%v\n", 
-				s.Hour, s.Minutes, s.DayOfWeek, blockedSlots[s.Hour] != nil && blockedSlots[s.Hour][s.Minutes])
-
 			// Skip slots que tienen overlap con otro slot
 			// Si el slot es específico (day_of_week != nil), siempre se muestra
 			if s.DayOfWeek != nil {
-				fmt.Printf("DEBUG: Slot %d:%d is specific - SHOWING\n", s.Hour, s.Minutes)
 			} else if blockedSlots[s.Hour] != nil && blockedSlots[s.Hour][s.Minutes] {
-				fmt.Printf("DEBUG: Slot %d:%d is general and BLOCKED - SKIPPING\n", s.Hour, s.Minutes)
 				continue
-			} else {
-				fmt.Printf("DEBUG: Slot %d:%d is general and NOT blocked - SHOWING\n", s.Hour, s.Minutes)
 			}
 
 			sch := EnrichedCourtSchedule{
@@ -627,7 +622,6 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 	}
 	return result, nil
 }
-
 
 func NewSportCenterUseCase(repo SportCenterRepository, courtRepo CourtRepository, userRepo UserRepository, bookingRepo BookingRepository, recurringRepo RecurringReservationRepository) *SportCenterUseCase {
 	return &SportCenterUseCase{

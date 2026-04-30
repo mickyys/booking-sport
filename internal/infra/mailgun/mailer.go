@@ -4,22 +4,41 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/hamp/booking-sport/internal/domain"
+	"github.com/hamp/booking-sport/pkg/logger"
 	mg "github.com/mailgun/mailgun-go/v4"
 )
 
-type MailgunMailer struct {
-	mg              mg.Mailgun
-	from            string
-	templateConfirm string
-	templateCancel  string
+func formatNumber(n float64) string {
+	s := fmt.Sprintf("%.0f", n)
+	var sb strings.Builder
+	neg := s[0] == '-'
+	if neg {
+		sb.WriteByte(s[0])
+		s = s[1:]
+	}
+	for i := 0; i < len(s); i++ {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			sb.WriteByte('.')
+		}
+		sb.WriteByte(s[i])
+	}
+	return sb.String()
 }
 
-func NewMailgunMailer(apiKey, domain, from, templateConfirm, templateCancel string) *MailgunMailer {
+type MailgunMailer struct {
+	mg                  mg.Mailgun
+	from                string
+	templateConfirm     string
+	templateConfirmPaid string
+	templateCancel      string
+}
+
+func NewMailgunMailer(apiKey, domain, from, templateConfirm, templateConfirmPaid, templateCancel string) *MailgunMailer {
 	mgClient := mg.NewMailgun(domain, apiKey)
 	// Forzar el nombre "ReservaloYA" en el campo From
 	fromName := "ReservaloYA"
@@ -28,10 +47,10 @@ func NewMailgunMailer(apiKey, domain, from, templateConfirm, templateCancel stri
 		fromAddress = "reservas@reservaloya.cl"
 	}
 	fullFrom := fmt.Sprintf("%s <%s>", fromName, fromAddress)
-	return &MailgunMailer{mg: mgClient, from: fullFrom, templateConfirm: templateConfirm, templateCancel: templateCancel}
+	return &MailgunMailer{mg: mgClient, from: fullFrom, templateConfirm: templateConfirm, templateConfirmPaid: templateConfirmPaid, templateCancel: templateCancel}
 }
 
-func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *domain.Booking) error {
+func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *domain.Booking, cancellationHours, retentionPercent int, paidAmount, pendingAmount float64) error {
 	var to string
 	if booking.GuestDetails != nil && booking.GuestDetails.Email != "" {
 		to = booking.GuestDetails.Email
@@ -41,25 +60,46 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 		return fmt.Errorf("no recipient email for booking %s", booking.BookingCode)
 	}
 
-	// Cargar zona horaria de Santiago
+	// Valores por defecto si no se proporcionan
+	if cancellationHours == 0 {
+		cancellationHours = 3
+	}
+	if retentionPercent == 0 {
+		retentionPercent = 10
+	}
+
+	// Determinar si está completamente pagado
+	isPaid := pendingAmount <= 0 || paidAmount >= booking.FinalPrice
+	paymentMessage := "Recuerda que el saldo pendiente debe ser pagado en el recinto antes de utilizar la cancha."
+	if isPaid {
+		paymentMessage = "Tu reserva se encuentra completamente pagada. No necesitas realizar pagos adicionales."
+	}
+
+	// Política de cancelación
+	policyMessage := fmt.Sprintf("Puedes cancelar hasta %d horas antes de la reserva para recibir reembolso completo. Si cancelas con menos de %d horas, se retendrá el %d%% del monto como cargo por cancelación.", cancellationHours, cancellationHours, retentionPercent)
+
 	loc, err := time.LoadLocation("America/Santiago")
 	if err != nil {
-		log.Printf("[MAILGUN] error loading location America/Santiago: %v, using UTC\n", err)
+		logger.GetLogger().Warnw("mailgun_timezone_load_error", "error", err)
 		loc = time.UTC
 	}
 
-	// Formatear hora usando únicamente `booking.Hour` (sin minutos).
 	timeStr := fmt.Sprintf("%02d:00", booking.Hour)
-	// Añadir sufijo " hrs" tal como se solicita (ej. "16:00 hrs").
 	timeWithSuffix := fmt.Sprintf("%s hrs", timeStr)
+
+	dateStr := booking.Date.In(loc).Format("02-01-2006")
 
 	subject := fmt.Sprintf("Reserva confirmada - %s", booking.SportCenterName)
 
 	message := m.mg.NewMessage(m.from, subject, "", to)
-	if m.templateConfirm != "" {
-		message.SetTemplate(m.templateConfirm)
-		// Variables de plantilla
-		// Construir URL pública de cancelación usando la URL del frontend
+
+	templateToUse := m.templateConfirm
+	if paidAmount > 0 && m.templateConfirmPaid != "" {
+		templateToUse = m.templateConfirmPaid
+	}
+
+	if templateToUse != "" {
+		message.SetTemplate(templateToUse)
 		frontendURL := os.Getenv("URL_FRONTEND")
 		if frontendURL == "" {
 			frontendURL = "http://localhost:5173"
@@ -68,36 +108,55 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 		cancelURL := fmt.Sprintf("%s/booking/cancel?code=%s", frontendURL, booking.BookingCode)
 
 		vars := map[string]interface{}{
-			"booking_code":  booking.BookingCode,
-			"center_name":   booking.SportCenterName,
-			"court_name":    booking.CourtName,
-			"date":          booking.Date.In(loc).Format("02-01-2006"),
-			"hour":          timeWithSuffix,
-			"price":         booking.FinalPrice,
-			"customer_name": booking.CustomerName,
-			"link_cancel":   cancelURL,
+			"booking_code":    booking.BookingCode,
+			"center_name":     booking.SportCenterName,
+			"court_name":      booking.CourtName,
+			"date":            dateStr,
+			"hour":            timeWithSuffix,
+			"price":           fmt.Sprintf("$%s", formatNumber(booking.FinalPrice)),
+			"customer_name":   booking.CustomerName,
+			"link_cancel":     cancelURL,
+			"amount":          fmt.Sprintf("$%s", formatNumber(paidAmount)),
+			"amount_pending":  fmt.Sprintf("$%s", formatNumber(pendingAmount)),
+			"payment_message": paymentMessage,
+			"policy_message":  policyMessage,
 		}
-		if b, err := json.Marshal(vars); err == nil {
-			message.AddHeader("X-Mailgun-Variables", string(b))
+		if b, err := json.Marshal(vars); err != nil {
+			logger.GetLogger().Warnw("mailgun_template_vars_error", "error", err)
 		} else {
-			log.Printf("[MAILGUN] error marshaling template variables: %v\n", err)
+			message.AddHeader("X-Mailgun-Variables", string(b))
 		}
 	} else {
-		// fallback simple body
-		// Usar booking.Date para formatear minutos si existen
-		body := fmt.Sprintf("Tu reserva %s en %s (cancha %s) para %s a las %s ha sido confirmada.", booking.BookingCode, booking.SportCenterName, booking.CourtName, booking.Date.In(loc).Format("2006-01-02"), timeWithSuffix)
+		body := fmt.Sprintf("Tu reserva %s en %s (cancha %s) para el %s a las %s ha sido confirmada.\n\n",
+			booking.BookingCode, booking.SportCenterName, booking.CourtName, dateStr, timeWithSuffix)
+		body += fmt.Sprintf("Monto pagado: $%.0f\n\n", booking.FinalPrice)
+		body += fmt.Sprintf("Política de cancelación: Puedes cancelar hasta %d horas antes para recibir reembolso completo. ",
+			cancellationHours)
+		body += fmt.Sprintf("Si cancelas con menos de %d horas, se retendrá el %d%% como cargo por cancelación.\n",
+			cancellationHours, retentionPercent)
 		message.SetHtml(body)
 	}
 
-	// Send with timeout
 	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	_, id, err := m.mg.Send(sendCtx, message)
 	if err != nil {
+		logger.GetLogger().Errorw("mailgun_send_failed",
+			"error", err,
+			"to", logger.MaskEmail(to),
+			"booking_code", booking.BookingCode,
+			"template", templateToUse,
+		)
 		return fmt.Errorf("mailgun send error: %w", err)
 	}
-	log.Printf("[MAILGUN] sent message id=%s to=%s", id, to)
+
+	logger.GetLogger().Infow("mailgun_email_sent",
+		"to", logger.MaskEmail(to),
+		"booking_code", booking.BookingCode,
+		"message_id", id,
+		"template", templateToUse,
+	)
 	return nil
 }
 
@@ -110,10 +169,9 @@ func (m *MailgunMailer) SendBookingCancellation(ctx context.Context, booking *do
 		return fmt.Errorf("no recipient email for booking %s", booking.BookingCode)
 	}
 
-	// Cargar zona horaria de Santiago
 	loc, err := time.LoadLocation("America/Santiago")
 	if err != nil {
-		log.Printf("[MAILGUN] error loading location America/Santiago: %v, using UTC\n", err)
+		logger.GetLogger().Warnw("mailgun_timezone_load_error", "error", err)
 		loc = time.UTC
 	}
 
@@ -142,7 +200,7 @@ func (m *MailgunMailer) SendBookingCancellation(ctx context.Context, booking *do
 		if b, err := json.Marshal(vars); err == nil {
 			message.AddHeader("X-Mailgun-Variables", string(b))
 		} else {
-			log.Printf("[MAILGUN] error marshaling template variables (cancel): %v\n", err)
+			logger.GetLogger().Warnw("mailgun_template_vars_error", "error", err)
 		}
 	} else {
 		body := fmt.Sprintf("Tu reserva %s en %s (cancha %s) para %s a las %s ha sido cancelada.", booking.BookingCode, booking.SportCenterName, booking.CourtName, booking.Date.In(loc).Format("2006-01-02"), timeWithSuffix)
@@ -154,9 +212,19 @@ func (m *MailgunMailer) SendBookingCancellation(ctx context.Context, booking *do
 
 	_, id, err := m.mg.Send(sendCtx, message)
 	if err != nil {
+		logger.GetLogger().Errorw("mailgun_cancel_email_failed",
+			"error", err,
+			"to", logger.MaskEmail(to),
+			"booking_code", booking.BookingCode,
+		)
 		return fmt.Errorf("mailgun send error: %w", err)
 	}
-	log.Printf("[MAILGUN] sent cancel message id=%s to=%s", id, to)
+
+	logger.GetLogger().Infow("mailgun_cancel_email_sent",
+		"to", logger.MaskEmail(to),
+		"booking_code", booking.BookingCode,
+		"message_id", id,
+	)
 	return nil
 }
 
@@ -180,8 +248,18 @@ func (m *MailgunMailer) SendContactEmail(ctx context.Context, to string, name st
 
 	_, id, err := m.mg.Send(sendCtx, message)
 	if err != nil {
+		logger.GetLogger().Errorw("mailgun_contact_email_failed",
+			"error", err,
+			"to", logger.MaskEmail(to),
+			"from", logger.MaskEmail(email),
+		)
 		return fmt.Errorf("mailgun send contact error: %w", err)
 	}
-	log.Printf("[MAILGUN] sent contact email id=%s to=%s", id, to)
+
+	logger.GetLogger().Infow("mailgun_contact_email_sent",
+		"to", logger.MaskEmail(to),
+		"from", logger.MaskEmail(email),
+		"message_id", id,
+	)
 	return nil
 }

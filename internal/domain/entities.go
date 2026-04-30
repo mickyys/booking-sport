@@ -100,6 +100,18 @@ type User struct {
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
 }
 
+type UserDevice struct {
+	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	UserID         string             `bson:"user_id" json:"user_id"`
+	SportCenterID  string             `bson:"sport_center_id" json:"sport_center_id"`
+	FCMToken       string             `bson:"fcm_token" json:"fcm_token"`
+	Platform       string             `bson:"platform" json:"platform"` // ios, android, web
+	DeviceName     string             `bson:"device_name" json:"device_name"`
+	OSVersion      string             `bson:"os_version" json:"os_version"`
+	LastActivityAt time.Time          `bson:"last_activity_at" json:"last_activity_at"`
+	CreatedAt      time.Time          `bson:"created_at" json:"created_at"`
+}
+
 type PagedResponse struct {
 	Data       interface{} `json:"data"`
 	Total      int64       `json:"total"`
