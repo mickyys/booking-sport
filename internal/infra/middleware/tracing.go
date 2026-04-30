@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -50,6 +51,7 @@ func Tracing() gin.HandlerFunc {
 		c.Writer = rw
 
 		logger.FromContext(ctx).Infow("request_started",
+			"msg", fmt.Sprintf("Solicitud %s %s recibida desde %s", c.Request.Method, c.Request.URL.Path, c.ClientIP()),
 			"trace_id", traceID,
 			"span_id", spanID,
 			"method", c.Request.Method,
@@ -64,6 +66,8 @@ func Tracing() gin.HandlerFunc {
 		duration := time.Since(start)
 
 		logger.FromContext(ctx).Infow("request_completed",
+			"msg", fmt.Sprintf("Solicitud %s %s completada — %d, %dms, %dB",
+				c.Request.Method, c.Request.URL.Path, rw.status, duration.Milliseconds(), rw.size),
 			"trace_id", traceID,
 			"span_id", spanID,
 			"method", c.Request.Method,
@@ -83,12 +87,13 @@ func Recovery() gin.HandlerFunc {
 			if err := recover(); err != nil {
 				traceID := logger.GetTraceID(c.Request.Context())
 
-				logger.FromContext(c.Request.Context()).Errorw("panic_recovered",
-					"trace_id", traceID,
-					"error", err,
-					"method", c.Request.Method,
-					"path", c.Request.URL.Path,
-				)
+			logger.FromContext(c.Request.Context()).Errorw("panic_recovered",
+				"msg", fmt.Sprintf("PANIC recuperado en %s %s", c.Request.Method, c.Request.URL.Path),
+				"trace_id", traceID,
+				"error", err,
+				"method", c.Request.Method,
+				"path", c.Request.URL.Path,
+			)
 
 				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
 					"error":   "internal_server_error",
