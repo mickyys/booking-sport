@@ -36,6 +36,8 @@ func Init(cfg Config) (*newrelic.Application, error) {
 		newrelic.ConfigAppName(cfg.AppName),
 		newrelic.ConfigDistributedTracerEnabled(true),
 		newrelic.ConfigCustomInsightsEventsMaxSamplesStored(1000),
+		newrelic.ConfigAppLogEnabled(true),
+		newrelic.ConfigAppLogForwardingEnabled(true),
 	}
 
 	if cfg.Environment == "development" {
@@ -53,6 +55,7 @@ func Init(cfg Config) (*newrelic.Application, error) {
 		"app_name", cfg.AppName,
 		"environment", cfg.Environment,
 		"license_key", logger.MaskAPIKey(cfg.LicenseKey),
+		"log_forwarding", true,
 	)
 
 	return nrApp, nil

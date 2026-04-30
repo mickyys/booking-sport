@@ -144,6 +144,8 @@ github.com/montanaflynn/stats v0.7.1 h1:etflOAAHORrCC44V+aR6Ftzort912ZU+YLiSTuV8
 github.com/montanaflynn/stats v0.7.1/go.mod h1:etXPPgVO6n31NxCd9KQUMvCM+ve0ruNzt6R8Bnaayow=
 github.com/newrelic/go-agent/v3 v3.43.3 h1:0A6DkUBYK2bidV6jJDJ1SD2XkRlg976nl+SiEqkGTUQ=
 github.com/newrelic/go-agent/v3 v3.43.3/go.mod h1:MFXnCId5xXMIJI6A/kbkg0DO48EVTsKcmNijMYphzTg=
+github.com/newrelic/go-agent/v3/integrations/logcontext-v2/nrzap v1.2.4 h1:Hf3pC0FNVhuO2AwruSRM4pyTBKHFaLohcF68dqScA64=
+github.com/newrelic/go-agent/v3/integrations/logcontext-v2/nrzap v1.2.4/go.mod h1:B+EpkW1/oOf6W3rprefGYXq7JIkhz3WR8nZNjZX3xqc=
 github.com/newrelic/go-agent/v3/integrations/nrgin v1.4.2 h1:AdWN/9G5fkIgAUfnMnChr2ZL1jKbicZxNSsn99s4wgc=
 github.com/newrelic/go-agent/v3/integrations/nrgin v1.4.2/go.mod h1:8mDVuKhV1U/NhuL8HLB0YxheDHCuo/dRqW4OgFiTMwI=
 github.com/pelletier/go-toml/v2 v2.2.4 h1:mye9XuhQ6gvn5h28+VilKrrPoQVanw5PMw/TB0t5Ec4=
