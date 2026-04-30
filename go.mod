@@ -11,10 +11,10 @@ require (
 	github.com/mailgun/mailgun-go/v4 v4.11.0
 	github.com/mercadopago/sdk-go v1.8.0
 	github.com/newrelic/go-agent/v3 v3.43.3
-	github.com/newrelic/go-agent/v3/integrations/logcontext-v2/nrzap v1.2.4
+	github.com/newrelic/go-agent/v3/integrations/logcontext-v2/nrlogrus v1.1.3
 	github.com/newrelic/go-agent/v3/integrations/nrgin v1.4.2
+	github.com/sirupsen/logrus v1.9.4
 	go.mongodb.org/mongo-driver v1.17.9
-	go.uber.org/zap v1.28.0
 	golang.org/x/sync v0.20.0
 	google.golang.org/api v0.231.0
 )
@@ -90,7 +90,6 @@ require (
 	go.opentelemetry.io/otel/sdk v1.39.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.39.0 // indirect
 	go.opentelemetry.io/otel/trace v1.39.0 // indirect
-	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/arch v0.25.0 // indirect
 	golang.org/x/crypto v0.49.0 // indirect
 	golang.org/x/net v0.52.0 // indirect
