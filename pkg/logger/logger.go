@@ -6,10 +6,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/newrelic/go-agent/v3/integrations/logcontext-v2/nrzap"
+	"github.com/newrelic/go-agent/v3/integrations/logcontext-v2/nrlogrus"
 	"github.com/newrelic/go-agent/v3/newrelic"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
+	"github.com/sirupsen/logrus"
 )
 
 type contextKey string
@@ -20,8 +19,14 @@ const (
 	UserIDKey  contextKey = "user_id"
 )
 
+type SugaredLogger struct {
+	entry  *logrus.Entry
+	logger *logrus.Logger
+	config Config
+}
+
 var (
-	globalLogger     *zap.SugaredLogger
+	globalLogger     *SugaredLogger
 	once             sync.Once
 	newrelicApp      *newrelic.Application
 	newrelicAppMutex sync.RWMutex
@@ -35,69 +40,29 @@ type Config struct {
 	Environment string `env:"ENVIRONMENT" default:"development"`
 }
 
-func Init(cfg Config) *zap.SugaredLogger {
+func Init(cfg Config) *SugaredLogger {
 	once.Do(func() {
 		globalLogger = NewLogger(cfg)
 	})
 	return globalLogger
 }
 
-func ReconfigureForNewRelic(cfg Config, nrApp *newrelic.Application) *zap.SugaredLogger {
+func ReconfigureForNewRelic(cfg Config, nrApp *newrelic.Application) *SugaredLogger {
 	SetNewRelicApplication(nrApp)
-	
-	newrelicAppMutex.RLock()
-	nrApp = newrelicApp
-	newrelicAppMutex.RUnlock()
-	
-	if nrApp == nil {
-		return globalLogger
-	}
-	
-	level := parseLevel(cfg.Level)
 
-	encoderConfig := zapcore.EncoderConfig{
-		TimeKey:        "timestamp",
-		LevelKey:       "level",
-		NameKey:        "logger",
-		CallerKey:      "caller",
-		FunctionKey:    zapcore.OmitKey,
-		MessageKey:     "event",
-		StacktraceKey:  "stacktrace",
-		LineEnding:     zapcore.DefaultLineEnding,
-		EncodeLevel:    zapcore.CapitalLevelEncoder,
-		EncodeTime:     zapcore.ISO8601TimeEncoder,
-		EncodeDuration: zapcore.SecondsDurationEncoder,
-		EncodeCaller:   zapcore.ShortCallerEncoder,
+	logger := newLogrusLogger(cfg, nrApp)
+	sugared := &SugaredLogger{
+		entry: logger.WithFields(logrus.Fields{
+			"service":     cfg.Service,
+			"version":     cfg.Version,
+			"environment": cfg.Environment,
+		}),
+		logger: logger,
+		config: cfg,
 	}
 
-	var encoder zapcore.Encoder
-	if strings.ToLower(cfg.Format) == "console" {
-		encoder = zapcore.NewConsoleEncoder(encoderConfig)
-	} else {
-		encoder = zapcore.NewJSONEncoder(encoderConfig)
-	}
-
-	core := zapcore.NewCore(
-		encoder,
-		zapcore.AddSync(os.Stdout),
-		level,
-	)
-
-	nrCore, err := nrzap.WrapBackgroundCore(core, nrApp)
-	if err != nil {
-		core = nrCore
-	}
-
-	logger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
-
-	sugar := logger.Sugar().With(
-		"service", cfg.Service,
-		"version", cfg.Version,
-		"environment", cfg.Environment,
-	)
-
-	globalLogger = sugar
-	return sugar
+	globalLogger = sugared
+	return sugared
 }
 
 func SetNewRelicApplication(nrApp *newrelic.Application) {
@@ -112,79 +77,115 @@ func GetNewRelicApplication() *newrelic.Application {
 	return newrelicApp
 }
 
-func NewLogger(cfg Config) *zap.SugaredLogger {
-	level := parseLevel(cfg.Level)
-
-	encoderConfig := zapcore.EncoderConfig{
-		TimeKey:        "timestamp",
-		LevelKey:       "level",
-		NameKey:        "logger",
-		CallerKey:      "caller",
-		FunctionKey:    zapcore.OmitKey,
-		MessageKey:     "event",
-		StacktraceKey:  "stacktrace",
-		LineEnding:     zapcore.DefaultLineEnding,
-		EncodeLevel:    zapcore.CapitalLevelEncoder,
-		EncodeTime:     zapcore.ISO8601TimeEncoder,
-		EncodeDuration: zapcore.SecondsDurationEncoder,
-		EncodeCaller:   zapcore.ShortCallerEncoder,
-	}
-
-	var encoder zapcore.Encoder
-	if strings.ToLower(cfg.Format) == "console" {
-		encoder = zapcore.NewConsoleEncoder(encoderConfig)
-	} else {
-		encoder = zapcore.NewJSONEncoder(encoderConfig)
-	}
-
-	core := zapcore.NewCore(
-		encoder,
-		zapcore.AddSync(os.Stdout),
-		level,
-	)
-
+func NewLogger(cfg Config) *SugaredLogger {
 	newrelicAppMutex.RLock()
 	nrApp := newrelicApp
 	newrelicAppMutex.RUnlock()
 
-	if nrApp != nil {
-		nrCore, err := nrzap.WrapBackgroundCore(core, nrApp)
-		if err == nil {
-			core = nrCore
+	logger := newLogrusLogger(cfg, nrApp)
+	sugared := &SugaredLogger{
+		entry: logger.WithFields(logrus.Fields{
+			"service":     cfg.Service,
+			"version":     cfg.Version,
+			"environment": cfg.Environment,
+		}),
+		logger: logger,
+		config: cfg,
+	}
+
+	return sugared
+}
+
+func newLogrusLogger(cfg Config, nrApp *newrelic.Application) *logrus.Logger {
+	logger := logrus.New()
+	logger.SetOutput(os.Stdout)
+	logger.SetLevel(parseLevel(cfg.Level))
+
+	isJSON := !strings.EqualFold(cfg.Format, "console")
+
+	var formatter logrus.Formatter
+	if isJSON {
+		formatter = &logrus.JSONFormatter{
+			TimestampFormat: "2006-01-02T15:04:05.000Z0700",
+			FieldMap: logrus.FieldMap{
+				logrus.FieldKeyMsg:  "event",
+				logrus.FieldKeyTime: "timestamp",
+			},
+		}
+	} else {
+		formatter = &logrus.TextFormatter{
+			FullTimestamp:   true,
+			TimestampFormat: "2006-01-02T15:04:05.000Z0700",
 		}
 	}
 
-	logger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
-
-	sugar := logger.Sugar().With(
-		"service", cfg.Service,
-		"version", cfg.Version,
-		"environment", cfg.Environment,
-	)
-
-	return sugar
-}
-
-func parseLevel(level string) zapcore.Level {
-	switch strings.ToLower(level) {
-	case "debug":
-		return zapcore.DebugLevel
-	case "info":
-		return zapcore.InfoLevel
-	case "warn", "warning":
-		return zapcore.WarnLevel
-	case "error":
-		return zapcore.ErrorLevel
-	default:
-		return zapcore.InfoLevel
+	if nrApp != nil {
+		formatter = nrlogrus.NewFormatter(nrApp, formatter)
 	}
+
+	logger.SetFormatter(formatter)
+	return logger
 }
 
-func GetLogger() *zap.SugaredLogger {
+func parseLevel(level string) logrus.Level {
+	l, err := logrus.ParseLevel(level)
+	if err != nil {
+		return logrus.InfoLevel
+	}
+	return l
+}
+
+func GetLogger() *SugaredLogger {
 	if globalLogger == nil {
 		globalLogger = NewLogger(Config{})
 	}
 	return globalLogger
+}
+
+func (l *SugaredLogger) Infow(msg string, keysAndValues ...interface{}) {
+	l.entry.WithFields(fieldsFromKVs(keysAndValues...)).Info(msg)
+}
+
+func (l *SugaredLogger) Warnw(msg string, keysAndValues ...interface{}) {
+	l.entry.WithFields(fieldsFromKVs(keysAndValues...)).Warn(msg)
+}
+
+func (l *SugaredLogger) Errorw(msg string, keysAndValues ...interface{}) {
+	l.entry.WithFields(fieldsFromKVs(keysAndValues...)).Error(msg)
+}
+
+func (l *SugaredLogger) Fatalw(msg string, keysAndValues ...interface{}) {
+	l.entry.WithFields(fieldsFromKVs(keysAndValues...)).Fatal(msg)
+}
+
+func (l *SugaredLogger) Debugw(msg string, keysAndValues ...interface{}) {
+	l.entry.WithFields(fieldsFromKVs(keysAndValues...)).Debug(msg)
+}
+
+func (l *SugaredLogger) With(fields ...interface{}) *SugaredLogger {
+	return &SugaredLogger{
+		entry:  l.entry.WithFields(fieldsFromKVs(fields...)),
+		logger: l.logger,
+		config: l.config,
+	}
+}
+
+func (l *SugaredLogger) Sync() error {
+	return nil
+}
+
+func fieldsFromKVs(keysAndValues ...interface{}) logrus.Fields {
+	fields := logrus.Fields{}
+	for i := 0; i < len(keysAndValues); i += 2 {
+		if i+1 < len(keysAndValues) {
+			key, ok := keysAndValues[i].(string)
+			if !ok {
+				continue
+			}
+			fields[key] = keysAndValues[i+1]
+		}
+	}
+	return fields
 }
 
 func WithTraceID(ctx context.Context, traceID string) context.Context {
@@ -220,47 +221,26 @@ func GetUserID(ctx context.Context) string {
 	return ""
 }
 
-func FromContext(ctx context.Context) *zap.SugaredLogger {
+func FromContext(ctx context.Context) *SugaredLogger {
 	logger := GetLogger()
 
-	newrelicAppMutex.RLock()
-	nrApp := newrelicApp
-	newrelicAppMutex.RUnlock()
-
-	if nrApp != nil && ctx != nil {
-		txn := newrelic.FromContext(ctx)
-		if txn != nil {
-			core := logger.Desugar().Core()
-			nrCore, err := nrzap.WrapTransactionCore(core, txn)
-			if err == nil {
-				nrLogger := zap.New(nrCore, zap.AddCaller(), zap.AddCallerSkip(1))
-				logger = nrLogger.Sugar()
-			}
-		}
-	}
-
-	fields := make([]interface{}, 0)
+	entry := logger.entry
 
 	if traceID := GetTraceID(ctx); traceID != "" {
-		fields = append(fields, "trace_id", traceID)
+		entry = entry.WithField("trace_id", traceID)
 	}
 	if spanID := GetSpanID(ctx); spanID != "" {
-		fields = append(fields, "span_id", spanID)
+		entry = entry.WithField("span_id", spanID)
 	}
 	if userID := GetUserID(ctx); userID != "" {
-		fields = append(fields, "user_id", userID)
+		entry = entry.WithField("user_id", userID)
 	}
 
-	if len(fields) > 0 {
-		return logger.With(fields...)
-	}
+	entry = entry.WithContext(ctx)
 
-	return logger
-}
-
-func Sync() error {
-	if globalLogger != nil {
-		return globalLogger.Sync()
+	return &SugaredLogger{
+		entry:  entry,
+		logger: logger.logger,
+		config: logger.config,
 	}
-	return nil
 }

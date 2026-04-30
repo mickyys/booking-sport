@@ -384,6 +384,7 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 	id, err := primitive.ObjectIDFromHex(idStr)
 	if err != nil {
 		h.baseHandler.GetLogger(c).Warnw("booking_detail_invalid_id",
+			"msg", fmt.Sprintf("ID de booking inválido recibido: %s", idStr),
 			"id", idStr,
 			"error", err,
 		)
@@ -394,6 +395,7 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 	booking, err := h.useCase.GetByID(c.Request.Context(), id)
 	if err != nil {
 		h.baseHandler.GetLogger(c).Warnw("booking_detail_not_found",
+			"msg", fmt.Sprintf("Booking no encontrado con id: %s", idStr),
 			"booking_id", idStr,
 			"error", err,
 		)
@@ -490,7 +492,9 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 func (h *BookingHandler) CancelBooking(c *gin.Context) {
 	id := c.Param("id")
 	if id == "" {
-		h.baseHandler.GetLogger(c).Warnw("booking_cancel_missing_id")
+		h.baseHandler.GetLogger(c).Warnw("booking_cancel_missing_id",
+			"msg", "Falta el id de booking en la solicitud de cancelación",
+		)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "booking id is required"})
 		return
 	}
@@ -498,6 +502,7 @@ func (h *BookingHandler) CancelBooking(c *gin.Context) {
 	bookingID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
 		h.baseHandler.GetLogger(c).Warnw("booking_cancel_invalid_id",
+			"msg", fmt.Sprintf("Formato de ID de booking inválido para cancelación: %s", id),
 			"id", id,
 			"error", err,
 		)
@@ -508,6 +513,7 @@ func (h *BookingHandler) CancelBooking(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
 		h.baseHandler.GetLogger(c).Warnw("booking_cancel_unauthorized",
+			"msg", fmt.Sprintf("Intento de cancelación no autorizado — falta user_id en token para booking %s", id),
 			"booking_id", id,
 		)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in token"})
@@ -515,22 +521,26 @@ func (h *BookingHandler) CancelBooking(c *gin.Context) {
 	}
 
 	h.baseHandler.GetLogger(c).Infow("booking_cancel_started",
+		"msg", fmt.Sprintf("Solicitud de cancelación recibida para booking %s por usuario %s",
+			bookingID.Hex(), userID.(string)),
 		"booking_id", bookingID.Hex(),
 		"user_id", userID.(string),
 	)
 
 	err = h.useCase.CancelBooking(c.Request.Context(), bookingID, userID.(string))
 	if err != nil {
-		h.baseHandler.GetLogger(c).Errorw("booking_cancel_failed",
-			"booking_id", bookingID.Hex(),
-			"user_id", userID.(string),
-			"error", err,
-		)
+	h.baseHandler.GetLogger(c).Errorw("booking_cancel_failed",
+		"msg", fmt.Sprintf("Falló la cancelación del booking %s", bookingID.Hex()),
+		"booking_id", bookingID.Hex(),
+		"user_id", userID.(string),
+		"error", err,
+	)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	h.baseHandler.GetLogger(c).Infow("booking_cancel_success",
+		"msg", fmt.Sprintf("Booking %s cancelado exitosamente", bookingID.Hex()),
 		"booking_id", bookingID.Hex(),
 		"user_id", userID.(string),
 	)
@@ -686,6 +696,7 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&booking); err != nil {
 		log.Warnw("booking_create_invalid_json",
+			"msg", "JSON inválido recibido en solicitud de creación de booking",
 			"error", err,
 		)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -704,6 +715,8 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 	}
 
 	log.Infow("booking_create_started",
+		"msg", fmt.Sprintf("Se crea booking para las %02d:00 hrs en cancha %s",
+			booking.Booking.Hour, booking.Booking.CourtName),
 		"court_id", booking.Booking.CourtID.Hex(),
 		"center_id", booking.Booking.SportCenterID.Hex(),
 		"date", booking.Booking.Date,
@@ -717,6 +730,7 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 	err := h.useCase.CreateInternalBooking(c.Request.Context(), &booking.Booking, "presential")
 	if err != nil {
 		log.Errorw("booking_create_failed",
+			"msg", fmt.Sprintf("Falló la creación del booking en cancha %s", booking.Booking.CourtID.Hex()),
 			"error", err,
 			"court_id", booking.Booking.CourtID.Hex(),
 		)
@@ -725,6 +739,8 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 	}
 
 	log.Infow("booking_create_success",
+		"msg", fmt.Sprintf("Booking creado exitosamente — código %s, precio $%.0f",
+			booking.Booking.BookingCode, booking.Booking.FinalPrice),
 		"booking_code", booking.Booking.BookingCode,
 		"final_price", booking.Booking.FinalPrice,
 	)

@@ -80,7 +80,10 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 
 	loc, err := time.LoadLocation("America/Santiago")
 	if err != nil {
-		logger.GetLogger().Warnw("mailgun_timezone_load_error", "error", err)
+		logger.GetLogger().Warnw("mailgun_timezone_load_error",
+			"msg", "Error al cargar zona horaria America/Santiago (confirmación), usando UTC",
+			"error", err,
+		)
 		loc = time.UTC
 	}
 
@@ -122,7 +125,10 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 			"policy_message":  policyMessage,
 		}
 		if b, err := json.Marshal(vars); err != nil {
-			logger.GetLogger().Warnw("mailgun_template_vars_error", "error", err)
+			logger.GetLogger().Warnw("mailgun_template_vars_error",
+				"msg", fmt.Sprintf("Error al serializar variables de template de confirmación para booking %s", booking.BookingCode),
+				"error", err,
+			)
 		} else {
 			message.AddHeader("X-Mailgun-Variables", string(b))
 		}
@@ -143,6 +149,8 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 	_, id, err := m.mg.Send(sendCtx, message)
 	if err != nil {
 		logger.GetLogger().Errorw("mailgun_send_failed",
+			"msg", fmt.Sprintf("Error al enviar correo de confirmación a %s para booking %s",
+				logger.MaskEmail(to), booking.BookingCode),
 			"error", err,
 			"to", logger.MaskEmail(to),
 			"booking_code", booking.BookingCode,
@@ -152,6 +160,8 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 	}
 
 	logger.GetLogger().Infow("mailgun_email_sent",
+		"msg", fmt.Sprintf("Correo de confirmación enviado a %s para booking %s",
+			logger.MaskEmail(to), booking.BookingCode),
 		"to", logger.MaskEmail(to),
 		"booking_code", booking.BookingCode,
 		"message_id", id,
@@ -171,7 +181,10 @@ func (m *MailgunMailer) SendBookingCancellation(ctx context.Context, booking *do
 
 	loc, err := time.LoadLocation("America/Santiago")
 	if err != nil {
-		logger.GetLogger().Warnw("mailgun_timezone_load_error", "error", err)
+		logger.GetLogger().Warnw("mailgun_timezone_load_error",
+			"msg", "Error al cargar zona horaria America/Santiago (cancelación), usando UTC",
+			"error", err,
+		)
 		loc = time.UTC
 	}
 
@@ -200,7 +213,10 @@ func (m *MailgunMailer) SendBookingCancellation(ctx context.Context, booking *do
 		if b, err := json.Marshal(vars); err == nil {
 			message.AddHeader("X-Mailgun-Variables", string(b))
 		} else {
-			logger.GetLogger().Warnw("mailgun_template_vars_error", "error", err)
+			logger.GetLogger().Warnw("mailgun_template_vars_error",
+				"msg", fmt.Sprintf("Error al serializar variables de template de cancelación para booking %s", booking.BookingCode),
+				"error", err,
+			)
 		}
 	} else {
 		body := fmt.Sprintf("Tu reserva %s en %s (cancha %s) para %s a las %s ha sido cancelada.", booking.BookingCode, booking.SportCenterName, booking.CourtName, booking.Date.In(loc).Format("2006-01-02"), timeWithSuffix)
@@ -213,6 +229,8 @@ func (m *MailgunMailer) SendBookingCancellation(ctx context.Context, booking *do
 	_, id, err := m.mg.Send(sendCtx, message)
 	if err != nil {
 		logger.GetLogger().Errorw("mailgun_cancel_email_failed",
+			"msg", fmt.Sprintf("Error al enviar correo de cancelación a %s para booking %s",
+				logger.MaskEmail(to), booking.BookingCode),
 			"error", err,
 			"to", logger.MaskEmail(to),
 			"booking_code", booking.BookingCode,
@@ -221,6 +239,8 @@ func (m *MailgunMailer) SendBookingCancellation(ctx context.Context, booking *do
 	}
 
 	logger.GetLogger().Infow("mailgun_cancel_email_sent",
+		"msg", fmt.Sprintf("Correo de cancelación enviado a %s para booking %s",
+			logger.MaskEmail(to), booking.BookingCode),
 		"to", logger.MaskEmail(to),
 		"booking_code", booking.BookingCode,
 		"message_id", id,
@@ -249,6 +269,8 @@ func (m *MailgunMailer) SendContactEmail(ctx context.Context, to string, name st
 	_, id, err := m.mg.Send(sendCtx, message)
 	if err != nil {
 		logger.GetLogger().Errorw("mailgun_contact_email_failed",
+			"msg", fmt.Sprintf("Error al enviar correo de contacto a %s desde %s",
+				logger.MaskEmail(to), logger.MaskEmail(email)),
 			"error", err,
 			"to", logger.MaskEmail(to),
 			"from", logger.MaskEmail(email),
@@ -257,6 +279,8 @@ func (m *MailgunMailer) SendContactEmail(ctx context.Context, to string, name st
 	}
 
 	logger.GetLogger().Infow("mailgun_contact_email_sent",
+		"msg", fmt.Sprintf("Correo de contacto enviado a %s desde %s",
+			logger.MaskEmail(to), logger.MaskEmail(email)),
 		"to", logger.MaskEmail(to),
 		"from", logger.MaskEmail(email),
 		"message_id", id,

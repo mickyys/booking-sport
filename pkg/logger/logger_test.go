@@ -3,23 +3,23 @@ package logger
 import (
 	"testing"
 
-	"go.uber.org/zap/zapcore"
+	"github.com/sirupsen/logrus"
 )
 
 func TestParseLevel(t *testing.T) {
 	tests := []struct {
 		input    string
-		expected zapcore.Level
+		expected logrus.Level
 	}{
-		{"debug", zapcore.DebugLevel},
-		{"DEBUG", zapcore.DebugLevel},
-		{"info", zapcore.InfoLevel},
-		{"INFO", zapcore.InfoLevel},
-		{"warn", zapcore.WarnLevel},
-		{"warning", zapcore.WarnLevel},
-		{"error", zapcore.ErrorLevel},
-		{"invalid", zapcore.InfoLevel},
-		{"", zapcore.InfoLevel},
+		{"debug", logrus.DebugLevel},
+		{"DEBUG", logrus.DebugLevel},
+		{"info", logrus.InfoLevel},
+		{"INFO", logrus.InfoLevel},
+		{"warn", logrus.WarnLevel},
+		{"warning", logrus.WarnLevel},
+		{"error", logrus.ErrorLevel},
+		{"invalid", logrus.InfoLevel},
+		{"", logrus.InfoLevel},
 	}
 
 	for _, tt := range tests {
@@ -93,4 +93,54 @@ func TestMaskPhone(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFieldsFromKVs(t *testing.T) {
+	fields := fieldsFromKVs("key1", "val1", "key2", 42)
+	if fields["key1"] != "val1" {
+		t.Errorf("fields[key1] = %v, want val1", fields["key1"])
+	}
+	if fields["key2"] != 42 {
+		t.Errorf("fields[key2] = %v, want 42", fields["key2"])
+	}
+
+	fields = fieldsFromKVs()
+	if len(fields) != 0 {
+		t.Errorf("expected empty fields, got %d", len(fields))
+	}
+}
+
+func TestSugaredLogger_Infow(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.DebugLevel)
+	entry := logger.WithField("base", "value")
+	sl := &SugaredLogger{
+		entry:  entry,
+		logger: logger,
+		config: Config{Service: "test", Version: "1.0", Environment: "dev"},
+	}
+
+	// Should not panic
+	sl.Infow("test_message", "key", "val")
+	sl.Warnw("test_warn", "key", "val")
+	sl.Errorw("test_error", "key", "val")
+	sl.Debugw("test_debug", "key", "val")
+}
+
+func TestSugaredLogger_With(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.DebugLevel)
+	entry := logger.WithField("base", "value")
+	sl := &SugaredLogger{
+		entry:  entry,
+		logger: logger,
+		config: Config{Service: "test", Version: "1.0", Environment: "dev"},
+	}
+
+	withLogger := sl.With("extra", "field")
+	if withLogger == sl {
+		t.Error("With should return a new instance")
+	}
+
+	withLogger.Infow("test_with", "key", "val")
 }

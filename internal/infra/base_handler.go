@@ -3,11 +3,10 @@ package infra
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/hamp/booking-sport/pkg/logger"
-	"go.uber.org/zap"
 )
 
 type BaseHandler struct {
-	logger *zap.SugaredLogger
+	logger *logger.SugaredLogger
 }
 
 func NewBaseHandler() *BaseHandler {
@@ -16,7 +15,7 @@ func NewBaseHandler() *BaseHandler {
 	}
 }
 
-func (h *BaseHandler) GetLogger(c *gin.Context) *zap.SugaredLogger {
+func (h *BaseHandler) GetLogger(c *gin.Context) *logger.SugaredLogger {
 	return logger.FromContext(c.Request.Context())
 }
 
@@ -48,7 +47,7 @@ func (h *BaseHandler) LogWarn(c *gin.Context, event string, err error, fields ..
 
 func (h *BaseHandler) buildFields(c *gin.Context, fields ...interface{}) []interface{} {
 	allFields := make([]interface{}, 0, len(fields)+4)
-	
+
 	allFields = append(allFields,
 		"method", c.Request.Method,
 		"path", c.Request.URL.Path,

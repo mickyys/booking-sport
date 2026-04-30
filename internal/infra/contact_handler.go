@@ -2,6 +2,7 @@ package infra
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -46,6 +47,7 @@ func (h *ContactHandler) Submit(c *gin.Context) {
 	var req ContactRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		log.Warnw("contact_form_invalid_json",
+			"msg", "JSON inválido recibido en formulario de contacto",
 			"error", err,
 		)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Datos inválidos: " + err.Error()})
@@ -54,16 +56,21 @@ func (h *ContactHandler) Submit(c *gin.Context) {
 
 	secretKey := os.Getenv("TURNSTILE_SECRET_KEY")
 	if secretKey == "" {
-		log.Errorw("contact_form_turnstile_not_configured")
+		log.Errorw("contact_form_turnstile_not_configured",
+			"msg", "TURNSTILE_SECRET_KEY no está configurada en el servidor",
+		)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error de configuración en el servidor"})
 		return
 	}
 
 	if !verifyTurnstile(req.TurnstileToken, secretKey, c.ClientIP()) {
 		if req.TurnstileToken == "XXXX.DUMMY.TOKEN.XXXX" || os.Getenv("GIN_MODE") != "release" {
-			log.Infow("contact_form_turnstile_bypass_dev")
+			log.Infow("contact_form_turnstile_bypass_dev",
+				"msg", "Verificación Turnstile omitida en entorno de desarrollo",
+			)
 		} else {
 			log.Warnw("contact_form_turnstile_failed",
+				"msg", fmt.Sprintf("Verificación Turnstile fallida desde IP %s", c.ClientIP()),
 				"client_ip", c.ClientIP(),
 			)
 			c.JSON(http.StatusForbidden, gin.H{"error": "Validación de seguridad fallida"})
@@ -72,6 +79,7 @@ func (h *ContactHandler) Submit(c *gin.Context) {
 	}
 
 	log.Infow("contact_form_received",
+		"msg", fmt.Sprintf("Formulario de contacto recibido de %s para %s", req.Name, req.SportCenterName),
 		"name", req.Name,
 		"email", logger.MaskEmail(req.Email),
 		"phone", logger.MaskPhone(req.Phone),
@@ -87,16 +95,20 @@ func (h *ContactHandler) Submit(c *gin.Context) {
 		err := h.mailer.SendContactEmail(c.Request.Context(), receiverEmail, req.Name, req.Email, req.Phone, req.SportCenterName, req.Message)
 		if err != nil {
 			log.Errorw("contact_form_email_send_failed",
+				"msg", fmt.Sprintf("Error al enviar correo de contacto a %s", logger.MaskEmail(receiverEmail)),
 				"error", err,
 				"email", logger.MaskEmail(receiverEmail),
 			)
 		} else {
 			log.Infow("contact_form_email_sent",
+				"msg", fmt.Sprintf("Correo de contacto enviado exitosamente a %s", logger.MaskEmail(receiverEmail)),
 				"email", logger.MaskEmail(receiverEmail),
 			)
 		}
 	} else {
-		log.Warnw("contact_form_mailer_not_configured")
+		log.Warnw("contact_form_mailer_not_configured",
+			"msg", "Mailer no configurado, no se puede enviar correo de contacto",
+		)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Contacto recibido correctamente"})
@@ -113,6 +125,7 @@ func verifyTurnstile(token, secret, remoteIP string) bool {
 	resp, err := http.PostForm(verifyURL, data)
 	if err != nil {
 		logger.GetLogger().Warnw("turnstile_verification_error",
+			"msg", fmt.Sprintf("Error de conexión al verificar Turnstile desde IP %s", remoteIP),
 			"error", err,
 			"remote_ip", remoteIP,
 		)
@@ -123,6 +136,7 @@ func verifyTurnstile(token, secret, remoteIP string) bool {
 	var turnstileResp TurnstileResponse
 	if err := json.NewDecoder(resp.Body).Decode(&turnstileResp); err != nil {
 		logger.GetLogger().Warnw("turnstile_decode_error",
+			"msg", "Error al decodificar respuesta de Turnstile",
 			"error", err,
 		)
 		return false
@@ -130,6 +144,7 @@ func verifyTurnstile(token, secret, remoteIP string) bool {
 
 	if !turnstileResp.Success {
 		logger.GetLogger().Warnw("turnstile_verification_failed",
+			"msg", fmt.Sprintf("Verificación Turnstile rechazada desde IP %s", remoteIP),
 			"error_codes", turnstileResp.ErrorCodes,
 			"remote_ip", remoteIP,
 		)
