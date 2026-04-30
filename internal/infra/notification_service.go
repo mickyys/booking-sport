@@ -58,6 +58,8 @@ func (s *FirebaseNotificationService) SendPushNotification(ctx context.Context, 
 	}
 
 	log.Infow("push_notification_sending",
+		"msg", fmt.Sprintf("Enviando notificación push tipo %s a %d dispositivos del centro %s",
+			notificationType, len(tokens), centerName),
 		"notification_type", notificationType,
 		"center_name", centerName,
 		"tokens_count", len(tokens),
@@ -92,6 +94,8 @@ func (s *FirebaseNotificationService) SendPushNotification(ctx context.Context, 
 	response, err := s.client.SendEachForMulticast(ctx, message)
 	if err != nil {
 		log.Errorw("push_notification_failed",
+			"msg", fmt.Sprintf("Error al enviar notificación push tipo %s a %s — falló completamente",
+				notificationType, centerName),
 			"notification_type", notificationType,
 			"center_name", centerName,
 			"tokens_count", len(tokens),
@@ -102,6 +106,8 @@ func (s *FirebaseNotificationService) SendPushNotification(ctx context.Context, 
 
 	if response.FailureCount > 0 {
 		log.Warnw("push_notification_partial_failure",
+			"msg", fmt.Sprintf("Notificación push enviada parcialmente: %d éxito, %d fallos para %s",
+				response.SuccessCount, response.FailureCount, centerName),
 			"notification_type", notificationType,
 			"center_name", centerName,
 			"tokens_count", len(tokens),
@@ -110,14 +116,17 @@ func (s *FirebaseNotificationService) SendPushNotification(ctx context.Context, 
 		)
 		for idx, resp := range response.Responses {
 			if !resp.Success {
-				log.Warnw("push_notification_token_failed",
-					"token_index", idx,
-					"error", resp.Error,
-				)
+			log.Warnw("push_notification_token_failed",
+				"msg", fmt.Sprintf("Token FCM #%d falló en envío de notificación", idx),
+				"token_index", idx,
+				"error", resp.Error,
+			)
 			}
 		}
 	} else {
 		log.Infow("push_notification_success",
+			"msg", fmt.Sprintf("Notificación push tipo %s enviada exitosamente a %d dispositivos de %s",
+				notificationType, response.SuccessCount, centerName),
 			"notification_type", notificationType,
 			"center_name", centerName,
 			"tokens_count", len(tokens),
