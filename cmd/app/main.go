@@ -42,7 +42,7 @@ func main() {
 	}
 
 	if nrApp != nil {
-		logger.SetNewRelicApplication(nrApp)
+		log = logger.ReconfigureForNewRelic(logConfig, nrApp)
 		log.Infow("new_relic_logs_enabled")
 	}
 

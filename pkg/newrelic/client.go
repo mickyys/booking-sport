@@ -35,13 +35,10 @@ func Init(cfg Config) (*newrelic.Application, error) {
 		newrelic.ConfigLicense(cfg.LicenseKey),
 		newrelic.ConfigAppName(cfg.AppName),
 		newrelic.ConfigDistributedTracerEnabled(true),
-		newrelic.ConfigCustomInsightsEventsMaxSamplesStored(1000),
+		newrelic.ConfigCustomInsightsEventsMaxSamplesStored(10000),
 		newrelic.ConfigAppLogEnabled(true),
 		newrelic.ConfigAppLogForwardingEnabled(true),
-	}
-
-	if cfg.Environment == "development" {
-		options = append(options, newrelic.ConfigEnabled(false))
+		newrelic.ConfigAIMonitoringEnabled(true),
 	}
 
 	nrApp, err := newrelic.NewApplication(options...)
