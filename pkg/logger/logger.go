@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/newrelic/go-agent/v3/integrations/logcontext-v2/nrzap"
+	"github.com/newrelic/go-agent/v3/newrelic"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -19,8 +21,10 @@ const (
 )
 
 var (
-	globalLogger *zap.SugaredLogger
-	once         sync.Once
+	globalLogger     *zap.SugaredLogger
+	once             sync.Once
+	newrelicApp      *newrelic.Application
+	newrelicAppMutex sync.RWMutex
 )
 
 type Config struct {
@@ -36,6 +40,18 @@ func Init(cfg Config) *zap.SugaredLogger {
 		globalLogger = NewLogger(cfg)
 	})
 	return globalLogger
+}
+
+func SetNewRelicApplication(nrApp *newrelic.Application) {
+	newrelicAppMutex.Lock()
+	defer newrelicAppMutex.Unlock()
+	newrelicApp = nrApp
+}
+
+func GetNewRelicApplication() *newrelic.Application {
+	newrelicAppMutex.RLock()
+	defer newrelicAppMutex.RUnlock()
+	return newrelicApp
 }
 
 func NewLogger(cfg Config) *zap.SugaredLogger {
@@ -68,6 +84,19 @@ func NewLogger(cfg Config) *zap.SugaredLogger {
 		zapcore.AddSync(os.Stdout),
 		level,
 	)
+
+	newrelicAppMutex.RLock()
+	nrApp := newrelicApp
+	newrelicAppMutex.RUnlock()
+
+	if nrApp != nil {
+		nrCore, err := nrzap.WrapBackgroundCore(core, nrApp)
+		if err != nil {
+			core = core
+		} else {
+			core = nrCore
+		}
+	}
 
 	logger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
 
@@ -137,6 +166,22 @@ func GetUserID(ctx context.Context) string {
 
 func FromContext(ctx context.Context) *zap.SugaredLogger {
 	logger := GetLogger()
+
+	newrelicAppMutex.RLock()
+	nrApp := newrelicApp
+	newrelicAppMutex.RUnlock()
+
+	if nrApp != nil && ctx != nil {
+		txn := newrelic.FromContext(ctx)
+		if txn != nil {
+			core := logger.Desugar().Core()
+			nrCore, err := nrzap.WrapTransactionCore(core, txn)
+			if err == nil {
+				nrLogger := zap.New(nrCore, zap.AddCaller(), zap.AddCallerSkip(1))
+				logger = nrLogger.Sugar()
+			}
+		}
+	}
 
 	fields := make([]interface{}, 0)
 

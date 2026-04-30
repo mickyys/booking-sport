@@ -11,6 +11,7 @@ require (
 	github.com/mailgun/mailgun-go/v4 v4.11.0
 	github.com/mercadopago/sdk-go v1.8.0
 	github.com/newrelic/go-agent/v3 v3.43.3
+	github.com/newrelic/go-agent/v3/integrations/logcontext-v2/nrzap v1.2.4
 	github.com/newrelic/go-agent/v3/integrations/nrgin v1.4.2
 	go.mongodb.org/mongo-driver v1.17.9
 	go.uber.org/zap v1.28.0

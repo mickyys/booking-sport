@@ -36,9 +36,14 @@ func main() {
 		Enabled:     nr.GetEnabledFromEnv(),
 		Environment: logConfig.Environment,
 	}
-	_, err := nr.Init(nrConfig)
+	nrApp, err := nr.Init(nrConfig)
 	if err != nil {
 		log.Warnw("new_relic initialization failed", "error", err)
+	}
+
+	if nrApp != nil {
+		logger.SetNewRelicApplication(nrApp)
+		log.Infow("new_relic_logs_enabled")
 	}
 
 	log.Infow("application_starting",
