@@ -42,6 +42,64 @@ func Init(cfg Config) *zap.SugaredLogger {
 	return globalLogger
 }
 
+func ReconfigureForNewRelic(cfg Config, nrApp *newrelic.Application) *zap.SugaredLogger {
+	SetNewRelicApplication(nrApp)
+	
+	newrelicAppMutex.RLock()
+	nrApp = newrelicApp
+	newrelicAppMutex.RUnlock()
+	
+	if nrApp == nil {
+		return globalLogger
+	}
+	
+	level := parseLevel(cfg.Level)
+
+	encoderConfig := zapcore.EncoderConfig{
+		TimeKey:        "timestamp",
+		LevelKey:       "level",
+		NameKey:        "logger",
+		CallerKey:      "caller",
+		FunctionKey:    zapcore.OmitKey,
+		MessageKey:     "event",
+		StacktraceKey:  "stacktrace",
+		LineEnding:     zapcore.DefaultLineEnding,
+		EncodeLevel:    zapcore.CapitalLevelEncoder,
+		EncodeTime:     zapcore.ISO8601TimeEncoder,
+		EncodeDuration: zapcore.SecondsDurationEncoder,
+		EncodeCaller:   zapcore.ShortCallerEncoder,
+	}
+
+	var encoder zapcore.Encoder
+	if strings.ToLower(cfg.Format) == "console" {
+		encoder = zapcore.NewConsoleEncoder(encoderConfig)
+	} else {
+		encoder = zapcore.NewJSONEncoder(encoderConfig)
+	}
+
+	core := zapcore.NewCore(
+		encoder,
+		zapcore.AddSync(os.Stdout),
+		level,
+	)
+
+	nrCore, err := nrzap.WrapBackgroundCore(core, nrApp)
+	if err != nil {
+		core = nrCore
+	}
+
+	logger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
+
+	sugar := logger.Sugar().With(
+		"service", cfg.Service,
+		"version", cfg.Version,
+		"environment", cfg.Environment,
+	)
+
+	globalLogger = sugar
+	return sugar
+}
+
 func SetNewRelicApplication(nrApp *newrelic.Application) {
 	newrelicAppMutex.Lock()
 	defer newrelicAppMutex.Unlock()
@@ -91,9 +149,7 @@ func NewLogger(cfg Config) *zap.SugaredLogger {
 
 	if nrApp != nil {
 		nrCore, err := nrzap.WrapBackgroundCore(core, nrApp)
-		if err != nil {
-			core = core
-		} else {
+		if err == nil {
 			core = nrCore
 		}
 	}
