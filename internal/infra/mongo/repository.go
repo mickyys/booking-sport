@@ -81,7 +81,7 @@ func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, 
 	if name != "" {
 		matchStage = append(matchStage, bson.E{
 			Key: "name",
-			Value: bson.M{"$regex": "^" + regexp.QuoteMeta(name), "$options": "i"},
+			Value: bson.M{"$regex": regexp.QuoteMeta(name), "$options": "i"},
 		})
 	}
 	

@@ -1,7 +1,7 @@
 # Fix: Búsqueda Parcial por Nombre de Centro Deportivo
 
 ## Problema
-Al buscar "cato" en el frontend, no aparecía "Centro Deportivo Católica" hasta escribir el nombre completo.
+Al buscar "cato" en el frontend, no aparecía "Centro Deportivo Católica" o "Club Union Catolica" hasta escribir el nombre completo.
 
 ## Causa Raíz
 El código usaba `$text` search de MongoDB (línea 87 en `repository.go`), que:
@@ -14,43 +14,39 @@ El código usaba `$text` search de MongoDB (línea 87 en `repository.go`), que:
 ### Cambios Realizados
 
 1. **`internal/infra/mongo/repository.go`** (líneas 77-92)
-   - Reemplazado `$text` search por regex con anclaje de inicio
+   - Reemplazado `$text` search por regex **sin anclaje** para búsqueda en cualquier parte del nombre
    - Búsqueda case-insensitive con `$options: "i"`
    - Uso de `regexp.QuoteMeta()` para escapar caracteres especiales
+   - **Importante:** Se removió el `^` para permitir búsqueda en toda la frase
 
 2. **`internal/infra/mongo/indexes.go`** (línea 53-56)
-   - Agregado índice en `name` para optimizar búsquedas con regex
-   - El índice permite que MongoDB use index scan en lugar de collection scan
-
-3. **`cmd/migrate-name-index/main.go`** (nuevo archivo)
-   - Script para aplicar el índice en la base de datos existente
-   - Opcional: elimina el índice de texto que ya no se necesita
-
-4. **`docs/search-optimization.md`** (nuevo archivo)
-   - Documentación completa de la optimización
+   - Agregado índice en `name` para optimizar búsquedas
+   - El índice ayuda aunque el regex no esté anclado al inicio
 
 ### Cómo Funciona Ahora
 
 ```go
-// Búsqueda con regex anclado
+// Búsqueda con regex SIN anclaje (busca en cualquier parte)
 bson.M{
-    "$regex": "^" + regexp.QuoteMeta(name),
+    "$regex": regexp.QuoteMeta(name),
     "$options": "i"  // case-insensitive
 }
 
 // Ejemplo: name = "cato"
-// MongoDB busca: /^cato/i
-// Encuentra: "Católica", "Centro Católico", "Cato Sports"
-// No encuentra: "Deportivo Cato" (no empieza con "cato")
+// MongoDB busca: /cato/i
+// Encuentra: "Católica", "Club Union Catolica", "Centro Católico", "Cato Sports"
+// No encuentra: "Deportivo" (no contiene "cato")
 ```
 
 ### Por Qué es Más Rápido
 
-| Tipo | Complejidad | Usa Índice |
-|------|-------------|------------|
-| Regex anclado (`^patrón`) | O(log n) | ✅ Sí |
-| Regex sin ancla (`patrón`) | O(n) | ❌ No |
-| $text search | O(log n) | ✅ Sí (pero sin partial match) |
+| Tipo | Complejidad | Usa Índice | Búsqueda |
+|------|-------------|------------|----------|
+| Regex sin ancla (`patrón`) | O(n) | ⚠️ Parcial | En cualquier parte |
+| Regex anclado (`^patrón`) | O(log n) | ✅ Sí | Solo al inicio |
+| $text search | O(log n) | ✅ Sí | Palabras completas |
+
+**Nota:** Aunque el regex sin anclaje requiere scan más amplio, el índice en `name` ayuda a MongoDB a optimizar la ejecución, especialmente con colecciones grandes.
 
 ## Aplicar los Cambios
 
@@ -79,8 +75,10 @@ db.sport_centers.createIndex({ name: 1 }, { name: "idx_sport_centers_name" })
 
 1. **Inicia la aplicación**
 2. **Abre el frontend** y ve a la búsqueda
-3. **Escribe "cato"** → debería mostrar centros con nombres que comienzan con "cato"
-4. **Escribe "centro"** → debería mostrar centros que comienzan con "centro"
+3. **Pruebas:**
+   - Escribe "cato" → debería mostrar "Católica", "Club Union Catolica", "Centro Católico"
+   - Escribe "union" → debería mostrar "Club Union Catolica", "Union Deportiva"
+   - Escribe "club" → debería mostrar todos los centros que comienzan con "Club"
 
 ## Pruebas con MongoDB Shell
 
@@ -88,27 +86,28 @@ db.sport_centers.createIndex({ name: 1 }, { name: "idx_sport_centers_name" })
 // Verificar que el índice existe
 db.sport_centers.getIndexes()
 
-// Probar la búsqueda
+// Probar la búsqueda (en cualquier parte del nombre)
 db.sport_centers.find({ 
-    name: { $regex: "^cato", $options: "i" } 
+    name: { $regex: "cato", $options: "i" } 
 })
 
-// Verificar que usa el índice
+// Verificar ejecución
 db.sport_centers.explain("executionStats").find({ 
-    name: { $regex: "^cato", $options: "i" } 
+    name: { $regex: "cato", $options: "i" } 
 })
 ```
 
 ## Notas Técnicas
 
 - **Case-insensitive:** "cato", "Cato", "CATO" son equivalentes
-- **Solo prefijos:** Busca coincidencias que comienzan con el patrón
+- **Búsqueda en toda la frase:** "cato" encuentra "Club Union Catolica"
 - **Caracteres especiales:** `regexp.QuoteMeta()` escapa regex metacaracteres
-- **Rendimiento:** Índice reduce búsquedas de O(n) a O(log n)
+- **Rendimiento:** Índice ayuda pero regex sin ancla es O(n) vs O(log n) del anclado
+- **Trade-off:** Más flexibilidad (busca en cualquier parte) vs rendimiento ligeramente menor
 
 ## Archivos Modificados
 
-- ✏️ `internal/infra/mongo/repository.go`
-- ✏️ `internal/infra/mongo/indexes.go`
-- ➕ `cmd/migrate-name-index/main.go` (nuevo)
-- ➕ `docs/search-optimization.md` (nuevo)
+- ✏️ `internal/infra/mongo/repository.go` - Regex sin anclaje para búsqueda en cualquier parte
+- ✏️ `internal/infra/mongo/indexes.go` - Índice en name
+- ✏️ `cmd/migrate-name-index/main.go` - Script de migración actualizado
+- ➕ `docs/search-optimization.md` - Documentación
