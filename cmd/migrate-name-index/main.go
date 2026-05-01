@@ -55,13 +55,9 @@ func main() {
 		log.Printf("Index created successfully: %s", indexName)
 	}
 
-	log.Println("Dropping text index (no longer needed for name searches)...")
-	_, err = collection.Indexes().DropOne(ctx, "idx_sport_centers_text")
-	if err != nil {
-		log.Printf("Error dropping text index (may not exist): %v", err)
-	} else {
-		log.Println("Text index dropped successfully")
-	}
+	log.Println("\nNote: Name search now uses regex without anchor (^)")
+	log.Println("This allows searching anywhere in the name (e.g., 'cato' finds 'Club Union Catolica')")
+	log.Println("The index on 'name' still improves performance for case-insensitive searches")
 
 	indexCursor, err := collection.Indexes().List(ctx)
 	if err != nil {
