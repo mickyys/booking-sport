@@ -57,6 +57,10 @@ func ensureSportCenterIndexes(ctx context.Context, db *mongo.Database) error {
 			Options: options.Index().SetName("idx_sport_centers_city"),
 		},
 		{
+			Keys:    bson.D{{Key: "name", Value: 1}},
+			Options: options.Index().SetName("idx_sport_centers_name"),
+		},
+		{
 			Keys: bson.D{
 				{Key: "name", Value: "text"},
 				{Key: "city", Value: "text"},

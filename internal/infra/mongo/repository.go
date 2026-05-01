@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"time"
 
 	"github.com/hamp/booking-sport/internal/domain"
@@ -75,20 +76,24 @@ func (r *SportCenterRepository) FindAll(ctx context.Context) ([]domain.SportCent
 }
 
 func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int) ([]domain.SportCenter, int64, error) {
-	match := bson.M{}
-	if name != "" || city != "" {
-		searchText := ""
-		if name != "" {
-			searchText += name + " "
-		}
-		if city != "" {
-			searchText += city
-		}
-		match["$text"] = bson.M{"$search": searchText}
+	matchStage := bson.D{}
+	
+	if name != "" {
+		matchStage = append(matchStage, bson.E{
+			Key: "name",
+			Value: bson.M{"$regex": "^" + regexp.QuoteMeta(name), "$options": "i"},
+		})
+	}
+	
+	if city != "" {
+		matchStage = append(matchStage, bson.E{
+			Key: "city",
+			Value: bson.M{"$regex": "^" + regexp.QuoteMeta(city), "$options": "i"},
+		})
 	}
 
 	pipeline := mongodb.Pipeline{
-		{{"$match", match}},
+		{{"$match", matchStage}},
 	}
 
 	if hour != nil && date != nil {
