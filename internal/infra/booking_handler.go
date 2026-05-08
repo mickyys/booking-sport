@@ -3,6 +3,7 @@ package infra
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -143,7 +144,7 @@ func (h *BookingHandler) CreateFintocPaymentIntent(c *gin.Context) {
 
 	redirectURL, err := h.useCase.CreateFintocPaymentIntent(c.Request.Context(), &booking)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
 		return
 	}
 
@@ -734,7 +735,7 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 			"error", err,
 			"court_id", booking.Booking.CourtID.Hex(),
 		)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
 		return
 	}
 
@@ -808,7 +809,7 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 
 	initPoint, err := h.useCase.CreateMercadoPagoPayment(c.Request.Context(), &input.Booking, input.Partial)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
 		return
 	}
 
@@ -1057,4 +1058,12 @@ func (h *BookingHandler) CancelRecurringReservation(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
+}
+
+func errorStatusCode(err error) int {
+	var appErr *domain.AppError
+	if errors.As(err, &appErr) {
+		return appErr.StatusCode
+	}
+	return http.StatusInternalServerError
 }

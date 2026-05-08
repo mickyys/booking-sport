@@ -86,12 +86,13 @@ func main() {
 	courtRepo := mongo.NewCourtRepository(db)
 	userRepo := mongo.NewUserRepository(db)
 	bookingRepo := mongo.NewBookingRepository(db)
+	holdRepo := mongo.NewSlotHoldRepository(db)
 	recurringReservationRepo := mongo.NewRecurringReservationRepository(db)
 	userDeviceRepo := mongo.NewUserDeviceRepository(db)
 
 	log.Infow("repositories_initialized")
 
-	sportCenterUC := app.NewSportCenterUseCase(sportCenterRepo, courtRepo, userRepo, bookingRepo, recurringReservationRepo)
+	sportCenterUC := app.NewSportCenterUseCase(sportCenterRepo, courtRepo, userRepo, bookingRepo, holdRepo, recurringReservationRepo)
 	courtUC := app.NewCourtUseCase(courtRepo, sportCenterRepo, bookingRepo)
 
 	var notifier app.NotificationService
@@ -127,7 +128,7 @@ func main() {
 		log.Warnw("mailgun_not_configured")
 	}
 
-	bookingUC := app.NewBookingUseCase(bookingRepo, courtRepo, sportCenterRepo, userRepo, userDeviceRepo, bookingMailer, notifier, recurringReservationRepo)
+	bookingUC := app.NewBookingUseCase(bookingRepo, holdRepo, courtRepo, sportCenterRepo, userRepo, userDeviceRepo, bookingMailer, notifier, recurringReservationRepo, client)
 
 	log.Infow("use_cases_initialized")
 

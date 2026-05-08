@@ -8,6 +8,7 @@ import (
 
 	"github.com/hamp/booking-sport/internal/domain"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -45,11 +46,15 @@ type BookingRepository interface {
 	UpdateCancellation(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, cancelledBy string, reason string) error
 	UpdateFintocPaymentIntentID(ctx context.Context, id primitive.ObjectID, paymentIntentID string) error
 	UpdateMPPaymentID(ctx context.Context, id primitive.ObjectID, mpPaymentID string) error
+	UpdateFintocPaymentID(ctx context.Context, id primitive.ObjectID, paymentID string) error
 	AddRefund(ctx context.Context, paymentIntentID string, refund domain.Refund) error
 	AddRefundByBookingID(ctx context.Context, bookingID primitive.ObjectID, refund domain.Refund) error
 	FindByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error)
 	FindBySportCenterAndDate(ctx context.Context, centerID primitive.ObjectID, date time.Time) ([]domain.Booking, error)
 	FindConflictingBooking(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error)
+	FindConfirmedBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error)
+	FindConfirmedByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error)
+	FindPendingBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error)
 	FindByUserID(ctx context.Context, userID string) ([]domain.Booking, error)
 	FindByUserIDPaged(ctx context.Context, userID string, page, limit int, isOld bool) ([]domain.BookingSummary, int64, error)
 	CountConfirmedByUserID(ctx context.Context, userID string) (int64, error)
@@ -58,6 +63,12 @@ type BookingRepository interface {
 	DeleteBySeriesID(ctx context.Context, seriesID string) error
 	GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name string, code string, status string) (*domain.AdminDashboardData, error)
 	GetRecurringSeries(ctx context.Context, centerIDs []primitive.ObjectID, sportCenterID string) ([]domain.RecurringSeries, error)
+	UpdateLockExpiresAt(ctx context.Context, id primitive.ObjectID, expiresAt time.Time) error
+	UpdateHoldID(ctx context.Context, id primitive.ObjectID, holdID primitive.ObjectID) error
+	MarkExpired(ctx context.Context, id primitive.ObjectID) error
+	ConfirmPaymentWithVersion(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paidAmount, pendingAmount float64, currentVersion int) error
+	GetDB() *mongo.Database
+	Collection() *mongo.Collection
 }
 
 type RecurringReservationRepository interface {
@@ -92,11 +103,24 @@ type UserDeviceRepository interface {
 type NotificationService interface {
 	SendPushNotification(ctx context.Context, tokens []string, title, body string, data map[string]string, notificationType string) error
 }
+
+type SlotHoldRepository interface {
+	Insert(ctx context.Context, hold *domain.SlotHold) error
+	FindBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.SlotHold, error)
+	FindByBookingID(ctx context.Context, bookingID primitive.ObjectID) (*domain.SlotHold, error)
+	FindActiveByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.SlotHold, error)
+	RenewExpiration(ctx context.Context, holdID primitive.ObjectID, newExpiresAt time.Time) error
+	DeleteIfExpired(ctx context.Context, holdID primitive.ObjectID, expectedExpiresAt time.Time) (bool, error)
+	Delete(ctx context.Context, holdID primitive.ObjectID) error
+	TryClaimSlot(ctx context.Context, hold *domain.SlotHold) (*domain.SlotHold, error)
+	FindOneAndDeleteIfExpired(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.SlotHold, error)
+}
 type SportCenterUseCase struct {
 	repo                     SportCenterRepository
 	courtRepo                CourtRepository
 	userRepo                 UserRepository
 	bookingRepo              BookingRepository
+	holdRepo                 SlotHoldRepository
 	recurringReservationRepo RecurringReservationRepository
 }
 
@@ -391,6 +415,7 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 	var courts []domain.Court
 	var allBookings []domain.Booking
 	var recurringReservations []domain.RecurringReservation
+	var activeHoldsMap map[primitive.ObjectID]map[int]*domain.SlotHold
 
 	g, ctx := errgroup.WithContext(ctx)
 
@@ -419,6 +444,19 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 
 	if err := g.Wait(); err != nil {
 		return nil, err
+	}
+
+	activeHoldsMap = make(map[primitive.ObjectID]map[int]*domain.SlotHold)
+	for _, court := range courts {
+		holds, _ := uc.holdRepo.FindActiveByCourtAndDate(ctx, court.ID, searchDate)
+		if len(holds) > 0 {
+			activeHoldsMap[court.ID] = make(map[int]*domain.SlotHold)
+			for i := range holds {
+				key := holds[i].Hour*60 + holds[i].Minutes
+				holdCopy := holds[i]
+				activeHoldsMap[court.ID][key] = &holdCopy
+			}
+		}
 	}
 
 	// Agrupar bookings por CourtID y hora (en minutos)
@@ -606,6 +644,14 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 				}
 			}
 
+			if sch.Status == "available" {
+				if courtHolds, hasHolds := activeHoldsMap[court.ID]; hasHolds {
+					if h, held := courtHolds[slotKey]; held && time.Now().Before(h.ExpiresAt) {
+						sch.Status = "reserved"
+					}
+				}
+			}
+
 			if all || (sch.Status == "available" || sch.Status == "booked" || sch.Status == "passed_booked" || sch.Status == "closed" || sch.Status == "passed" || sch.Status == "recurring_booked") {
 				schedules = append(schedules, sch)
 			}
@@ -624,12 +670,13 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 	return result, nil
 }
 
-func NewSportCenterUseCase(repo SportCenterRepository, courtRepo CourtRepository, userRepo UserRepository, bookingRepo BookingRepository, recurringRepo RecurringReservationRepository) *SportCenterUseCase {
+func NewSportCenterUseCase(repo SportCenterRepository, courtRepo CourtRepository, userRepo UserRepository, bookingRepo BookingRepository, holdRepo SlotHoldRepository, recurringRepo RecurringReservationRepository) *SportCenterUseCase {
 	return &SportCenterUseCase{
 		repo:                     repo,
 		courtRepo:                courtRepo,
 		userRepo:                 userRepo,
 		bookingRepo:              bookingRepo,
+		holdRepo:                 holdRepo,
 		recurringReservationRepo: recurringRepo,
 	}
 }
