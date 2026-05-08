@@ -227,6 +227,7 @@ func (r *BookingRepository) UpdateMPPaymentID(ctx context.Context, id primitive.
 }
 
 func (r *BookingRepository) FindByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error) {
+	// Normalizar fecha al inicio del día en zona horaria de Chile
 	loc, _ := time.LoadLocation("America/Santiago")
 	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
 	endDate := startDate.Add(24 * time.Hour)
@@ -248,30 +249,6 @@ func (r *BookingRepository) FindByCourtAndDate(ctx context.Context, courtID prim
 		return nil, err
 	}
 	return bookings, nil
-}
-
-func (r *BookingRepository) FindConflictingBooking(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
-	loc, _ := time.LoadLocation("America/Santiago")
-	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
-	endDate := startDate.Add(24 * time.Hour)
-
-	var booking domain.Booking
-	err := r.collection.FindOne(ctx, bson.M{
-		"court_id": courtID,
-		"date": bson.M{
-			"$gte": startDate,
-			"$lt":  endDate,
-		},
-		"hour":   hour,
-		"status": bson.M{"$in": []string{string(domain.BookingStatusPending), string(domain.BookingStatusConfirmed)}},
-	}).Decode(&booking)
-	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &booking, nil
 }
 
 func (r *BookingRepository) FindBySportCenterAndDate(ctx context.Context, centerID primitive.ObjectID, date time.Time) ([]domain.Booking, error) {
