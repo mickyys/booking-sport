@@ -2104,3 +2104,76 @@ func splitFullName(fullName string) (string, string) {
 	lastName := strings.Join(parts[1:], " ")
 	return firstName, lastName
 }
+
+func (uc *BookingUseCase) SyncConfirmedPayment(ctx context.Context, bookingCode string, mpPaymentID string, paidAmount, pendingAmount float64) error {
+	booking, err := uc.repo.FindByBookingCode(ctx, bookingCode)
+	if err != nil {
+		return fmt.Errorf("booking not found: %w", err)
+	}
+
+	if booking.Status == domain.BookingStatusConfirmed {
+		return nil
+	}
+
+	booking.Status = domain.BookingStatusConfirmed
+	booking.PaidAmount = paidAmount
+	booking.PendingAmount = pendingAmount
+	booking.UpdatedAt = time.Now()
+
+	if mpPaymentID != "" {
+		booking.MPPaymentID = mpPaymentID
+	}
+
+	if err := uc.repo.Update(ctx, booking); err != nil {
+		return fmt.Errorf("error updating booking: %w", err)
+	}
+
+	if booking.HoldID != nil {
+		uc.holdRepo.Delete(ctx, *booking.HoldID)
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
+	if err != nil {
+		center = nil
+	}
+
+	log := logger.FromContext(ctx)
+	log.Infow("sync_confirmed_payment",
+		"msg", fmt.Sprintf("Reserva sincronizada desde batch: %s confirmada en %s para el %s a las %02d:00 hrs",
+			booking.BookingCode, booking.SportCenterName, booking.Date.Format("02/01/2006"), booking.Hour),
+		"booking_code", booking.BookingCode,
+		"center_id", booking.SportCenterID.Hex(),
+		"mp_payment_id", mpPaymentID,
+	)
+
+	title := "Pago Confirmado - Sincronizacion Batch"
+	body := fmt.Sprintf("Nueva reserva en %s para el %s a las %02d:00 hrs.",
+		booking.SportCenterName, booking.Date.Format("02/01/2006"), booking.Hour)
+	uc.notifyAdmins(ctx, booking.SportCenterID, booking.SportCenterName, title, body, booking.ID.Hex(), "confirmation")
+
+	if uc.mailer != nil {
+		cancellationHours := 3
+		retentionPercent := 10
+		if center != nil {
+			cancellationHours = center.CancellationHours
+			if cancellationHours == 0 {
+				cancellationHours = 3
+			}
+			retentionPercent = center.RetentionPercent
+			if retentionPercent == 0 {
+				retentionPercent = 10
+			}
+		}
+		go func(b *domain.Booking) {
+			if err := uc.mailer.SendBookingConfirmation(context.Background(), b, cancellationHours, retentionPercent, b.PaidAmount, b.PendingAmount); err != nil {
+				logger.FromContext(context.Background()).Errorw("mail_booking_confirmation_error",
+					"msg", fmt.Sprintf("Error al enviar correo de confirmacion (sync) para booking %s", b.BookingCode),
+					"booking_code", b.BookingCode,
+					"error", err,
+				)
+			}
+		}(booking)
+	}
+
+	return nil
+}

@@ -862,6 +862,33 @@ func (h *BookingHandler) MercadoPagoWebhook(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "received"})
 }
 
+func (h *BookingHandler) SyncConfirmedPayment(c *gin.Context) {
+	var req struct {
+		BookingCode   string  `json:"booking_code"`
+		MPPaymentID   string  `json:"mp_payment_id"`
+		FintocPaymentID string `json:"fintoc_payment_id"`
+		PaidAmount    float64 `json:"paid_amount"`
+		PendingAmount float64 `json:"pending_amount"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.BookingCode == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "booking_code is required"})
+		return
+	}
+
+	err := h.useCase.SyncConfirmedPayment(c.Request.Context(), req.BookingCode, req.MPPaymentID, req.PaidAmount, req.PendingAmount)
+	if err != nil {
+		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "confirmed"})
+}
+
 func (h *BookingHandler) MercadoPagoReturn(c *gin.Context) {
 	url := os.Getenv("URL_FRONTEND")
 	bookingCode := c.Query("code")
