@@ -142,6 +142,8 @@ func (h *BookingHandler) CreateFintocPaymentIntent(c *gin.Context) {
 		return
 	}
 
+	booking.GuestDeviceID = c.GetString("guest_device_id")
+
 	redirectURL, err := h.useCase.CreateFintocPaymentIntent(c.Request.Context(), &booking)
 	if err != nil {
 		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
@@ -715,6 +717,8 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 		booking.Booking.UserID = userID
 	}
 
+	booking.Booking.GuestDeviceID = c.GetString("guest_device_id")
+
 	log.Infow("booking_create_started",
 		"msg", fmt.Sprintf("Se crea booking para las %02d:00 hrs en cancha %s",
 			booking.Booking.Hour, booking.Booking.CourtName),
@@ -806,6 +810,8 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	input.Booking.GuestDeviceID = c.GetString("guest_device_id")
 
 	initPoint, err := h.useCase.CreateMercadoPagoPayment(c.Request.Context(), &input.Booking, input.Partial)
 	if err != nil {

@@ -259,6 +259,22 @@ func (uc *BookingUseCase) GetRecurringSeries(ctx context.Context, userID string,
 	return uc.repo.GetRecurringSeries(ctx, centerIDs, "")
 }
 
+func generateDeviceID() string {
+	b := make([]byte, 12)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func resolveEffectiveUserID(booking *domain.Booking) string {
+	if booking.UserID != "" {
+		return booking.UserID
+	}
+	if booking.GuestDeviceID != "" {
+		return booking.GuestDeviceID
+	}
+	return "device:" + generateDeviceID()
+}
+
 func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, userID string) (*domain.SlotHold, *domain.Booking, error) {
 	loc, _ := time.LoadLocation("America/Santiago")
 	normalizedDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
@@ -273,6 +289,25 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 	pending, _ := uc.repo.FindPendingBySlot(ctx, courtID, normalizedDate, hour)
 	if pending != nil {
 		if pending.LockExpiresAt != nil && time.Now().Before(*pending.LockExpiresAt) {
+			if userID != "" && (pending.GuestDeviceID == userID || pending.UserID == userID) {
+				uc.repo.UpdateLockExpiresAt(ctx, pending.ID, expiresAt)
+				hold, _ := uc.holdRepo.FindByBookingID(ctx, pending.ID)
+				if hold != nil {
+					uc.holdRepo.RenewExpiration(ctx, hold.ID, expiresAt)
+				} else {
+					newHold := &domain.SlotHold{
+						CourtID:   courtID,
+						Date:      normalizedDate,
+						Hour:      hour,
+						UserID:    userID,
+						BookingID: pending.ID,
+						ExpiresAt: expiresAt,
+						CreatedAt: time.Now(),
+					}
+					hold, _ = uc.holdRepo.TryClaimSlot(ctx, newHold)
+				}
+				return hold, pending, nil
+			}
 			return nil, nil, domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
 		}
 		if pending.HoldID != nil {
@@ -398,7 +433,12 @@ func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking
 		}
 	}
 
-	hold, existingBooking, err := uc.ClaimOrRenewSlot(ctx, booking.CourtID, booking.Date, booking.Hour, booking.UserID)
+	effectiveUserID := resolveEffectiveUserID(booking)
+	if booking.GuestDeviceID == "" {
+		booking.GuestDeviceID = effectiveUserID
+	}
+
+	hold, existingBooking, err := uc.ClaimOrRenewSlot(ctx, booking.CourtID, booking.Date, booking.Hour, effectiveUserID)
 	if err != nil {
 		return "", err
 	}
@@ -705,7 +745,12 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		}
 	}
 
-	hold, existingBooking, err := uc.ClaimOrRenewSlot(ctx, booking.CourtID, booking.Date, booking.Hour, booking.UserID)
+	effectiveUserID := resolveEffectiveUserID(booking)
+	if booking.GuestDeviceID == "" {
+		booking.GuestDeviceID = effectiveUserID
+	}
+
+	hold, existingBooking, err := uc.ClaimOrRenewSlot(ctx, booking.CourtID, booking.Date, booking.Hour, effectiveUserID)
 	if err != nil {
 		return "", err
 	}

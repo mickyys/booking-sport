@@ -189,6 +189,7 @@ type Booking struct {
 	CourtName             string             `bson:"court_name,omitempty" json:"court_name,omitempty"`
 	SportCenterName       string             `bson:"sport_center_name,omitempty" json:"sport_center_name,omitempty"`
 	UserID                string             `bson:"user_id,omitempty" json:"user_id,omitempty"`
+	GuestDeviceID         string             `bson:"guest_device_id,omitempty" json:"guest_device_id,omitempty"`
 	GuestDetails          *GuestDetails      `bson:"guest_details,omitempty" json:"guest_details,omitempty"`
 	Date                  time.Time          `bson:"date" json:"date"`
 	Hour                  int                `bson:"hour" json:"hour"`

@@ -163,6 +163,8 @@ func main() {
 
 	log.Infow("cors_configured")
 
+	r.Use(middleware.DeviceID())
+
 	authMiddleware := auth.EnsureValidToken(
 		os.Getenv("AUTH0_DOMAIN"),
 		os.Getenv("AUTH0_AUDIENCE"),
