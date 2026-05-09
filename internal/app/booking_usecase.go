@@ -270,6 +270,17 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 		return nil, nil, domain.NewConflictError("este horario ya esta reservado")
 	}
 
+	pending, _ := uc.repo.FindPendingBySlot(ctx, courtID, normalizedDate, hour)
+	if pending != nil {
+		if pending.LockExpiresAt != nil && time.Now().Before(*pending.LockExpiresAt) {
+			return nil, nil, domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
+		}
+		if pending.HoldID != nil {
+			uc.holdRepo.Delete(ctx, *pending.HoldID)
+		}
+		uc.repo.MarkExpired(ctx, pending.ID)
+	}
+
 	newHold := &domain.SlotHold{
 		CourtID:   courtID,
 		Date:      normalizedDate,
@@ -293,7 +304,7 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 		return nil, nil, fmt.Errorf("error interno al verificar disponibilidad")
 	}
 
-	if existingHold.UserID == userID {
+	if userID != "" && existingHold.UserID == userID {
 		uc.holdRepo.RenewExpiration(ctx, existingHold.ID, expiresAt)
 		booking, _ := uc.repo.FindByID(ctx, existingHold.BookingID)
 		if booking != nil && booking.Status == domain.BookingStatusPending {

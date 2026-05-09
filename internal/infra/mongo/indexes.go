@@ -200,6 +200,17 @@ func ensureBookingIndexes(ctx context.Context, db *mongo.Database) error {
 				SetName("idx_bookings_unique_confirmed_slot"),
 		},
 		{
+			Keys: bson.D{
+				{Key: "court_id", Value: 1},
+				{Key: "date", Value: 1},
+				{Key: "hour", Value: 1},
+			},
+			Options: options.Index().
+				SetUnique(true).
+				SetPartialFilterExpression(bson.M{"status": "pending"}).
+				SetName("idx_bookings_unique_pending_slot"),
+		},
+		{
 			Keys:    bson.D{{Key: "lock_expires_at", Value: 1}},
 			Options: options.Index().
 				SetExpireAfterSeconds(0).
