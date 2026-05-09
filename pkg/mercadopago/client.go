@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	mp "github.com/mercadopago/sdk-go/pkg/config"
 	"github.com/mercadopago/sdk-go/pkg/payment"
@@ -30,7 +31,7 @@ type PreferenceResult struct {
 	InitPoint string
 }
 
-func (c *Client) CreatePreference(ctx context.Context, title string, amount float64, email string, payerName string, payerSurname string, externalRef string, successURL string, failureURL string, pendingURL string, notificationURL string) (*PreferenceResult, error) {
+func (c *Client) CreatePreference(ctx context.Context, title string, amount float64, email string, payerName string, payerSurname string, externalRef string, successURL string, failureURL string, pendingURL string, notificationURL string, expirationDate *time.Time) (*PreferenceResult, error) {
 	cfg, err := mp.New(c.accessToken)
 	if err != nil {
 		return nil, fmt.Errorf("error creating mercadopago config: %w", err)
@@ -60,6 +61,7 @@ func (c *Client) CreatePreference(ctx context.Context, title string, amount floa
 		ExternalReference: externalRef,
 		AutoReturn:        "approved",
 		NotificationURL:   notificationURL,
+		ExpirationDateTo:  expirationDate,
 	}
 
 	result, err := prefClient.Create(ctx, req)

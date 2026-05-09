@@ -786,7 +786,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		externalRef := existingBooking.BookingCode
 		payerName, payerSurname := splitFullName(existingBooking.CustomerName)
 
-		result, err := client.CreatePreference(ctx, title, amountToPay, email, payerName, payerSurname, externalRef, successURL, failureURL, pendingURL, notificationURL)
+		result, err := client.CreatePreference(ctx, title, amountToPay, email, payerName, payerSurname, externalRef, successURL, failureURL, pendingURL, notificationURL, &lockExpires)
 		if err != nil {
 			return "", fmt.Errorf("error creating mercadopago preference: %w", err)
 		}
@@ -824,7 +824,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	externalRef := booking.BookingCode
 	payerName, payerSurname := splitFullName(booking.CustomerName)
 
-	result, err := client.CreatePreference(ctx, title, amountToPay, email, payerName, payerSurname, externalRef, successURL, failureURL, pendingURL, notificationURL)
+	result, err := client.CreatePreference(ctx, title, amountToPay, email, payerName, payerSurname, externalRef, successURL, failureURL, pendingURL, notificationURL, &lockExpires)
 	if err != nil {
 		return "", fmt.Errorf("error creating mercadopago preference: %w", err)
 	}
