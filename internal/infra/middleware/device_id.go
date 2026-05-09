@@ -1,10 +1,12 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/hamp/booking-sport/pkg/logger"
 )
 
 func DeviceID() gin.HandlerFunc {
@@ -27,6 +29,16 @@ func DeviceID() gin.HandlerFunc {
 				"",
 				c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https",
 				true,
+			)
+
+			logger.FromContext(c.Request.Context()).Infow("device_id_created",
+				"msg", fmt.Sprintf("Nuevo guest_device_id asignado: %s", deviceID),
+				"device_id", deviceID,
+			)
+		} else {
+			logger.FromContext(c.Request.Context()).Infow("device_id_reused",
+				"msg", fmt.Sprintf("guest_device_id reutilizado: %s", deviceID),
+				"device_id", deviceID,
 			)
 		}
 
