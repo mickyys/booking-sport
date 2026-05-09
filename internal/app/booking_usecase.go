@@ -368,14 +368,12 @@ func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking
 		return "", fmt.Errorf("court not found: %w", err)
 	}
 
-	loc, _ := time.LoadLocation("America/Santiago")
-	chileDate := booking.Date.In(loc)
-	booking.Date = time.Date(chileDate.Year(), chileDate.Month(), chileDate.Day(), 0, 0, 0, 0, loc)
-
 	price := 0.0
 	found := false
 	for _, s := range court.Schedule {
 		if s.Hour == booking.Hour {
+			// Check if slot has already passed
+			loc, _ := time.LoadLocation("America/Santiago")
 			bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, loc)
 			if bookingDateTime.Before(time.Now().In(loc)) {
 				return "", fmt.Errorf("cannot book a past slot")
@@ -657,15 +655,12 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		return "", fmt.Errorf("court not found: %w", err)
 	}
 
-	loc, _ := time.LoadLocation("America/Santiago")
-	chileDate := booking.Date.In(loc)
-	booking.Date = time.Date(chileDate.Year(), chileDate.Month(), chileDate.Day(), 0, 0, 0, 0, loc)
-
 	price := 0.0
 	found := false
 	var selectedSlot *domain.CourtSchedule
 	for _, s := range court.Schedule {
 		if s.Hour == booking.Hour {
+			loc, _ := time.LoadLocation("America/Santiago")
 			bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, loc)
 			if bookingDateTime.Before(time.Now().In(loc)) {
 				return "", fmt.Errorf("cannot book a past slot")
@@ -1507,15 +1502,13 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 		return fmt.Errorf("court not found: %w", err)
 	}
 
-	loc, _ := time.LoadLocation("America/Santiago")
-	chileDate := booking.Date.In(loc)
-	booking.Date = time.Date(chileDate.Year(), chileDate.Month(), chileDate.Day(), 0, 0, 0, 0, loc)
-
 	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
 	if err != nil {
 		return fmt.Errorf("sport center not found: %w", err)
 	}
 
+	// For internal bookings, we don't strict check availability if admin wants to force it,
+	// but let's check it for safety or just set it.
 	price := 0.0
 	minutes := booking.Minutes
 	if minutes == 0 {
@@ -1523,6 +1516,8 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 	}
 	for _, s := range court.Schedule {
 		if s.Hour == booking.Hour && s.Minutes == minutes {
+			// Check if slot has already passed
+			loc, _ := time.LoadLocation("America/Santiago")
 			bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, minutes, 0, 0, loc)
 			if bookingDateTime.Before(time.Now().In(loc)) {
 				return fmt.Errorf("cannot book a past slot")
@@ -1622,10 +1617,6 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 	if err != nil {
 		return fmt.Errorf("court not found: %w", err)
 	}
-
-	loc, _ := time.LoadLocation("America/Santiago")
-	chileDate := booking.Date.In(loc)
-	booking.Date = time.Date(chileDate.Year(), chileDate.Month(), chileDate.Day(), 0, 0, 0, 0, loc)
 
 	found := false
 	for _, s := range court.Schedule {
