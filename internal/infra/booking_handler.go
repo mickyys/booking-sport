@@ -142,9 +142,11 @@ func (h *BookingHandler) CreateFintocPaymentIntent(c *gin.Context) {
 		return
 	}
 
+	booking.GuestDeviceID = c.GetString("guest_device_id")
+
 	redirectURL, err := h.useCase.CreateFintocPaymentIntent(c.Request.Context(), &booking)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
 		return
 	}
 
@@ -715,6 +717,8 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 		booking.Booking.UserID = userID
 	}
 
+	booking.Booking.GuestDeviceID = c.GetString("guest_device_id")
+
 	log.Infow("booking_create_started",
 		"msg", fmt.Sprintf("Se crea booking para las %02d:00 hrs en cancha %s",
 			booking.Booking.Hour, booking.Booking.CourtName),
@@ -735,7 +739,7 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 			"error", err,
 			"court_id", booking.Booking.CourtID.Hex(),
 		)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
 		return
 	}
 
@@ -807,9 +811,11 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 		return
 	}
 
+	input.Booking.GuestDeviceID = c.GetString("guest_device_id")
+
 	initPoint, err := h.useCase.CreateMercadoPagoPayment(c.Request.Context(), &input.Booking, input.Partial)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
 		return
 	}
 
@@ -860,6 +866,33 @@ func (h *BookingHandler) MercadoPagoWebhook(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "received"})
+}
+
+func (h *BookingHandler) SyncConfirmedPayment(c *gin.Context) {
+	var req struct {
+		BookingCode   string  `json:"booking_code"`
+		MPPaymentID   string  `json:"mp_payment_id"`
+		FintocPaymentID string `json:"fintoc_payment_id"`
+		PaidAmount    float64 `json:"paid_amount"`
+		PendingAmount float64 `json:"pending_amount"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.BookingCode == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "booking_code is required"})
+		return
+	}
+
+	err := h.useCase.SyncConfirmedPayment(c.Request.Context(), req.BookingCode, req.MPPaymentID, req.PaidAmount, req.PendingAmount)
+	if err != nil {
+		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "confirmed"})
 }
 
 func (h *BookingHandler) MercadoPagoReturn(c *gin.Context) {
@@ -1058,32 +1091,6 @@ func (h *BookingHandler) CancelRecurringReservation(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
-}
-
-func (h *BookingHandler) SyncConfirmedPayment(c *gin.Context) {
-	var req struct {
-		BookingCode    string  `json:"booking_code"`
-		MPPaymentID    string  `json:"mp_payment_id"`
-		PaidAmount     float64 `json:"paid_amount"`
-		PendingAmount  float64 `json:"pending_amount"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	if req.BookingCode == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "booking_code is required"})
-		return
-	}
-
-	err := h.useCase.SyncConfirmedPayment(c.Request.Context(), req.BookingCode, req.MPPaymentID, req.PaidAmount, req.PendingAmount)
-	if err != nil {
-		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"status": "confirmed"})
 }
 
 func errorStatusCode(err error) int {

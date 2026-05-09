@@ -106,6 +106,7 @@ func (r *BookingRepository) FindByUserIDAndStatusPaged(ctx context.Context, user
 }
 
 func (r *BookingRepository) Create(ctx context.Context, booking *domain.Booking) error {
+	booking.Version = 1
 	res, err := r.collection.InsertOne(ctx, booking)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
@@ -897,4 +898,149 @@ func (r *BookingRepository) UndoBalancePayment(ctx context.Context, id primitive
 	}}
 	_, err = r.collection.UpdateOne(ctx, filter, update)
 	return err
+}
+
+func (r *BookingRepository) FindConfirmedBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+	loc, _ := time.LoadLocation("America/Santiago")
+	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
+	endDate := startDate.Add(24 * time.Hour)
+
+	var booking domain.Booking
+	err := r.collection.FindOne(ctx, bson.M{
+		"court_id": courtID,
+		"date": bson.M{
+			"$gte": startDate,
+			"$lt":  endDate,
+		},
+		"hour":   hour,
+		"status": domain.BookingStatusConfirmed,
+	}).Decode(&booking)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &booking, nil
+}
+
+func (r *BookingRepository) FindConfirmedByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error) {
+	loc, _ := time.LoadLocation("America/Santiago")
+	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
+	endDate := startDate.Add(24 * time.Hour)
+
+	cursor, err := r.collection.Find(ctx, bson.M{
+		"court_id": courtID,
+		"date": bson.M{
+			"$gte": startDate,
+			"$lt":  endDate,
+		},
+		"status": domain.BookingStatusConfirmed,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var bookings []domain.Booking
+	if err := cursor.All(ctx, &bookings); err != nil {
+		return nil, err
+	}
+	return bookings, nil
+}
+
+func (r *BookingRepository) FindPendingBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+	loc, _ := time.LoadLocation("America/Santiago")
+	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
+	endDate := startDate.Add(24 * time.Hour)
+
+	var booking domain.Booking
+	err := r.collection.FindOne(ctx, bson.M{
+		"court_id": courtID,
+		"date": bson.M{
+			"$gte": startDate,
+			"$lt":  endDate,
+		},
+		"hour":   hour,
+		"status": domain.BookingStatusPending,
+	}).Decode(&booking)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &booking, nil
+}
+
+func (r *BookingRepository) UpdateLockExpiresAt(ctx context.Context, id primitive.ObjectID, expiresAt time.Time) error {
+	filter := bson.M{"_id": id}
+	update := bson.M{"$set": bson.M{
+		"lock_expires_at": expiresAt,
+		"updated_at":      time.Now(),
+	}}
+	_, err := r.collection.UpdateOne(ctx, filter, update)
+	return err
+}
+
+func (r *BookingRepository) UpdateHoldID(ctx context.Context, id primitive.ObjectID, holdID primitive.ObjectID) error {
+	filter := bson.M{"_id": id}
+	update := bson.M{"$set": bson.M{
+		"hold_id":    holdID,
+		"updated_at": time.Now(),
+	}}
+	_, err := r.collection.UpdateOne(ctx, filter, update)
+	return err
+}
+
+func (r *BookingRepository) MarkExpired(ctx context.Context, id primitive.ObjectID) error {
+	now := time.Now()
+	filter := bson.M{"_id": id, "status": domain.BookingStatusPending}
+	update := bson.M{"$set": bson.M{
+		"status":     domain.BookingStatusExpired,
+		"expired_at": now,
+		"updated_at": now,
+	}}
+	_, err := r.collection.UpdateOne(ctx, filter, update)
+	return err
+}
+
+func (r *BookingRepository) UpdateFintocPaymentID(ctx context.Context, id primitive.ObjectID, paymentID string) error {
+	filter := bson.M{"_id": id}
+	update := bson.M{"$set": bson.M{
+		"fintoc_payment_id": paymentID,
+		"updated_at":        time.Now(),
+	}}
+	_, err := r.collection.UpdateOne(ctx, filter, update)
+	return err
+}
+
+func (r *BookingRepository) ConfirmPaymentWithVersion(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paidAmount, pendingAmount float64, currentVersion int) error {
+	filter := bson.M{
+		"_id":     id,
+		"version": currentVersion,
+	}
+	update := bson.M{"$set": bson.M{
+		"status":         status,
+		"paid_amount":    paidAmount,
+		"pending_amount": pendingAmount,
+		"updated_at":     time.Now(),
+		"version":        currentVersion + 1,
+	}}
+	result, err := r.collection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("concurrent modification detected")
+	}
+	return nil
+}
+
+func (r *BookingRepository) GetDB() *mongo.Database {
+	return r.db
+}
+
+func (r *BookingRepository) Collection() *mongo.Collection {
+	return r.collection
 }

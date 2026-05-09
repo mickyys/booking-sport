@@ -30,7 +30,7 @@ type PreferenceResult struct {
 	InitPoint string
 }
 
-func (c *Client) CreatePreference(ctx context.Context, title string, amount float64, email string, externalRef string, successURL string, failureURL string, pendingURL string, notificationURL string) (*PreferenceResult, error) {
+func (c *Client) CreatePreference(ctx context.Context, title string, amount float64, email string, payerName string, payerSurname string, externalRef string, successURL string, failureURL string, pendingURL string, notificationURL string) (*PreferenceResult, error) {
 	cfg, err := mp.New(c.accessToken)
 	if err != nil {
 		return nil, fmt.Errorf("error creating mercadopago config: %w", err)
@@ -48,7 +48,9 @@ func (c *Client) CreatePreference(ctx context.Context, title string, amount floa
 			},
 		},
 		Payer: &preference.PayerRequest{
-			Email: email,
+			Email:   email,
+			Name:    payerName,
+			Surname: payerSurname,
 		},
 		BackURLs: &preference.BackURLsRequest{
 			Success: successURL,
@@ -136,4 +138,29 @@ func (c *Client) CreatePartialRefund(ctx context.Context, paymentID int, amount 
 		Status: result.Status,
 		Amount: result.Amount,
 	}, nil
+}
+
+func (c *Client) SearchPaymentsByExternalReference(ctx context.Context, externalReference string) (*payment.SearchResponse, error) {
+	cfg, err := mp.New(c.accessToken)
+	if err != nil {
+		return nil, fmt.Errorf("error creating mercadopago config: %w", err)
+	}
+
+	payClient := payment.NewClient(cfg)
+
+	searchReq := payment.SearchRequest{
+		Filters: map[string]string{
+			"external_reference": externalReference,
+		},
+		Limit:  5,
+		Offset: 0,
+	}
+
+	result, err := payClient.Search(ctx, searchReq)
+	if err != nil {
+		return nil, fmt.Errorf("error searching mercadopago payments by external_reference %s: %w", externalReference, err)
+	}
+
+	log.Printf("[MERCADOPAGO] Search by external_reference=%s: found %d results\n", externalReference, result.Paging.Total)
+	return result, nil
 }

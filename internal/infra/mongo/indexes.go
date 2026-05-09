@@ -36,6 +36,10 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 		return err
 	}
 
+	if err := ensureSlotHoldIndexes(ctx, db); err != nil {
+		return err
+	}
+
 	log.Println("[MONGODB] All indexes created successfully")
 	return nil
 }
@@ -184,6 +188,39 @@ func ensureBookingIndexes(ctx context.Context, db *mongo.Database) error {
 			},
 			Options: options.Index().SetName("idx_bookings_center_status"),
 		},
+		{
+			Keys: bson.D{
+				{Key: "court_id", Value: 1},
+				{Key: "date", Value: 1},
+				{Key: "hour", Value: 1},
+			},
+			Options: options.Index().
+				SetUnique(true).
+				SetPartialFilterExpression(bson.M{"status": "confirmed"}).
+				SetName("idx_bookings_unique_confirmed_slot"),
+		},
+		{
+			Keys: bson.D{
+				{Key: "court_id", Value: 1},
+				{Key: "date", Value: 1},
+				{Key: "hour", Value: 1},
+			},
+			Options: options.Index().
+				SetUnique(true).
+				SetPartialFilterExpression(bson.M{"status": "pending"}).
+				SetName("idx_bookings_unique_pending_slot"),
+		},
+		{
+			Keys:    bson.D{{Key: "lock_expires_at", Value: 1}},
+			Options: options.Index().
+				SetExpireAfterSeconds(0).
+				SetPartialFilterExpression(bson.M{"status": "pending"}).
+				SetName("idx_bookings_ttl_pending"),
+		},
+		{
+			Keys:    bson.D{{Key: "hold_id", Value: 1}},
+			Options: options.Index().SetName("idx_bookings_hold_id"),
+		},
 	}
 
 	_, err := collection.Indexes().CreateMany(ctx, indexes)
@@ -257,5 +294,37 @@ func ensureRecurringReservationIndexes(ctx context.Context, db *mongo.Database) 
 	}
 
 	log.Println("[MONGODB] recurring_reservations indexes created")
+	return nil
+}
+
+func ensureSlotHoldIndexes(ctx context.Context, db *mongo.Database) error {
+	collection := db.Collection("slot_holds")
+
+	indexes := []mongo.IndexModel{
+		{
+			Keys: bson.D{
+				{Key: "court_id", Value: 1},
+				{Key: "date", Value: 1},
+				{Key: "hour", Value: 1},
+			},
+			Options: options.Index().
+				SetUnique(true).
+				SetName("idx_slot_holds_unique_slot"),
+		},
+		{
+			Keys:    bson.D{{Key: "expires_at", Value: 1}},
+			Options: options.Index().
+				SetExpireAfterSeconds(0).
+				SetName("idx_slot_holds_ttl"),
+		},
+	}
+
+	_, err := collection.Indexes().CreateMany(ctx, indexes)
+	if err != nil {
+		log.Printf("[MONGODB] Error creating slot_holds indexes: %v", err)
+		return err
+	}
+
+	log.Println("[MONGODB] slot_holds indexes created")
 	return nil
 }

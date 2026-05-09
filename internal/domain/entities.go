@@ -179,6 +179,7 @@ const (
 	BookingStatusPending   BookingStatus = "pending"
 	BookingStatusConfirmed BookingStatus = "confirmed"
 	BookingStatusCancelled BookingStatus = "cancelled"
+	BookingStatusExpired   BookingStatus = "expired"
 )
 
 type Booking struct {
@@ -188,6 +189,7 @@ type Booking struct {
 	CourtName             string             `bson:"court_name,omitempty" json:"court_name,omitempty"`
 	SportCenterName       string             `bson:"sport_center_name,omitempty" json:"sport_center_name,omitempty"`
 	UserID                string             `bson:"user_id,omitempty" json:"user_id,omitempty"`
+	GuestDeviceID         string             `bson:"guest_device_id,omitempty" json:"guest_device_id,omitempty"`
 	GuestDetails          *GuestDetails      `bson:"guest_details,omitempty" json:"guest_details,omitempty"`
 	Date                  time.Time          `bson:"date" json:"date"`
 	Hour                  int                `bson:"hour" json:"hour"`
@@ -213,10 +215,14 @@ type Booking struct {
 	CustomerPhone         string             `bson:"customer_phone,omitempty" json:"customer_phone,omitempty"`
 	SeriesID              string             `bson:"series_id,omitempty" json:"series_id,omitempty"`
 	RecurringID           string             `bson:"recurring_id,omitempty" json:"recurring_id,omitempty"`
-	ModifiedBy            string             `bson:"modified_by,omitempty" json:"modified_by,omitempty"`
-	ModifiedAt            *time.Time         `bson:"modified_at,omitempty" json:"modified_at,omitempty"`
-	CreatedAt             time.Time          `bson:"created_at" json:"created_at"`
-	UpdatedAt             time.Time          `bson:"updated_at" json:"updated_at"`
+	ModifiedBy            string              `bson:"modified_by,omitempty" json:"modified_by,omitempty"`
+	ModifiedAt            *time.Time          `bson:"modified_at,omitempty" json:"modified_at,omitempty"`
+	HoldID                *primitive.ObjectID `bson:"hold_id,omitempty" json:"hold_id,omitempty"`
+	LockExpiresAt         *time.Time          `bson:"lock_expires_at,omitempty" json:"lock_expires_at,omitempty"`
+	Version               int                 `bson:"version" json:"version"`
+	ExpiredAt             *time.Time          `bson:"expired_at,omitempty" json:"expired_at,omitempty"`
+	CreatedAt             time.Time           `bson:"created_at" json:"created_at"`
+	UpdatedAt             time.Time           `bson:"updated_at" json:"updated_at"`
 }
 
 type Refund struct {
@@ -277,4 +283,16 @@ type RecurringReservationResponse struct {
 	CancelReason    string                     `bson:"cancel_reason,omitempty" json:"cancel_reason,omitempty"`
 	CreatedAt       time.Time                  `bson:"created_at" json:"created_at"`
 	UpdatedAt       time.Time                  `bson:"updated_at" json:"updated_at"`
+}
+
+type SlotHold struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	CourtID   primitive.ObjectID `bson:"court_id" json:"court_id"`
+	Date      time.Time          `bson:"date" json:"date"`
+	Hour      int                `bson:"hour" json:"hour"`
+	Minutes   int                `bson:"minutes" json:"minutes"`
+	UserID    string             `bson:"user_id" json:"user_id"`
+	BookingID primitive.ObjectID `bson:"booking_id" json:"booking_id"`
+	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
+	ExpiresAt time.Time          `bson:"expires_at" json:"expires_at"`
 }

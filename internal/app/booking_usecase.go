@@ -15,6 +15,7 @@ import (
 	"github.com/hamp/booking-sport/pkg/logger"
 	"github.com/hamp/booking-sport/pkg/mercadopago"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 func generateBookingCode() string {
@@ -27,6 +28,7 @@ func generateBookingCode() string {
 
 type BookingUseCase struct {
 	repo                     BookingRepository
+	holdRepo                 SlotHoldRepository
 	courtRepo                CourtRepository
 	centerRepo               SportCenterRepository
 	userRepo                 UserRepository
@@ -34,11 +36,13 @@ type BookingUseCase struct {
 	mailer                   Mailer
 	notifier                 NotificationService
 	recurringReservationRepo RecurringReservationRepository
+	mongoClient              *mongo.Client
 }
 
-func NewBookingUseCase(repo BookingRepository, courtRepo CourtRepository, centerRepo SportCenterRepository, userRepo UserRepository, deviceRepo UserDeviceRepository, mailer Mailer, notifier NotificationService, recurringRepo RecurringReservationRepository) *BookingUseCase {
+func NewBookingUseCase(repo BookingRepository, holdRepo SlotHoldRepository, courtRepo CourtRepository, centerRepo SportCenterRepository, userRepo UserRepository, deviceRepo UserDeviceRepository, mailer Mailer, notifier NotificationService, recurringRepo RecurringReservationRepository, mongoClient *mongo.Client) *BookingUseCase {
 	return &BookingUseCase{
 		repo:                     repo,
+		holdRepo:                 holdRepo,
 		courtRepo:                courtRepo,
 		centerRepo:               centerRepo,
 		userRepo:                 userRepo,
@@ -46,6 +50,7 @@ func NewBookingUseCase(repo BookingRepository, courtRepo CourtRepository, center
 		mailer:                   mailer,
 		notifier:                 notifier,
 		recurringReservationRepo: recurringRepo,
+		mongoClient:              mongoClient,
 	}
 }
 
@@ -254,6 +259,109 @@ func (uc *BookingUseCase) GetRecurringSeries(ctx context.Context, userID string,
 	return uc.repo.GetRecurringSeries(ctx, centerIDs, "")
 }
 
+func generateDeviceID() string {
+	b := make([]byte, 12)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func resolveEffectiveUserID(booking *domain.Booking) string {
+	if booking.UserID != "" {
+		return booking.UserID
+	}
+	if booking.GuestDeviceID != "" {
+		return booking.GuestDeviceID
+	}
+	return "device:" + generateDeviceID()
+}
+
+func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, userID string) (*domain.SlotHold, *domain.Booking, error) {
+	loc, _ := time.LoadLocation("America/Santiago")
+	normalizedDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
+
+	expiresAt := time.Now().Add(5 * time.Minute)
+
+	confirmed, _ := uc.repo.FindConfirmedBySlot(ctx, courtID, normalizedDate, hour)
+	if confirmed != nil {
+		return nil, nil, domain.NewConflictError("este horario ya esta reservado")
+	}
+
+	pending, _ := uc.repo.FindPendingBySlot(ctx, courtID, normalizedDate, hour)
+	if pending != nil {
+		if pending.LockExpiresAt != nil && time.Now().Before(*pending.LockExpiresAt) {
+			if userID != "" && (pending.GuestDeviceID == userID || pending.UserID == userID) {
+				uc.repo.UpdateLockExpiresAt(ctx, pending.ID, expiresAt)
+				hold, _ := uc.holdRepo.FindByBookingID(ctx, pending.ID)
+				if hold != nil {
+					uc.holdRepo.RenewExpiration(ctx, hold.ID, expiresAt)
+				} else {
+					newHold := &domain.SlotHold{
+						CourtID:   courtID,
+						Date:      normalizedDate,
+						Hour:      hour,
+						UserID:    userID,
+						BookingID: pending.ID,
+						ExpiresAt: expiresAt,
+						CreatedAt: time.Now(),
+					}
+					hold, _ = uc.holdRepo.TryClaimSlot(ctx, newHold)
+				}
+				return hold, pending, nil
+			}
+			return nil, nil, domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
+		}
+		if pending.HoldID != nil {
+			uc.holdRepo.Delete(ctx, *pending.HoldID)
+		}
+		uc.repo.MarkExpired(ctx, pending.ID)
+	}
+
+	newHold := &domain.SlotHold{
+		CourtID:   courtID,
+		Date:      normalizedDate,
+		Hour:      hour,
+		UserID:    userID,
+		ExpiresAt: expiresAt,
+		CreatedAt: time.Now(),
+	}
+
+	claimedHold, err := uc.holdRepo.TryClaimSlot(ctx, newHold)
+	if err == nil {
+		return claimedHold, nil, nil
+	}
+
+	if err.Error() != "duplicate hold" && !strings.Contains(err.Error(), "duplicate key") && !strings.Contains(err.Error(), "E11000") {
+		return nil, nil, err
+	}
+
+	existingHold, err := uc.holdRepo.FindBySlot(ctx, courtID, normalizedDate, hour)
+	if err != nil || existingHold == nil {
+		return nil, nil, fmt.Errorf("error interno al verificar disponibilidad")
+	}
+
+	if userID != "" && existingHold.UserID == userID {
+		uc.holdRepo.RenewExpiration(ctx, existingHold.ID, expiresAt)
+		booking, _ := uc.repo.FindByID(ctx, existingHold.BookingID)
+		if booking != nil && booking.Status == domain.BookingStatusPending {
+			uc.repo.UpdateLockExpiresAt(ctx, booking.ID, expiresAt)
+		}
+		return existingHold, booking, nil
+	}
+
+	if time.Now().After(existingHold.ExpiresAt) {
+		deletedHold, _ := uc.holdRepo.FindOneAndDeleteIfExpired(ctx, courtID, normalizedDate, hour)
+		if deletedHold != nil {
+			if !deletedHold.BookingID.IsZero() {
+				uc.repo.MarkExpired(ctx, deletedHold.BookingID)
+			}
+			return uc.ClaimOrRenewSlot(ctx, courtID, date, hour, userID)
+		}
+		return nil, nil, domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
+	}
+
+	return nil, nil, domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
+}
+
 func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking *domain.Booking) (string, error) {
 	court, err := uc.courtRepo.FindByID(ctx, booking.CourtID)
 	if err != nil {
@@ -296,7 +404,6 @@ func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking
 	booking.PaymentMethod = "fintoc"
 	booking.SportCenterID = court.SportCenterID
 
-	// Obtener el centro deportivo para sacar la secret key de Fintoc
 	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
 	if err != nil {
 		return "", fmt.Errorf("sport center not found: %w", err)
@@ -313,8 +420,6 @@ func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking
 
 	fintocSecret := center.Fintoc.Payment.SecretKey
 
-	client := fintoc.NewClient(fintocSecret)
-
 	email := "cliente@email.com"
 	if booking.GuestDetails != nil {
 		email = booking.GuestDetails.Email
@@ -326,12 +431,75 @@ func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking
 		}
 	}
 
+	effectiveUserID := resolveEffectiveUserID(booking)
+	if booking.GuestDeviceID == "" {
+		booking.GuestDeviceID = effectiveUserID
+	}
+
+	hold, existingBooking, err := uc.ClaimOrRenewSlot(ctx, booking.CourtID, booking.Date, booking.Hour, effectiveUserID)
+	if err != nil {
+		return "", err
+	}
+
+	if existingBooking != nil {
+		existingBooking.UserID = booking.UserID
+		existingBooking.GuestDetails = booking.GuestDetails
+		existingBooking.CustomerName = booking.CustomerName
+		existingBooking.CustomerPhone = booking.CustomerPhone
+		existingBooking.FinalPrice = price
+		existingBooking.Price = price
+		existingBooking.PaidAmount = 0
+		existingBooking.PendingAmount = price
+		existingBooking.UpdatedAt = time.Now()
+
+		lockExpires := hold.ExpiresAt
+		existingBooking.LockExpiresAt = &lockExpires
+		existingBooking.HoldID = &hold.ID
+
+		uc.repo.Update(ctx, existingBooking)
+
+		client := fintoc.NewClient(fintocSecret)
+
+		urlFrontend := os.Getenv("URL_FRONTEND")
+		if urlFrontend == "" {
+			urlFrontend = "http://localhost:5173"
+		}
+		urlPaymentCallback := os.Getenv("URL_PAYMENT_CALLBACK")
+		if urlPaymentCallback == "" {
+			urlPaymentCallback = "http://localhost:3000/payment/callback"
+		}
+		successURL := fmt.Sprintf("%s?id=%s", urlPaymentCallback, existingBooking.BookingCode)
+		cancelURL := fmt.Sprintf("%s/booking/failure?reason=cancelled", urlFrontend)
+
+		orderID := fmt.Sprintf("booking-%s-%d", existingBooking.CourtID.Hex(), existingBooking.Hour)
+		res, err := client.CreateCheckoutSession(int(existingBooking.Price), "CLP", email, orderID, successURL, cancelURL)
+		if err != nil {
+			return "", fmt.Errorf("error creating fintoc checkout: %w", err)
+		}
+
+		existingBooking.FintocPaymentID = res.ID
+		existingBooking.PaymentMethod = "fintoc"
+		uc.repo.Update(ctx, existingBooking)
+		return res.RedirectURL, nil
+	}
+
+	lockExpires := hold.ExpiresAt
+	booking.HoldID = &hold.ID
+	booking.LockExpiresAt = &lockExpires
+
+	if err := uc.repo.Create(ctx, booking); err != nil {
+		uc.holdRepo.Delete(ctx, hold.ID)
+		return "", err
+	}
+
+	hold.BookingID = booking.ID
+
+	client := fintoc.NewClient(fintocSecret)
+
 	urlFrontend := os.Getenv("URL_FRONTEND")
 	if urlFrontend == "" {
 		urlFrontend = "http://localhost:5173"
 	}
-
-	// successURL apunta al backend para validar y redirigir
 	urlPaymentCallback := os.Getenv("URL_PAYMENT_CALLBACK")
 	if urlPaymentCallback == "" {
 		urlPaymentCallback = "http://localhost:3000/payment/callback"
@@ -346,10 +514,7 @@ func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking
 	}
 
 	booking.FintocPaymentID = res.ID
-
-	if err := uc.repo.Create(ctx, booking); err != nil {
-		return "", err
-	}
+	uc.repo.UpdateFintocPaymentID(ctx, booking.ID, res.ID)
 
 	return res.RedirectURL, nil
 }
@@ -447,6 +612,9 @@ func (uc *BookingUseCase) ValidateFintocPaymentAndGetCode(ctx context.Context, b
 				booking.UpdatedAt = time.Now()
 				if err := uc.repo.Update(ctx, booking); err != nil {
 					return booking.BookingCode, fmt.Errorf("error updating booking: %w", err)
+				}
+				if booking.HoldID != nil {
+					uc.holdRepo.Delete(ctx, *booking.HoldID)
 				}
 				// Enviar correo de confirmación (si está configurado)
 				if uc.mailer != nil {
@@ -572,6 +740,73 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		}
 	}
 
+	effectiveUserID := resolveEffectiveUserID(booking)
+	if booking.GuestDeviceID == "" {
+		booking.GuestDeviceID = effectiveUserID
+	}
+
+	hold, existingBooking, err := uc.ClaimOrRenewSlot(ctx, booking.CourtID, booking.Date, booking.Hour, effectiveUserID)
+	if err != nil {
+		return "", err
+	}
+
+	if existingBooking != nil {
+		existingBooking.UserID = booking.UserID
+		existingBooking.GuestDetails = booking.GuestDetails
+		existingBooking.CustomerName = booking.CustomerName
+		existingBooking.CustomerPhone = booking.CustomerPhone
+		existingBooking.FinalPrice = price
+		existingBooking.Price = price
+		existingBooking.PaidAmount = 0
+		existingBooking.PendingAmount = price
+		existingBooking.IsPartialPayment = isPartial
+		existingBooking.PaymentMethod = "mercadopago"
+		existingBooking.UpdatedAt = time.Now()
+
+		lockExpires := hold.ExpiresAt
+		existingBooking.LockExpiresAt = &lockExpires
+		existingBooking.HoldID = &hold.ID
+
+		uc.repo.Update(ctx, existingBooking)
+
+		client := mercadopago.NewClient(center.MercadoPago.AccessToken)
+
+		urlFrontend := os.Getenv("URL_FRONTEND")
+		notificationURL := os.Getenv("URL_MP_WEBHOOK")
+		urlPaymentCallback := os.Getenv("URL_MP_CALLBACK")
+
+		successURL := fmt.Sprintf("%s?code=%s", urlPaymentCallback, existingBooking.BookingCode)
+		failureURL := fmt.Sprintf("%s/booking/failure", urlFrontend)
+		pendingURL := fmt.Sprintf("%s?code=%s", urlPaymentCallback, existingBooking.BookingCode)
+
+		title := fmt.Sprintf("Reserva %s - %s", court.Name, center.Name)
+		if isPartial {
+			title = fmt.Sprintf("Abono Reserva %s - %s", court.Name, center.Name)
+		}
+		externalRef := existingBooking.BookingCode
+		payerName, payerSurname := splitFullName(existingBooking.CustomerName)
+
+		result, err := client.CreatePreference(ctx, title, amountToPay, email, payerName, payerSurname, externalRef, successURL, failureURL, pendingURL, notificationURL)
+		if err != nil {
+			return "", fmt.Errorf("error creating mercadopago preference: %w", err)
+		}
+
+		existingBooking.MPPreferenceID = result.ID
+		uc.repo.Update(ctx, existingBooking)
+		return result.InitPoint, nil
+	}
+
+	lockExpires := hold.ExpiresAt
+	booking.HoldID = &hold.ID
+	booking.LockExpiresAt = &lockExpires
+
+	if err := uc.repo.Create(ctx, booking); err != nil {
+		uc.holdRepo.Delete(ctx, hold.ID)
+		return "", err
+	}
+
+	hold.BookingID = booking.ID
+
 	client := mercadopago.NewClient(center.MercadoPago.AccessToken)
 
 	urlFrontend := os.Getenv("URL_FRONTEND")
@@ -587,17 +822,14 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		title = fmt.Sprintf("Abono Reserva %s - %s", court.Name, center.Name)
 	}
 	externalRef := booking.BookingCode
+	payerName, payerSurname := splitFullName(booking.CustomerName)
 
-	result, err := client.CreatePreference(ctx, title, amountToPay, email, externalRef, successURL, failureURL, pendingURL, notificationURL)
+	result, err := client.CreatePreference(ctx, title, amountToPay, email, payerName, payerSurname, externalRef, successURL, failureURL, pendingURL, notificationURL)
 	if err != nil {
 		return "", fmt.Errorf("error creating mercadopago preference: %w", err)
 	}
 
 	booking.MPPreferenceID = result.ID
-
-	if err := uc.repo.Create(ctx, booking); err != nil {
-		return "", err
-	}
 
 	return result.InitPoint, nil
 }
@@ -621,7 +853,39 @@ func (uc *BookingUseCase) HandleMercadoPagoWebhook(ctx context.Context, paymentI
 	// Buscar la reserva por mp_payment_id (guardado previamente por StoreMPPaymentID o webhook anterior)
 	booking, err := uc.repo.FindByMPPaymentID(ctx, paymentIDStr)
 	if err != nil {
-		return fmt.Errorf("booking not found for mp_payment_id %s: %w", paymentIDStr, err)
+		paymentID, parseErr := strconv.Atoi(paymentIDStr)
+		if parseErr != nil {
+			return fmt.Errorf("invalid payment ID: %w", parseErr)
+		}
+
+		centers, centersErr := uc.centerRepo.FindAll(ctx)
+		if centersErr != nil {
+			return fmt.Errorf("could not resolve booking from webhook: no mp_payment_id match and no centers available")
+		}
+
+		var fallbackBooking *domain.Booking
+		for _, c := range centers {
+			if c.MercadoPago == nil || c.MercadoPago.AccessToken == "" {
+				continue
+			}
+			client := mercadopago.NewClient(c.MercadoPago.AccessToken)
+			payment, payErr := client.GetPayment(ctx, paymentID)
+			if payErr != nil {
+				continue
+			}
+			if payment.ExternalReference != "" {
+				fallbackBooking, err = uc.repo.FindByBookingCode(ctx, payment.ExternalReference)
+				if err == nil && fallbackBooking != nil {
+					uc.repo.UpdateMPPaymentID(ctx, fallbackBooking.ID, paymentIDStr)
+					booking = fallbackBooking
+					break
+				}
+			}
+		}
+
+		if booking == nil {
+			return fmt.Errorf("booking not found for mp_payment_id %s", paymentIDStr)
+		}
 	}
 
 	// Obtener el centro deportivo por ID
@@ -688,6 +952,10 @@ func (uc *BookingUseCase) HandleMercadoPagoWebhook(ctx context.Context, paymentI
 		return fmt.Errorf("error updating booking status: %w", err)
 	}
 
+	if booking.HoldID != nil {
+		uc.holdRepo.Delete(ctx, *booking.HoldID)
+	}
+
 	log.Infow("mp_webhook_booking_updated",
 		"msg", fmt.Sprintf("Booking %s actualizado a %s — pagado $%.0f, pendiente $%.0f", booking.BookingCode, newStatus, paidAmount, pendingAmount),
 		"booking_code", booking.BookingCode,
@@ -751,6 +1019,17 @@ func (uc *BookingUseCase) ValidateMercadoPagoPaymentAndGetCode(ctx context.Conte
 		return booking.BookingCode, nil
 	}
 
+	if booking.Status == domain.BookingStatusPending {
+		uc.SyncPendingBookingPaymentStatus(ctx, booking)
+		booking, err = uc.repo.FindByBookingCode(ctx, bookingCode)
+		if err != nil {
+			return bookingCode, nil
+		}
+		if booking.Status == domain.BookingStatusConfirmed {
+			return booking.BookingCode, nil
+		}
+	}
+
 	// If still pending but has MP payment, try to check status
 	if booking.Status == domain.BookingStatusPending && booking.MPPaymentID != "" {
 		center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
@@ -780,6 +1059,9 @@ func (uc *BookingUseCase) ValidateMercadoPagoPaymentAndGetCode(ctx context.Conte
 			if err := uc.repo.Update(ctx, booking); err != nil {
 				return booking.BookingCode, fmt.Errorf("error updating booking: %w", err)
 			}
+			if booking.HoldID != nil {
+				uc.holdRepo.Delete(ctx, *booking.HoldID)
+			}
 			if uc.mailer != nil {
 				cancellationHours := center.CancellationHours
 				if cancellationHours == 0 {
@@ -808,7 +1090,17 @@ func (uc *BookingUseCase) ValidateMercadoPagoPaymentAndGetCode(ctx context.Conte
 }
 
 func (uc *BookingUseCase) GetByBookingCode(ctx context.Context, code string) (*domain.Booking, error) {
-	return uc.repo.FindByBookingCode(ctx, code)
+	booking, err := uc.repo.FindByBookingCode(ctx, code)
+	if err != nil {
+		return nil, err
+	}
+
+	if booking.Status == domain.BookingStatusPending && booking.PaymentMethod == "mercadopago" {
+		uc.SyncPendingBookingPaymentStatus(ctx, booking)
+		booking, _ = uc.repo.FindByBookingCode(ctx, code)
+	}
+
+	return booking, nil
 }
 
 func (uc *BookingUseCase) GetByMPPaymentID(ctx context.Context, paymentID string) (*domain.Booking, error) {
@@ -911,6 +1203,10 @@ func (uc *BookingUseCase) HandleFintocWebhook(ctx context.Context, id string, st
 	err = uc.repo.UpdateStatus(ctx, booking.ID, newStatus)
 	if err != nil {
 		return err
+	}
+
+	if booking.HoldID != nil {
+		uc.holdRepo.Delete(ctx, *booking.HoldID)
 	}
 
 	// Si se confirmó la reserva, notificar a administradores y enviar correo
@@ -1155,6 +1451,10 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 		return fmt.Errorf("error updating booking status: %w", err)
 	}
 
+	if booking.HoldID != nil {
+		uc.holdRepo.Delete(ctx, *booking.HoldID)
+	}
+
 	log.Infow("booking_cancelled",
 		"msg", fmt.Sprintf("Booking %s cancelado en %s — cancelado por %s",
 			booking.BookingCode, booking.SportCenterName, cancelledBy),
@@ -1245,6 +1545,19 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 		if booking.CustomerPhone == "" {
 			booking.CustomerPhone = booking.GuestDetails.Phone
 		}
+	}
+
+	conflicting, err := uc.repo.FindConfirmedBySlot(ctx, booking.CourtID, booking.Date, booking.Hour)
+	if err != nil {
+		return fmt.Errorf("error checking availability: %w", err)
+	}
+	if conflicting != nil {
+		return fmt.Errorf("ya existe un proceso de reserva o reserva confirmada para este horario")
+	}
+
+	activeHold, _ := uc.holdRepo.FindBySlot(ctx, booking.CourtID, booking.Date, booking.Hour)
+	if activeHold != nil && time.Now().Before(activeHold.ExpiresAt) {
+		return domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
 	}
 
 	if err := uc.repo.Create(ctx, booking); err != nil {
@@ -1355,7 +1668,20 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 		"center_id", booking.SportCenterID.Hex(),
 		"center_name", booking.SportCenterName,
 	)
-	
+
+	conflicting, err := uc.repo.FindConfirmedBySlot(ctx, booking.CourtID, booking.Date, booking.Hour)
+	if err != nil {
+		return fmt.Errorf("error checking availability: %w", err)
+	}
+	if conflicting != nil {
+		return domain.NewConflictError("ya existe una reserva confirmada para este horario")
+	}
+
+	activeHold, _ := uc.holdRepo.FindBySlot(ctx, booking.CourtID, booking.Date, booking.Hour)
+	if activeHold != nil && time.Now().Before(activeHold.ExpiresAt) {
+		return domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
+	}
+
 	if err := uc.repo.Create(ctx, booking); err != nil {
 		return err
 	}
@@ -1729,6 +2055,103 @@ func (uc *BookingUseCase) IsSlotAvailableForRecurring(ctx context.Context, court
 	return true, nil
 }
 
+func (uc *BookingUseCase) SyncPendingBookingPaymentStatus(ctx context.Context, booking *domain.Booking) error {
+	if booking.Status != domain.BookingStatusPending {
+		return nil
+	}
+
+	if booking.PaymentMethod != "mercadopago" || booking.BookingCode == "" {
+		return nil
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
+	if err != nil || center.MercadoPago == nil || center.MercadoPago.AccessToken == "" {
+		return nil
+	}
+
+	log := logger.FromContext(ctx)
+	client := mercadopago.NewClient(center.MercadoPago.AccessToken)
+
+	searchRes, err := client.SearchPaymentsByExternalReference(ctx, booking.BookingCode)
+	if err != nil {
+		log.Warnw("mp_sync_search_error",
+			"msg", fmt.Sprintf("Error al buscar pagos por booking_code %s: %v", booking.BookingCode, err),
+			"booking_code", booking.BookingCode,
+			"error", err,
+		)
+		return nil
+	}
+
+	for _, p := range searchRes.Results {
+		if p.Status == "approved" {
+			booking.Status = domain.BookingStatusConfirmed
+			booking.MPPaymentID = fmt.Sprintf("%d", p.ID)
+			booking.PaidAmount = p.TransactionAmount
+			booking.PendingAmount = booking.Price - p.TransactionAmount
+			if booking.PendingAmount < 0 {
+				booking.PendingAmount = 0
+			}
+			booking.UpdatedAt = time.Now()
+
+			if err := uc.repo.Update(ctx, booking); err != nil {
+				return fmt.Errorf("error updating booking status from sync: %w", err)
+			}
+
+			if booking.HoldID != nil {
+				uc.holdRepo.Delete(ctx, *booking.HoldID)
+			}
+
+			log.Infow("mp_sync_booking_confirmed",
+				"msg", fmt.Sprintf("Reserva sincronizada via busqueda MP: %s estaba PENDING y se encontro approved en MercadoPago",
+					booking.BookingCode),
+				"booking_code", booking.BookingCode,
+				"mp_payment_id", p.ID,
+				"paid_amount", p.TransactionAmount,
+			)
+
+			if uc.mailer != nil {
+				cancellationHours := center.CancellationHours
+				if cancellationHours == 0 {
+					cancellationHours = 3
+				}
+				retentionPercent := center.RetentionPercent
+				if retentionPercent == 0 {
+					retentionPercent = 10
+				}
+				go func(b *domain.Booking) {
+					if err := uc.mailer.SendBookingConfirmation(context.Background(), b, cancellationHours, retentionPercent, b.PaidAmount, b.PendingAmount); err != nil {
+						logger.FromContext(context.Background()).Errorw("mail_booking_confirmation_error",
+							"msg", fmt.Sprintf("Error al enviar correo de confirmacion (sync) para booking %s", b.BookingCode),
+							"booking_code", b.BookingCode,
+							"error", err,
+						)
+					}
+				}(booking)
+			}
+
+			return nil
+		}
+	}
+
+	return nil
+}
+
+func splitFullName(fullName string) (string, string) {
+	if fullName == "" {
+		return "", ""
+	}
+	parts := strings.Fields(fullName)
+	if len(parts) == 1 {
+		return parts[0], ""
+	}
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	firstName := parts[0]
+	lastName := strings.Join(parts[1:], " ")
+	return firstName, lastName
+}
+
 func (uc *BookingUseCase) SyncConfirmedPayment(ctx context.Context, bookingCode string, mpPaymentID string, paidAmount, pendingAmount float64) error {
 	booking, err := uc.repo.FindByBookingCode(ctx, bookingCode)
 	if err != nil {
@@ -1737,10 +2160,6 @@ func (uc *BookingUseCase) SyncConfirmedPayment(ctx context.Context, bookingCode 
 
 	if booking.Status == domain.BookingStatusConfirmed {
 		return nil
-	}
-
-	if booking.Status != domain.BookingStatusPending {
-		return fmt.Errorf("booking is not in pending status")
 	}
 
 	booking.Status = domain.BookingStatusConfirmed
@@ -1756,13 +2175,21 @@ func (uc *BookingUseCase) SyncConfirmedPayment(ctx context.Context, bookingCode 
 		return fmt.Errorf("error updating booking: %w", err)
 	}
 
-	center, _ := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
+	if booking.HoldID != nil {
+		uc.holdRepo.Delete(ctx, *booking.HoldID)
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
+	if err != nil {
+		center = nil
+	}
 
 	log := logger.FromContext(ctx)
 	log.Infow("sync_confirmed_payment",
 		"msg", fmt.Sprintf("Reserva sincronizada desde batch: %s confirmada en %s para el %s a las %02d:00 hrs",
 			booking.BookingCode, booking.SportCenterName, booking.Date.Format("02/01/2006"), booking.Hour),
 		"booking_code", booking.BookingCode,
+		"center_id", booking.SportCenterID.Hex(),
 		"mp_payment_id", mpPaymentID,
 	)
 
