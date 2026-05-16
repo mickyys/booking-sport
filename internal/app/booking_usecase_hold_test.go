@@ -110,7 +110,7 @@ func (m *mockBookingRepoForHold) FindByBookingCode(ctx context.Context, code str
 func (m *mockBookingRepoForHold) UpdateStatus(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus) error {
 	return nil
 }
-func (m *mockBookingRepoForHold) ConfirmPayment(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paidAmount, pendingAmount float64) error {
+func (m *mockBookingRepoForHold) ConfirmPayment(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paidAmount, pendingAmount float64, paymentInfo *domain.PaymentInfo) error {
 	return nil
 }
 func (m *mockBookingRepoForHold) MarkBalanceAsPaid(ctx context.Context, id primitive.ObjectID, modifiedBy string) error {
@@ -176,7 +176,7 @@ func (m *mockBookingRepoForHold) GetRecurringSeries(ctx context.Context, centerI
 func (m *mockBookingRepoForHold) UpdateHoldID(ctx context.Context, id primitive.ObjectID, holdID primitive.ObjectID) error {
 	return nil
 }
-func (m *mockBookingRepoForHold) ConfirmPaymentWithVersion(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paidAmount, pendingAmount float64, currentVersion int) error {
+func (m *mockBookingRepoForHold) ConfirmPaymentWithVersion(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paidAmount, pendingAmount float64, currentVersion int, paymentInfo *domain.PaymentInfo) error {
 	return nil
 }
 func (m *mockBookingRepoForHold) GetDB() *mongo.Database {

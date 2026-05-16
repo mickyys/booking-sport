@@ -208,6 +208,7 @@ type Booking struct {
 	FintocPaymentIntentID string             `bson:"fintoc_payment_intent_id,omitempty" json:"fintoc_payment_intent_id,omitempty"`
 	MPPreferenceID        string             `bson:"mp_preference_id,omitempty" json:"mp_preference_id,omitempty"`
 	MPPaymentID           string             `bson:"mp_payment_id,omitempty" json:"mp_payment_id,omitempty"`
+	PaymentInfo           *PaymentInfo       `bson:"payment_info,omitempty" json:"payment_info,omitempty"`
 	Refunds               []Refund           `bson:"refunds,omitempty" json:"refunds,omitempty"`
 	CancelledBy           string             `bson:"cancelled_by,omitempty" json:"cancelled_by,omitempty"`
 	CancellationReason    string             `bson:"cancellation_reason,omitempty" json:"cancellation_reason,omitempty"`
@@ -223,6 +224,16 @@ type Booking struct {
 	ExpiredAt             *time.Time          `bson:"expired_at,omitempty" json:"expired_at,omitempty"`
 	CreatedAt             time.Time           `bson:"created_at" json:"created_at"`
 	UpdatedAt             time.Time           `bson:"updated_at" json:"updated_at"`
+}
+
+type PaymentInfo struct {
+	CardLastFour      string  `bson:"card_last_four,omitempty" json:"card_last_four,omitempty"`
+	CardholderName    string  `bson:"cardholder_name,omitempty" json:"cardholder_name,omitempty"`
+	PaymentMethodID   string  `bson:"payment_method_id,omitempty" json:"payment_method_id,omitempty"`
+	PaymentMethodType string  `bson:"payment_method_type,omitempty" json:"payment_method_type,omitempty"`
+	Installments      int     `bson:"installments,omitempty" json:"installments,omitempty"`
+	InstallmentAmount float64 `bson:"installment_amount,omitempty" json:"installment_amount,omitempty"`
+	NetReceivedAmount float64 `bson:"net_received_amount,omitempty" json:"net_received_amount,omitempty"`
 }
 
 type Refund struct {

@@ -949,7 +949,19 @@ func (uc *BookingUseCase) HandleMercadoPagoWebhook(ctx context.Context, paymentI
 		}
 	}
 
-	if err := uc.repo.ConfirmPayment(ctx, booking.ID, newStatus, paidAmount, pendingAmount); err != nil {
+	paymentInfo := &domain.PaymentInfo{
+		PaymentMethodID:   payment.PaymentMethodID,
+		PaymentMethodType: payment.PaymentMethod.Type,
+		Installments:      payment.Installments,
+		InstallmentAmount: payment.TransactionDetails.InstallmentAmount,
+		NetReceivedAmount: payment.TransactionDetails.NetReceivedAmount,
+	}
+	if payment.Card.ID != "" {
+		paymentInfo.CardLastFour = payment.Card.LastFourDigits
+		paymentInfo.CardholderName = payment.Card.Cardholder.Name
+	}
+
+	if err := uc.repo.ConfirmPayment(ctx, booking.ID, newStatus, paidAmount, pendingAmount, paymentInfo); err != nil {
 		return fmt.Errorf("error updating booking status: %w", err)
 	}
 

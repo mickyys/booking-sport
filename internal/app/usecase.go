@@ -40,7 +40,7 @@ type BookingRepository interface {
 	FindByMPPaymentID(ctx context.Context, paymentID string) (*domain.Booking, error)
 	FindByBookingCode(ctx context.Context, code string) (*domain.Booking, error)
 	UpdateStatus(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus) error
-	ConfirmPayment(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paidAmount, pendingAmount float64) error
+	ConfirmPayment(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paidAmount, pendingAmount float64, paymentInfo *domain.PaymentInfo) error
 	MarkBalanceAsPaid(ctx context.Context, id primitive.ObjectID, modifiedBy string) error
 	UndoBalancePayment(ctx context.Context, id primitive.ObjectID, modifiedBy string) error
 	UpdateCancellation(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, cancelledBy string, reason string) error
@@ -65,7 +65,7 @@ type BookingRepository interface {
 	UpdateLockExpiresAt(ctx context.Context, id primitive.ObjectID, expiresAt time.Time) error
 	UpdateHoldID(ctx context.Context, id primitive.ObjectID, holdID primitive.ObjectID) error
 	MarkExpired(ctx context.Context, id primitive.ObjectID) error
-	ConfirmPaymentWithVersion(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paidAmount, pendingAmount float64, currentVersion int) error
+	ConfirmPaymentWithVersion(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paidAmount, pendingAmount float64, currentVersion int, paymentInfo *domain.PaymentInfo) error
 	GetDB() *mongo.Database
 	Collection() *mongo.Collection
 }
