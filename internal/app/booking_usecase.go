@@ -279,7 +279,8 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 	loc, _ := time.LoadLocation("America/Santiago")
 	normalizedDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
 
-	expiresAt := time.Now().Add(5 * time.Minute)
+	now := time.Now().In(loc)
+	expiresAt := now.Add(5 * time.Minute)
 
 	confirmed, _ := uc.repo.FindConfirmedBySlot(ctx, courtID, normalizedDate, hour)
 	if confirmed != nil {
@@ -288,7 +289,7 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 
 	pending, _ := uc.repo.FindPendingBySlot(ctx, courtID, normalizedDate, hour)
 	if pending != nil {
-		if pending.LockExpiresAt != nil && time.Now().Before(*pending.LockExpiresAt) {
+		if pending.LockExpiresAt != nil && now.Before(*pending.LockExpiresAt) {
 			if userID != "" && (pending.GuestDeviceID == userID || pending.UserID == userID) {
 				uc.repo.UpdateLockExpiresAt(ctx, pending.ID, expiresAt)
 				hold, _ := uc.holdRepo.FindByBookingID(ctx, pending.ID)
@@ -302,7 +303,7 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 						UserID:    userID,
 						BookingID: pending.ID,
 						ExpiresAt: expiresAt,
-						CreatedAt: time.Now(),
+						CreatedAt: now,
 					}
 					hold, _ = uc.holdRepo.TryClaimSlot(ctx, newHold)
 				}
@@ -322,7 +323,7 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 		Hour:      hour,
 		UserID:    userID,
 		ExpiresAt: expiresAt,
-		CreatedAt: time.Now(),
+		CreatedAt: now,
 	}
 
 	claimedHold, err := uc.holdRepo.TryClaimSlot(ctx, newHold)
@@ -348,7 +349,7 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 		return existingHold, booking, nil
 	}
 
-	if time.Now().After(existingHold.ExpiresAt) {
+	if now.After(existingHold.ExpiresAt) {
 		deletedHold, _ := uc.holdRepo.FindOneAndDeleteIfExpired(ctx, courtID, normalizedDate, hour)
 		if deletedHold != nil {
 			if !deletedHold.BookingID.IsZero() {
@@ -786,7 +787,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		externalRef := existingBooking.BookingCode
 		payerName, payerSurname := splitFullName(existingBooking.CustomerName)
 
-		result, err := client.CreatePreference(ctx, title, amountToPay, email, payerName, payerSurname, externalRef, successURL, failureURL, pendingURL, notificationURL)
+		result, err := client.CreatePreference(ctx, title, amountToPay, email, payerName, payerSurname, externalRef, successURL, failureURL, pendingURL, notificationURL, &lockExpires)
 		if err != nil {
 			return "", fmt.Errorf("error creating mercadopago preference: %w", err)
 		}
@@ -824,7 +825,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	externalRef := booking.BookingCode
 	payerName, payerSurname := splitFullName(booking.CustomerName)
 
-	result, err := client.CreatePreference(ctx, title, amountToPay, email, payerName, payerSurname, externalRef, successURL, failureURL, pendingURL, notificationURL)
+	result, err := client.CreatePreference(ctx, title, amountToPay, email, payerName, payerSurname, externalRef, successURL, failureURL, pendingURL, notificationURL, &lockExpires)
 	if err != nil {
 		return "", fmt.Errorf("error creating mercadopago preference: %w", err)
 	}
@@ -948,7 +949,19 @@ func (uc *BookingUseCase) HandleMercadoPagoWebhook(ctx context.Context, paymentI
 		}
 	}
 
-	if err := uc.repo.ConfirmPayment(ctx, booking.ID, newStatus, paidAmount, pendingAmount); err != nil {
+	paymentInfo := &domain.PaymentInfo{
+		PaymentMethodID:   payment.PaymentMethodID,
+		PaymentMethodType: payment.PaymentMethod.Type,
+		Installments:      payment.Installments,
+		InstallmentAmount: payment.TransactionDetails.InstallmentAmount,
+		NetReceivedAmount: payment.TransactionDetails.NetReceivedAmount,
+	}
+	if payment.Card.ID != "" {
+		paymentInfo.CardLastFour = payment.Card.LastFourDigits
+		paymentInfo.CardholderName = payment.Card.Cardholder.Name
+	}
+
+	if err := uc.repo.ConfirmPayment(ctx, booking.ID, newStatus, paidAmount, pendingAmount, paymentInfo); err != nil {
 		return fmt.Errorf("error updating booking status: %w", err)
 	}
 

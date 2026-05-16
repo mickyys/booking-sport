@@ -848,14 +848,18 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 	}, nil
 }
 
-func (r *BookingRepository) ConfirmPayment(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paidAmount, pendingAmount float64) error {
+func (r *BookingRepository) ConfirmPayment(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paidAmount, pendingAmount float64, paymentInfo *domain.PaymentInfo) error {
 	filter := bson.M{"_id": id}
-	update := bson.M{"$set": bson.M{
+	setFields := bson.M{
 		"status":         status,
 		"paid_amount":    paidAmount,
 		"pending_amount": pendingAmount,
 		"updated_at":     time.Now(),
-	}}
+	}
+	if paymentInfo != nil {
+		setFields["payment_info"] = paymentInfo
+	}
+	update := bson.M{"$set": setFields}
 	_, err := r.collection.UpdateOne(ctx, filter, update)
 	return err
 }
@@ -1015,18 +1019,22 @@ func (r *BookingRepository) UpdateFintocPaymentID(ctx context.Context, id primit
 	return err
 }
 
-func (r *BookingRepository) ConfirmPaymentWithVersion(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paidAmount, pendingAmount float64, currentVersion int) error {
+func (r *BookingRepository) ConfirmPaymentWithVersion(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, paidAmount, pendingAmount float64, currentVersion int, paymentInfo *domain.PaymentInfo) error {
 	filter := bson.M{
 		"_id":     id,
 		"version": currentVersion,
 	}
-	update := bson.M{"$set": bson.M{
+	setFields := bson.M{
 		"status":         status,
 		"paid_amount":    paidAmount,
 		"pending_amount": pendingAmount,
 		"updated_at":     time.Now(),
 		"version":        currentVersion + 1,
-	}}
+	}
+	if paymentInfo != nil {
+		setFields["payment_info"] = paymentInfo
+	}
+	update := bson.M{"$set": setFields}
 	result, err := r.collection.UpdateOne(ctx, filter, update)
 	if err != nil {
 		return err
