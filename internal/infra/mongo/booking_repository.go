@@ -859,7 +859,10 @@ func (r *BookingRepository) ConfirmPayment(ctx context.Context, id primitive.Obj
 	if paymentInfo != nil {
 		setFields["payment_info"] = paymentInfo
 	}
-	update := bson.M{"$set": setFields}
+	update := bson.M{
+		"$set":   setFields,
+		"$unset": bson.M{"lock_expires_at": ""},
+	}
 	_, err := r.collection.UpdateOne(ctx, filter, update)
 	return err
 }
