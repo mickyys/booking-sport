@@ -211,19 +211,17 @@ func ensureBookingIndexes(ctx context.Context, db *mongo.Database) error {
 				SetName("idx_bookings_unique_pending_slot"),
 		},
 		{
-			Keys:    bson.D{{Key: "lock_expires_at", Value: 1}},
-			Options: options.Index().
-				SetExpireAfterSeconds(0).
-				SetPartialFilterExpression(bson.M{"status": "pending"}).
-				SetName("idx_bookings_ttl_pending"),
-		},
-		{
 			Keys:    bson.D{{Key: "hold_id", Value: 1}},
 			Options: options.Index().SetName("idx_bookings_hold_id"),
 		},
 	}
 
-	_, err := collection.Indexes().CreateMany(ctx, indexes)
+	_, err := collection.Indexes().DropOne(ctx, "idx_bookings_ttl_pending")
+	if err != nil {
+		log.Printf("[MONGODB] DropOne idx_bookings_ttl_pending (ignorable if not exists): %v", err)
+	}
+
+	_, err = collection.Indexes().CreateMany(ctx, indexes)
 	if err != nil {
 		log.Printf("[MONGODB] Error creating bookings indexes: %v", err)
 		return err
