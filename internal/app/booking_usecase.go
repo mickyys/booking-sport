@@ -280,7 +280,7 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 	normalizedDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
 
 	now := time.Now().In(loc)
-	expiresAt := now.Add(5 * time.Minute)
+	expiresAt := now.Add(15 * time.Minute)
 
 	confirmed, _ := uc.repo.FindConfirmedBySlot(ctx, courtID, normalizedDate, hour)
 	if confirmed != nil {
@@ -780,9 +780,9 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		failureURL := fmt.Sprintf("%s/booking/failure", urlFrontend)
 		pendingURL := fmt.Sprintf("%s?code=%s", urlPaymentCallback, existingBooking.BookingCode)
 
-		title := fmt.Sprintf("Reserva %s - %s", court.Name, center.Name)
+		title := fmt.Sprintf("Reserva %s - %s - %s %02d:00 hrs", court.Name, center.Name, existingBooking.Date.Format("02/01/2006"), existingBooking.Hour)
 		if isPartial {
-			title = fmt.Sprintf("Abono Reserva %s - %s", court.Name, center.Name)
+			title = fmt.Sprintf("Abono Reserva %s - %s - %s %02d:00 hrs", court.Name, center.Name, existingBooking.Date.Format("02/01/2006"), existingBooking.Hour)
 		}
 		externalRef := existingBooking.BookingCode
 		payerName, payerSurname := splitFullName(existingBooking.CustomerName)
@@ -818,9 +818,9 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	failureURL := fmt.Sprintf("%s/booking/failure", urlFrontend)
 	pendingURL := fmt.Sprintf("%s?code=%s", urlPaymentCallback, booking.BookingCode)
 
-	title := fmt.Sprintf("Reserva %s - %s", court.Name, center.Name)
+	title := fmt.Sprintf("Reserva %s - %s - %s %02d:00 hrs", court.Name, center.Name, booking.Date.Format("02/01/2006"), booking.Hour)
 	if isPartial {
-		title = fmt.Sprintf("Abono Reserva %s - %s", court.Name, center.Name)
+		title = fmt.Sprintf("Abono Reserva %s - %s - %s %02d:00 hrs", court.Name, center.Name, booking.Date.Format("02/01/2006"), booking.Hour)
 	}
 	externalRef := booking.BookingCode
 	payerName, payerSurname := splitFullName(booking.CustomerName)
@@ -1573,6 +1573,18 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 		return domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
 	}
 
+	pending, _ := uc.repo.FindPendingBySlot(ctx, booking.CourtID, booking.Date, booking.Hour)
+	if pending != nil {
+		if pending.LockExpiresAt == nil || time.Now().After(*pending.LockExpiresAt) {
+			if pending.HoldID != nil {
+				uc.holdRepo.Delete(ctx, *pending.HoldID)
+			}
+			uc.repo.MarkExpired(ctx, pending.ID)
+		} else {
+			return domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
+		}
+	}
+
 	if err := uc.repo.Create(ctx, booking); err != nil {
 		return err
 	}
@@ -1693,6 +1705,18 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 	activeHold, _ := uc.holdRepo.FindBySlot(ctx, booking.CourtID, booking.Date, booking.Hour)
 	if activeHold != nil && time.Now().Before(activeHold.ExpiresAt) {
 		return domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
+	}
+
+	pendingBooking, _ := uc.repo.FindPendingBySlot(ctx, booking.CourtID, booking.Date, booking.Hour)
+	if pendingBooking != nil {
+		if pendingBooking.LockExpiresAt == nil || time.Now().After(*pendingBooking.LockExpiresAt) {
+			if pendingBooking.HoldID != nil {
+				uc.holdRepo.Delete(ctx, *pendingBooking.HoldID)
+			}
+			uc.repo.MarkExpired(ctx, pendingBooking.ID)
+		} else {
+			return domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
+		}
 	}
 
 	if err := uc.repo.Create(ctx, booking); err != nil {
