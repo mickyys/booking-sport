@@ -282,15 +282,41 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 	now := time.Now().In(loc)
 	expiresAt := now.Add(15 * time.Minute)
 
+	log := logger.FromContext(ctx)
+
 	confirmed, _ := uc.repo.FindConfirmedBySlot(ctx, courtID, normalizedDate, hour)
 	if confirmed != nil {
+		log.Infow("claim_renew_confirmed_found",
+			"court_id", courtID.Hex(),
+			"date", normalizedDate.Format("02/01/2006"),
+			"hour", hour,
+		)
 		return nil, nil, domain.NewConflictError("este horario ya esta reservado")
 	}
 
 	pending, _ := uc.repo.FindPendingBySlot(ctx, courtID, normalizedDate, hour)
 	if pending != nil {
+		log.Infow("claim_renew_pending_found",
+			"booking_id", pending.ID.Hex(),
+			"booking_code", pending.BookingCode,
+			"status", pending.Status,
+			"lock_expires_at", pending.LockExpiresAt,
+			"hold_id", pending.HoldID,
+			"guest_device_id", pending.GuestDeviceID,
+			"user_id", pending.UserID,
+			"current_user", userID,
+		)
 		if pending.LockExpiresAt != nil && now.Before(*pending.LockExpiresAt) {
+			log.Infow("claim_renew_lock_active",
+				"booking_code", pending.BookingCode,
+				"lock_expires_at", pending.LockExpiresAt.Format(time.RFC3339),
+				"now", now.Format(time.RFC3339),
+			)
 			if userID != "" && (pending.GuestDeviceID == userID || pending.UserID == userID) {
+				log.Infow("claim_renew_same_user_renew",
+					"booking_code", pending.BookingCode,
+					"user", userID,
+				)
 				uc.repo.UpdateLockExpiresAt(ctx, pending.ID, expiresAt)
 				hold, _ := uc.holdRepo.FindByBookingID(ctx, pending.ID)
 				if hold != nil {
@@ -309,8 +335,18 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 				}
 				return hold, pending, nil
 			}
+			log.Infow("claim_renew_different_user_blocked",
+				"booking_code", pending.BookingCode,
+				"pending_user", pending.UserID,
+				"requesting_user", userID,
+			)
 			return nil, nil, domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
 		}
+		log.Infow("claim_renew_lock_expired_marking",
+			"booking_code", pending.BookingCode,
+			"lock_expires_at", pending.LockExpiresAt,
+			"hold_id", pending.HoldID,
+		)
 		if pending.HoldID != nil {
 			uc.holdRepo.Delete(ctx, *pending.HoldID)
 		}
@@ -328,8 +364,16 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 
 	claimedHold, err := uc.holdRepo.TryClaimSlot(ctx, newHold)
 	if err == nil {
+		log.Infow("claim_render_hold_created",
+			"hold_id", claimedHold.ID.Hex(),
+			"expires_at", claimedHold.ExpiresAt.Format(time.RFC3339),
+		)
 		return claimedHold, nil, nil
 	}
+
+	log.Infow("claim_renew_try_claim_failed",
+		"error", err.Error(),
+	)
 
 	if err.Error() != "duplicate hold" && !strings.Contains(err.Error(), "duplicate key") && !strings.Contains(err.Error(), "E11000") {
 		return nil, nil, err
@@ -337,29 +381,66 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 
 	existingHold, err := uc.holdRepo.FindBySlot(ctx, courtID, normalizedDate, hour)
 	if err != nil || existingHold == nil {
+		log.Infow("claim_renew_hold_not_found",
+			"error", err,
+		)
 		return nil, nil, fmt.Errorf("error interno al verificar disponibilidad")
 	}
 
+	log.Infow("claim_renew_duplicate_hold_found",
+		"hold_id", existingHold.ID.Hex(),
+		"user_id", existingHold.UserID,
+		"current_user", userID,
+		"expires_at", existingHold.ExpiresAt.Format(time.RFC3339),
+		"now", now.Format(time.RFC3339),
+		"is_expired", now.After(existingHold.ExpiresAt),
+	)
+
 	if userID != "" && existingHold.UserID == userID {
+		log.Infow("claim_renew_same_user_hold_renew",
+			"hold_id", existingHold.ID.Hex(),
+		)
 		uc.holdRepo.RenewExpiration(ctx, existingHold.ID, expiresAt)
 		booking, _ := uc.repo.FindByID(ctx, existingHold.BookingID)
 		if booking != nil && booking.Status == domain.BookingStatusPending {
+			log.Infow("claim_renew_updating_booking_lock",
+				"booking_id", booking.ID.Hex(),
+				"booking_status", booking.Status,
+			)
 			uc.repo.UpdateLockExpiresAt(ctx, booking.ID, expiresAt)
+		} else {
+			log.Infow("claim_renew_booking_not_found_or_not_pending",
+				"booking_id", existingHold.BookingID.Hex(),
+				"booking_found", booking != nil,
+			)
 		}
 		return existingHold, booking, nil
 	}
 
 	if now.After(existingHold.ExpiresAt) {
+		log.Infow("claim_renew_hold_expired_deleting",
+			"hold_id", existingHold.ID.Hex(),
+		)
 		deletedHold, _ := uc.holdRepo.FindOneAndDeleteIfExpired(ctx, courtID, normalizedDate, hour)
 		if deletedHold != nil {
+			log.Infow("claim_renew_hold_deleted",
+				"hold_id", deletedHold.ID.Hex(),
+				"booking_id", deletedHold.BookingID.Hex(),
+			)
 			if !deletedHold.BookingID.IsZero() {
 				uc.repo.MarkExpired(ctx, deletedHold.BookingID)
 			}
 			return uc.ClaimOrRenewSlot(ctx, courtID, date, hour, userID)
 		}
+		log.Infow("claim_renew_find_and_delete_returned_nil",
+			"hold_id", existingHold.ID.Hex(),
+		)
 		return nil, nil, domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
 	}
 
+	log.Infow("claim_renew_hold_still_active",
+		"hold_id", existingHold.ID.Hex(),
+	)
 	return nil, nil, domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
 }
 

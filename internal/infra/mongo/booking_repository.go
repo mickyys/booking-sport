@@ -110,12 +110,45 @@ func (r *BookingRepository) Create(ctx context.Context, booking *domain.Booking)
 	res, err := r.collection.InsertOne(ctx, booking)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
-			return fmt.Errorf("ya existe un proceso de reserva o reserva confirmada para este horario")
+			r.expireStalePending(ctx, booking.CourtID, booking.Date, booking.Hour)
+			res, err = r.collection.InsertOne(ctx, booking)
+			if err != nil {
+				if mongo.IsDuplicateKeyError(err) {
+					return fmt.Errorf("ya existe un proceso de reserva o reserva confirmada para este horario")
+				}
+				return err
+			}
+		} else {
+			return err
 		}
-		return err
 	}
 	booking.ID = res.InsertedID.(primitive.ObjectID)
 	return nil
+}
+
+func (r *BookingRepository) expireStalePending(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) {
+	loc, _ := time.LoadLocation("America/Santiago")
+	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
+	endDate := startDate.Add(24 * time.Hour)
+
+	now := time.Now()
+	r.collection.UpdateOne(ctx,
+		bson.M{
+			"court_id": courtID,
+			"date":     bson.M{"$gte": startDate, "$lt": endDate},
+			"hour":     hour,
+			"status":   "pending",
+			"$or": []bson.M{
+				{"lock_expires_at": bson.M{"$lt": now}},
+				{"lock_expires_at": bson.M{"$exists": false}},
+			},
+		},
+		bson.M{"$set": bson.M{
+			"status":     "expired",
+			"expired_at": now,
+			"updated_at": now,
+		}},
+	)
 }
 
 func (r *BookingRepository) Update(ctx context.Context, booking *domain.Booking) error {
