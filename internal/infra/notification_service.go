@@ -66,6 +66,14 @@ func (s *FirebaseNotificationService) SendPushNotification(ctx context.Context, 
 		"title", title,
 	)
 
+	channelID := "default_channel"
+	sound := "default"
+	// Si es una confirmación de reserva, usamos el canal con sonido personalizado
+	if notificationType == "confirmation" {
+		channelID = "reservation_channel"
+		sound = "reservation_sound.wav"
+	}
+
 	message := &messaging.MulticastMessage{
 		Tokens: tokens,
 		Notification: &messaging.Notification{
@@ -79,12 +87,13 @@ func (s *FirebaseNotificationService) SendPushNotification(ctx context.Context, 
 				ClickAction: "FLUTTER_NOTIFICATION_CLICK",
 				Icon:        "notification_icon",
 				Color:       "#2C3345",
+				ChannelID:   channelID,
 			},
 		},
 		APNS: &messaging.APNSConfig{
 			Payload: &messaging.APNSPayload{
 				Aps: &messaging.Aps{
-					Sound:          "default",
+					Sound:          sound,
 					MutableContent: true,
 				},
 			},
