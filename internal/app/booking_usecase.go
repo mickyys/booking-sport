@@ -738,12 +738,14 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		return "", fmt.Errorf("court not found: %w", err)
 	}
 
+	loc, _ := time.LoadLocation("America/Santiago")
+	booking.Date = time.Date(booking.Date.In(loc).Year(), booking.Date.In(loc).Month(), booking.Date.In(loc).Day(), 0, 0, 0, 0, loc)
+
 	price := 0.0
 	found := false
 	var selectedSlot *domain.CourtSchedule
 	for _, s := range court.Schedule {
 		if s.Hour == booking.Hour {
-			loc, _ := time.LoadLocation("America/Santiago")
 			bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, loc)
 			if bookingDateTime.Before(time.Now().In(loc)) {
 				return "", fmt.Errorf("cannot book a past slot")
@@ -834,6 +836,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	}
 
 	if existingBooking != nil {
+		existingBooking.Date = time.Date(existingBooking.Date.In(loc).Year(), existingBooking.Date.In(loc).Month(), existingBooking.Date.In(loc).Day(), 0, 0, 0, 0, loc)
 		existingBooking.UserID = booking.UserID
 		existingBooking.GuestDetails = booking.GuestDetails
 		existingBooking.CustomerName = booking.CustomerName
@@ -1602,6 +1605,9 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 		return fmt.Errorf("sport center not found: %w", err)
 	}
 
+	loc, _ := time.LoadLocation("America/Santiago")
+	booking.Date = time.Date(booking.Date.In(loc).Year(), booking.Date.In(loc).Month(), booking.Date.In(loc).Day(), 0, 0, 0, 0, loc)
+
 	// For internal bookings, we don't strict check availability if admin wants to force it,
 	// but let's check it for safety or just set it.
 	price := 0.0
@@ -1612,7 +1618,6 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 	for _, s := range court.Schedule {
 		if s.Hour == booking.Hour && s.Minutes == minutes {
 			// Check if slot has already passed
-			loc, _ := time.LoadLocation("America/Santiago")
 			bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, minutes, 0, 0, loc)
 			if bookingDateTime.Before(time.Now().In(loc)) {
 				return fmt.Errorf("cannot book a past slot")

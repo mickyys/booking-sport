@@ -851,6 +851,7 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 			"pending_amount":       1,
 			"is_partial_payment":   1,
 			"partial_payment_paid": 1,
+			"created_at":           1,
 		}}},
 	}
 
