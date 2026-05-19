@@ -277,7 +277,8 @@ func resolveEffectiveUserID(booking *domain.Booking) string {
 
 func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, userID string) (*domain.SlotHold, *domain.Booking, error) {
 	loc, _ := time.LoadLocation("America/Santiago")
-	normalizedDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
+	dateCL := date.In(loc)
+	normalizedDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
 
 	now := time.Now().In(loc)
 	expiresAt := now.Add(15 * time.Minute)

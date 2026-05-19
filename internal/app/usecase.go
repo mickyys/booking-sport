@@ -195,8 +195,9 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 	}
 
 	loc, _ := time.LoadLocation("America/Santiago")
+	dateCL := date.In(loc)
 	// Normalizar la fecha al inicio del día (00:00:00)
-	searchDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
+	searchDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
 
 	// Buscar TODOS los bookings confirmados para este centro y fecha específica en una sola consulta
 	allBookings, _ := uc.bookingRepo.FindBySportCenterAndDate(ctx, centerID, searchDate)
@@ -407,8 +408,9 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 // confirmadas. También incluye información de reservas recurrentes semanales.
 func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx context.Context, centerID primitive.ObjectID, date time.Time, all bool) ([]CourtScheduleResponse, error) {
 	loc, _ := time.LoadLocation("America/Santiago")
+	dateCL := date.In(loc)
 	// Normalizar la fecha al inicio del día (00:00:00)
-	searchDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
+	searchDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
 	dayOfWeek := int(searchDate.Weekday())
 
 	var courts []domain.Court
@@ -966,7 +968,8 @@ func (uc *CourtUseCase) GetCourtSchedule(ctx context.Context, courtID primitive.
 	}
 
 	loc, _ := time.LoadLocation("America/Santiago")
-	searchDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
+	dateCL := date.In(loc)
+	searchDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
 	bookings, _ := uc.bookingRepo.FindByCourtAndDate(ctx, courtID, searchDate)
 	bookedHours := make(map[int]bool)
 	for _, b := range bookings {
