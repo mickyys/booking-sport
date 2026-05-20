@@ -140,6 +140,7 @@ type BookingSummary struct {
 	PaymentMethod      string             `bson:"payment_method" json:"payment_method"`
 	CancellationHours  int                `bson:"cancellation_hours" json:"cancellation_hours"`
 	RetentionPercent   int                `bson:"retention_percent" json:"retention_percent"`
+	CreatedAt          time.Time          `bson:"created_at" json:"created_at"`
 }
 
 type RecurringSeries struct {
