@@ -70,7 +70,7 @@ func (s *FirebaseNotificationService) SendPushNotification(ctx context.Context, 
 	sound := "default"
 	// Si es una confirmación de reserva, usamos el canal con sonido personalizado
 	if notificationType == "confirmation" {
-		channelID = "reservation_channel"
+		channelID = "reservation_channel_v2"
 		sound = "reservation_sound.wav"
 	}
 
