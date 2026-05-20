@@ -154,18 +154,18 @@ func (uc *BookingUseCase) notifyAdmins(ctx context.Context, booking *domain.Book
 		for _, adminID := range center.Users {
 			adminDevices, err := uc.deviceRepo.FindByUserID(ctx, adminID)
 			if err != nil {
-			log.Warnw("push_notify_admins_user_devices_error",
-				"msg", fmt.Sprintf("Error al buscar dispositivos del usuario administrador %s", adminID),
-				"user_id", adminID,
-				"error", err,
-			)
+				log.Warnw("push_notify_admins_user_devices_error",
+					"msg", fmt.Sprintf("Error al buscar dispositivos del usuario administrador %s", adminID),
+					"user_id", adminID,
+					"error", err,
+				)
 				continue
 			}
-		log.Infow("push_notify_admins_user_devices_found",
-			"msg", fmt.Sprintf("Se encontraron %d dispositivos para el usuario administrador %s", len(adminDevices), adminID),
-			"user_id", adminID,
-			"devices_count", len(adminDevices),
-		)
+			log.Infow("push_notify_admins_user_devices_found",
+				"msg", fmt.Sprintf("Se encontraron %d dispositivos para el usuario administrador %s", len(adminDevices), adminID),
+				"user_id", adminID,
+				"devices_count", len(adminDevices),
+			)
 			for _, d := range adminDevices {
 				if !tokenMap[d.FCMToken] {
 					tokenMap[d.FCMToken] = true
@@ -206,21 +206,21 @@ func (uc *BookingUseCase) notifyAdmins(ctx context.Context, booking *domain.Book
 	}
 
 	data := map[string]string{
-		"booking_id":     booking.ID.Hex(),
-		"customer_name":  booking.CustomerName,
-		"customer_phone": booking.CustomerPhone,
-		"customer_email": customerEmail,
-		"booking_code":   booking.BookingCode,
-		"court_name":     booking.CourtName,
-		"center_name":    booking.SportCenterName,
-		"date":           booking.Date.Format("2006-01-02"),
-		"hour":           fmt.Sprintf("%d", booking.Hour),
-		"time":           fmt.Sprintf("%02d:%02d", booking.Hour, booking.Minutes),
-		"status":         string(booking.Status),
-		"payment_method": booking.PaymentMethod,
-		"payment_status": paymentStatus,
-		"price":          fmt.Sprintf("%.0f", booking.Price),
-		"created_at":     booking.CreatedAt.In(loc).Format(time.RFC3339),
+		"booking_id":        booking.ID.Hex(),
+		"customer_name":     booking.CustomerName,
+		"customer_phone":    booking.CustomerPhone,
+		"customer_email":    customerEmail,
+		"booking_code":      booking.BookingCode,
+		"court_name":        booking.CourtName,
+		"center_name":       booking.SportCenterName,
+		"date":              booking.Date.Format("2006-01-02"),
+		"hour":              fmt.Sprintf("%d", booking.Hour),
+		"time":              fmt.Sprintf("%02d:%02d", booking.Hour, booking.Minutes),
+		"status":            string(booking.Status),
+		"payment_method":    booking.PaymentMethod,
+		"payment_status":    paymentStatus,
+		"price":             fmt.Sprintf("%.0f", booking.Price),
+		"created_at":        booking.CreatedAt.In(loc).Format(time.RFC3339),
 		"sport_center_slug": centerSlug,
 		"center_id":         sportCenterID.Hex(),
 		"notification_type": notificationType,
@@ -745,7 +745,7 @@ func (uc *BookingUseCase) ValidateFintocPaymentAndGetCode(ctx context.Context, b
 					if retentionPercent == 0 {
 						retentionPercent = 10
 					}
-				paidAmount := booking.PaidAmount
+					paidAmount := booking.PaidAmount
 					pendingAmount := booking.FinalPrice - booking.PaidAmount
 					go func() {
 						if err := uc.mailer.SendBookingConfirmation(context.Background(), booking, cancellationHours, retentionPercent, paidAmount, pendingAmount); err != nil {
@@ -1023,7 +1023,7 @@ func (uc *BookingUseCase) HandleMercadoPagoWebhook(ctx context.Context, paymentI
 	// Verificar el pago con el token del centro
 	client := mercadopago.NewClient(center.MercadoPago.AccessToken)
 	log := logger.FromContext(ctx)
-	
+
 	payment, err := client.GetPayment(ctx, paymentID)
 	if err != nil {
 		return fmt.Errorf("error getting payment %d from mercadopago: %w", paymentID, err)
@@ -1128,15 +1128,15 @@ func (uc *BookingUseCase) HandleMercadoPagoWebhook(ctx context.Context, paymentI
 			if retentionPercent == 0 {
 				retentionPercent = 10
 			}
-		go func(b *domain.Booking) {
-			if err := uc.mailer.SendBookingConfirmation(context.Background(), b, cancellationHours, retentionPercent, paidAmount, pendingAmount); err != nil {
-				logger.FromContext(context.Background()).Errorw("mail_booking_confirmation_error",
-					"msg", fmt.Sprintf("Error al enviar correo de confirmación para booking interno %s", b.BookingCode),
-					"booking_code", b.BookingCode,
-					"error", err,
-				)
-			}
-		}(booking)
+			go func(b *domain.Booking) {
+				if err := uc.mailer.SendBookingConfirmation(context.Background(), b, cancellationHours, retentionPercent, paidAmount, pendingAmount); err != nil {
+					logger.FromContext(context.Background()).Errorw("mail_booking_confirmation_error",
+						"msg", fmt.Sprintf("Error al enviar correo de confirmación para booking interno %s", b.BookingCode),
+						"booking_code", b.BookingCode,
+						"error", err,
+					)
+				}
+			}(booking)
 		}
 	}
 
@@ -1207,15 +1207,15 @@ func (uc *BookingUseCase) ValidateMercadoPagoPaymentAndGetCode(ctx context.Conte
 				}
 				paidAmount := booking.PaidAmount
 				pendingAmount := booking.FinalPrice - booking.PaidAmount
-			go func() {
-				if err := uc.mailer.SendBookingConfirmation(context.Background(), booking, cancellationHours, retentionPercent, paidAmount, pendingAmount); err != nil {
-					logger.FromContext(context.Background()).Errorw("mail_booking_confirmation_error",
-						"msg", fmt.Sprintf("Error al enviar correo de confirmación MP para booking %s", booking.BookingCode),
-						"booking_code", booking.BookingCode,
-						"error", err,
-					)
-				}
-			}()
+				go func() {
+					if err := uc.mailer.SendBookingConfirmation(context.Background(), booking, cancellationHours, retentionPercent, paidAmount, pendingAmount); err != nil {
+						logger.FromContext(context.Background()).Errorw("mail_booking_confirmation_error",
+							"msg", fmt.Sprintf("Error al enviar correo de confirmación MP para booking %s", booking.BookingCode),
+							"booking_code", booking.BookingCode,
+							"error", err,
+						)
+					}
+				}()
 			}
 		}
 	}
@@ -1470,7 +1470,7 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 	}
 
 	log := logger.FromContext(ctx)
-	
+
 	if isAdmin {
 		refundPercentage = 100
 	}
@@ -1520,13 +1520,13 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 			retentionAmount := (booking.Price * float64(100-refundPercentage)) / 100
 			refundAmount = booking.PaidAmount - retentionAmount
 			if refundAmount <= 0 {
-			log.Infow("booking_cancel_no_refund",
-				"msg", fmt.Sprintf("Cancelación sin reembolso para booking %s — pagado $%.0f, retención $%.0f",
-					booking.BookingCode, booking.PaidAmount, retentionAmount),
-				"booking_id", booking.ID.Hex(),
-				"paid_amount", booking.PaidAmount,
-				"retention_amount", retentionAmount,
-			)
+				log.Infow("booking_cancel_no_refund",
+					"msg", fmt.Sprintf("Cancelación sin reembolso para booking %s — pagado $%.0f, retención $%.0f",
+						booking.BookingCode, booking.PaidAmount, retentionAmount),
+					"booking_id", booking.ID.Hex(),
+					"paid_amount", booking.PaidAmount,
+					"retention_amount", retentionAmount,
+				)
 				refundAmount = 0
 			}
 		}
@@ -1539,23 +1539,23 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 			}
 		}
 		if err != nil {
-		log.Errorw("booking_cancel_refund_error",
-			"msg", fmt.Sprintf("Error al procesar reembolso de MercadoPago para booking %s", booking.BookingCode),
-			"booking_id", booking.ID.Hex(),
-			"error", err,
-		)
+			log.Errorw("booking_cancel_refund_error",
+				"msg", fmt.Sprintf("Error al procesar reembolso de MercadoPago para booking %s", booking.BookingCode),
+				"booking_id", booking.ID.Hex(),
+				"error", err,
+			)
 			return fmt.Errorf("error processing mercadopago refund: %w", err)
 		}
 
 		if refundResult != nil {
-		log.Infow("booking_cancel_refund_processed",
-			"msg", fmt.Sprintf("Reembolso procesado para booking %s — id %d, monto $%.0f, estado %s",
-				booking.BookingCode, refundResult.ID, refundResult.Amount, refundResult.Status),
-			"booking_id", booking.ID.Hex(),
-			"refund_id", refundResult.ID,
-			"status", refundResult.Status,
-			"amount", refundResult.Amount,
-		)
+			log.Infow("booking_cancel_refund_processed",
+				"msg", fmt.Sprintf("Reembolso procesado para booking %s — id %d, monto $%.0f, estado %s",
+					booking.BookingCode, refundResult.ID, refundResult.Amount, refundResult.Status),
+				"booking_id", booking.ID.Hex(),
+				"refund_id", refundResult.ID,
+				"status", refundResult.Status,
+				"amount", refundResult.Amount,
+			)
 
 			// Registrar el refund en la reserva
 			mpRefund := domain.Refund{
@@ -1565,11 +1565,11 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 				CreatedAt: time.Now(),
 			}
 			if addErr := uc.repo.AddRefundByBookingID(ctx, booking.ID, mpRefund); addErr != nil {
-			log.Errorw("booking_cancel_refund_save_error",
-				"msg", fmt.Sprintf("Error al guardar registro de reembolso para booking %s", booking.BookingCode),
-				"booking_id", booking.ID.Hex(),
-				"error", addErr,
-			)
+				log.Errorw("booking_cancel_refund_save_error",
+					"msg", fmt.Sprintf("Error al guardar registro de reembolso para booking %s", booking.BookingCode),
+					"booking_id", booking.ID.Hex(),
+					"error", addErr,
+				)
 			}
 		}
 	}
@@ -1602,7 +1602,7 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 	title := "Reserva Cancelada"
 	body := fmt.Sprintf("La reserva en %s para el %s a las %02d:00 hrs fue cancelada.",
 		booking.SportCenterName, booking.Date.Format("02/01/2006"), booking.Hour)
-	
+
 	log.Infow("booking_cancel_sending_notification",
 		"msg", fmt.Sprintf("Enviando notificación push de cancelación para booking %s en centro %s",
 			booking.BookingCode, booking.SportCenterName),
@@ -1615,11 +1615,11 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 	if uc.mailer != nil {
 		go func(b *domain.Booking) {
 			if err := uc.mailer.SendBookingCancellation(context.Background(), b); err != nil {
-			logger.FromContext(context.Background()).Errorw("mail_booking_cancellation_error",
-				"msg", fmt.Sprintf("Error al enviar correo de cancelación para booking %s", b.BookingCode),
-				"booking_code", b.BookingCode,
-				"error", err,
-			)
+				logger.FromContext(context.Background()).Errorw("mail_booking_cancellation_error",
+					"msg", fmt.Sprintf("Error al enviar correo de cancelación para booking %s", b.BookingCode),
+					"booking_code", b.BookingCode,
+					"error", err,
+				)
 			}
 		}(booking)
 	}
@@ -1723,8 +1723,8 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 		"center_name", booking.SportCenterName,
 	)
 
-	title := "Nueva Reserva Interna"
-	body := fmt.Sprintf("Nueva reserva interna en %s para el %s a las %02d:00 hrs.",
+	title := "Nueva Reserva"
+	body := fmt.Sprintf("Nueva reserva en %s para el %s a las %02d:00 hrs.",
 		booking.SportCenterName, booking.Date.Format("02/01/2006"), booking.Hour)
 
 	log.Infow("internal_booking_sending_notification",
@@ -1748,13 +1748,13 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 		pendingAmount := booking.FinalPrice - booking.PaidAmount
 		go func(b *domain.Booking) {
 			if err := uc.mailer.SendBookingConfirmation(context.Background(), b, cancellationHours, retentionPercent, paidAmount, pendingAmount); err != nil {
-			logger.FromContext(context.Background()).Errorw("mail_booking_confirmation_error",
-				"msg", fmt.Sprintf("Error al enviar correo de confirmación para booking %s", b.BookingCode),
-				"booking_code", b.BookingCode,
-				"error", err,
-			)
-		}
-	}(booking)
+				logger.FromContext(context.Background()).Errorw("mail_booking_confirmation_error",
+					"msg", fmt.Sprintf("Error al enviar correo de confirmación para booking %s", b.BookingCode),
+					"booking_code", b.BookingCode,
+					"error", err,
+				)
+			}
+		}(booking)
 	}
 
 	return nil
@@ -1993,7 +1993,7 @@ func (uc *BookingUseCase) UndoBalancePayment(ctx context.Context, id primitive.O
 
 func (uc *BookingUseCase) CreateRecurringReservation(ctx context.Context, reservation *domain.RecurringReservation, date time.Time) error {
 	log := logger.FromContext(ctx)
-	
+
 	court, err := uc.courtRepo.FindByID(ctx, reservation.CourtID)
 	if err != nil {
 		return fmt.Errorf("court not found: %w", err)
