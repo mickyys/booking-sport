@@ -92,13 +92,16 @@ func (uc *BookingUseCase) RegisterDevice(ctx context.Context, userID, token, pla
 	return uc.deviceRepo.Upsert(ctx, device)
 }
 
-func (uc *BookingUseCase) notifyAdmins(ctx context.Context, sportCenterID primitive.ObjectID, sportCenterName string, title, body string, bookingID string, notificationType string) {
+func (uc *BookingUseCase) notifyAdmins(ctx context.Context, booking *domain.Booking, title, body string, notificationType string) {
 	if uc.notifier == nil {
 		logger.FromContext(ctx).Warnw("push_notifier_not_configured",
 			"msg", "Servicio de notificaciones push no está configurado, no se enviarán notificaciones",
 		)
 		return
 	}
+
+	sportCenterName := booking.SportCenterName
+	sportCenterID := booking.SportCenterID
 
 	log := logger.FromContext(ctx)
 
@@ -107,7 +110,7 @@ func (uc *BookingUseCase) notifyAdmins(ctx context.Context, sportCenterID primit
 		"center_id", sportCenterID.Hex(),
 		"center_name", sportCenterName,
 		"notification_type", notificationType,
-		"booking_id", bookingID,
+		"booking_id", booking.ID.Hex(),
 	)
 
 	devices, err := uc.deviceRepo.FindBySportCenterID(ctx, sportCenterID.Hex())
@@ -136,8 +139,10 @@ func (uc *BookingUseCase) notifyAdmins(ctx context.Context, sportCenterID primit
 		}
 	}
 
+	var centerSlug string
 	center, err := uc.centerRepo.FindByID(ctx, sportCenterID)
 	if err == nil {
+		centerSlug = center.Slug
 		log.Infow("push_notify_admins_center_users",
 			"msg", fmt.Sprintf("El centro %s tiene %d usuarios administradores", center.Name, len(center.Users)),
 			"center_id", sportCenterID.Hex(),
@@ -183,12 +188,30 @@ func (uc *BookingUseCase) notifyAdmins(ctx context.Context, sportCenterID primit
 		return
 	}
 
+	// Determinar método y estado de pago
+	paymentMethod := "in_person"
+	paymentStatus := "not_required"
+	if booking.PaymentMethod == "mercadopago" || booking.PaymentMethod == "fintoc" {
+		paymentMethod = "online"
+		if booking.PendingAmount <= 0 {
+			paymentStatus = "paid"
+		} else {
+			paymentStatus = "pending"
+		}
+	}
+
 	data := map[string]string{
-		"booking_id":       bookingID,
-		"center_id":        sportCenterID.Hex(),
-		"center_name":      sportCenterName,
+		"booking_id":        booking.ID.Hex(),
+		"customer_name":     booking.CustomerName,
+		"date":              booking.Date.Format("2006-01-02"),
+		"time":              fmt.Sprintf("%02d:%02d", booking.Hour, booking.Minutes),
+		"payment_method":    paymentMethod,
+		"payment_status":    paymentStatus,
+		"sport_center_slug": centerSlug,
+		"center_id":         sportCenterID.Hex(),
+		"center_name":       sportCenterName,
 		"notification_type": notificationType,
-		"click_action":     "FLUTTER_NOTIFICATION_CLICK",
+		"click_action":      "FLUTTER_NOTIFICATION_CLICK",
 	}
 
 	log.Infow("push_notify_admins_sending",
@@ -1081,7 +1104,7 @@ func (uc *BookingUseCase) HandleMercadoPagoWebhook(ctx context.Context, paymentI
 			"booking_code", booking.BookingCode,
 			"center_id", booking.SportCenterID.Hex(),
 		)
-		uc.notifyAdmins(ctx, booking.SportCenterID, booking.SportCenterName, title, body, booking.ID.Hex(), "confirmation")
+		uc.notifyAdmins(ctx, booking, title, body, "confirmation")
 
 		if uc.mailer != nil {
 			cancellationHours := center.CancellationHours
@@ -1327,7 +1350,7 @@ func (uc *BookingUseCase) HandleFintocWebhook(ctx context.Context, id string, st
 			"booking_code", booking.BookingCode,
 			"center_id", booking.SportCenterID.Hex(),
 		)
-		uc.notifyAdmins(ctx, booking.SportCenterID, booking.SportCenterName, title, body, booking.ID.Hex(), "confirmation")
+		uc.notifyAdmins(ctx, booking, title, body, "confirmation")
 
 		if uc.mailer != nil {
 			center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
@@ -1573,7 +1596,7 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 		"booking_id", booking.ID.Hex(),
 		"center_id", booking.SportCenterID.Hex(),
 	)
-	uc.notifyAdmins(ctx, booking.SportCenterID, booking.SportCenterName, title, body, booking.ID.Hex(), "cancellation")
+	uc.notifyAdmins(ctx, booking, title, body, "cancellation")
 
 	// Enviar correo de confirmación de cancelación si está configurado
 	if uc.mailer != nil {
@@ -1697,7 +1720,7 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 		"booking_id", booking.ID.Hex(),
 		"center_id", booking.SportCenterID.Hex(),
 	)
-	uc.notifyAdmins(ctx, booking.SportCenterID, booking.SportCenterName, title, body, booking.ID.Hex(), "confirmation")
+	uc.notifyAdmins(ctx, booking, title, body, "confirmation")
 
 	if uc.mailer != nil {
 		cancellationHours := center.CancellationHours
@@ -1830,7 +1853,7 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 		"booking_id", booking.ID.Hex(),
 		"center_id", booking.SportCenterID.Hex(),
 	)
-	uc.notifyAdmins(ctx, booking.SportCenterID, booking.SportCenterName, title, body, booking.ID.Hex(), "confirmation")
+	uc.notifyAdmins(ctx, booking, title, body, "confirmation")
 
 	if uc.mailer != nil {
 		log.Infow("booking_sending_confirmation_email",
@@ -2320,7 +2343,7 @@ func (uc *BookingUseCase) SyncConfirmedPayment(ctx context.Context, bookingCode 
 	title := "Pago Confirmado - Sincronizacion Batch"
 	body := fmt.Sprintf("Nueva reserva en %s para el %s a las %02d:00 hrs.",
 		booking.SportCenterName, booking.Date.Format("02/01/2006"), booking.Hour)
-	uc.notifyAdmins(ctx, booking.SportCenterID, booking.SportCenterName, title, body, booking.ID.Hex(), "confirmation")
+	uc.notifyAdmins(ctx, booking, title, body, "confirmation")
 
 	if uc.mailer != nil {
 		cancellationHours := 3
