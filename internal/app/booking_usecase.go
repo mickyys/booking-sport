@@ -93,6 +93,8 @@ func (uc *BookingUseCase) RegisterDevice(ctx context.Context, userID, token, pla
 }
 
 func (uc *BookingUseCase) notifyAdmins(ctx context.Context, booking *domain.Booking, title, body string, notificationType string) {
+	loc, _ := time.LoadLocation("America/Santiago")
+
 	if uc.notifier == nil {
 		logger.FromContext(ctx).Warnw("push_notifier_not_configured",
 			"msg", "Servicio de notificaciones push no está configurado, no se enviarán notificaciones",
@@ -188,11 +190,9 @@ func (uc *BookingUseCase) notifyAdmins(ctx context.Context, booking *domain.Book
 		return
 	}
 
-	// Determinar método y estado de pago
-	paymentMethod := "in_person"
+	// Determinar estado de pago
 	paymentStatus := "not_required"
 	if booking.PaymentMethod == "mercadopago" || booking.PaymentMethod == "fintoc" {
-		paymentMethod = "online"
 		if booking.PendingAmount <= 0 {
 			paymentStatus = "paid"
 		} else {
@@ -200,16 +200,29 @@ func (uc *BookingUseCase) notifyAdmins(ctx context.Context, booking *domain.Book
 		}
 	}
 
+	customerEmail := ""
+	if booking.GuestDetails != nil {
+		customerEmail = booking.GuestDetails.Email
+	}
+
 	data := map[string]string{
-		"booking_id":        booking.ID.Hex(),
-		"customer_name":     booking.CustomerName,
-		"date":              booking.Date.Format("2006-01-02"),
-		"time":              fmt.Sprintf("%02d:%02d", booking.Hour, booking.Minutes),
-		"payment_method":    paymentMethod,
-		"payment_status":    paymentStatus,
+		"booking_id":     booking.ID.Hex(),
+		"customer_name":  booking.CustomerName,
+		"customer_phone": booking.CustomerPhone,
+		"customer_email": customerEmail,
+		"booking_code":   booking.BookingCode,
+		"court_name":     booking.CourtName,
+		"center_name":    booking.SportCenterName,
+		"date":           booking.Date.Format("2006-01-02"),
+		"hour":           fmt.Sprintf("%d", booking.Hour),
+		"time":           fmt.Sprintf("%02d:%02d", booking.Hour, booking.Minutes),
+		"status":         string(booking.Status),
+		"payment_method": booking.PaymentMethod,
+		"payment_status": paymentStatus,
+		"price":          fmt.Sprintf("%.0f", booking.Price),
+		"created_at":     booking.CreatedAt.In(loc).Format(time.RFC3339),
 		"sport_center_slug": centerSlug,
 		"center_id":         sportCenterID.Hex(),
-		"center_name":       sportCenterName,
 		"notification_type": notificationType,
 		"click_action":      "FLUTTER_NOTIFICATION_CLICK",
 	}
