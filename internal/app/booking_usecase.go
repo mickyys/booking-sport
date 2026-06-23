@@ -2202,6 +2202,35 @@ func (uc *BookingUseCase) CancelRecurringReservation(ctx context.Context, id pri
 	return uc.recurringReservationRepo.Cancel(ctx, id, cancelledBy, reason)
 }
 
+func (uc *BookingUseCase) CancelRecurringDate(ctx context.Context, id primitive.ObjectID, date string) error {
+	reservation, err := uc.recurringReservationRepo.FindByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("recurring reservation not found: %w", err)
+	}
+
+	if reservation.Status == domain.RecurringReservationStatusCancelled {
+		return fmt.Errorf("recurring reservation is already cancelled")
+	}
+
+	parsedDate, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return fmt.Errorf("invalid date format, expected YYYY-MM-DD")
+	}
+
+	if int(parsedDate.Weekday()) != reservation.DayOfWeek {
+		return fmt.Errorf("la fecha no corresponde al dia semanal de la recurrencia (%s)", reservation.DayOfWeekName)
+	}
+
+	loc, _ := time.LoadLocation("America/Santiago")
+	today := time.Now().In(loc)
+	todayStart := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, loc)
+	if parsedDate.Before(todayStart) {
+		return fmt.Errorf("no se puede anular una fecha pasada")
+	}
+
+	return uc.recurringReservationRepo.AddCancelledDate(ctx, id, date)
+}
+
 func (uc *BookingUseCase) IsSlotAvailableForRecurring(ctx context.Context, courtID primitive.ObjectID, hour int) (bool, error) {
 	// Check if there's already an active recurring reservation
 	existing, err := uc.recurringReservationRepo.FindActiveByCourtAndHour(ctx, courtID, hour)

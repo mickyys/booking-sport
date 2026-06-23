@@ -272,6 +272,7 @@ type RecurringReservation struct {
 	Status        RecurringReservationStatus `bson:"status" json:"status"`
 	CancelledBy   string                     `bson:"cancelled_by,omitempty" json:"cancelled_by,omitempty"`
 	CancelReason  string                     `bson:"cancel_reason,omitempty" json:"cancel_reason,omitempty"`
+	CancelledDates []string                  `bson:"cancelled_dates,omitempty" json:"cancelled_dates,omitempty"`
 	CreatedAt     time.Time                  `bson:"created_at" json:"created_at"`
 	UpdatedAt     time.Time                  `bson:"updated_at" json:"updated_at"`
 }
@@ -293,6 +294,7 @@ type RecurringReservationResponse struct {
 	Status          RecurringReservationStatus `bson:"status" json:"status"`
 	CancelledBy     string                     `bson:"cancelled_by,omitempty" json:"cancelled_by,omitempty"`
 	CancelReason    string                     `bson:"cancel_reason,omitempty" json:"cancel_reason,omitempty"`
+	CancelledDates  []string                   `bson:"cancelled_dates,omitempty" json:"cancelled_dates,omitempty"`
 	CreatedAt       time.Time                  `bson:"created_at" json:"created_at"`
 	UpdatedAt       time.Time                  `bson:"updated_at" json:"updated_at"`
 }

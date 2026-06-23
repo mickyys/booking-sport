@@ -1093,6 +1093,31 @@ func (h *BookingHandler) CancelRecurringReservation(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
 }
 
+func (h *BookingHandler) CancelRecurringDate(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid recurring reservation id"})
+		return
+	}
+
+	var body struct {
+		Date string `json:"date"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.Date == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "date is required"})
+		return
+	}
+
+	err = h.useCase.CancelRecurringDate(c.Request.Context(), id, body.Date)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "date_cancelled"})
+}
+
 func errorStatusCode(err error) int {
 	var appErr *domain.AppError
 	if errors.As(err, &appErr) {

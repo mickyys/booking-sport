@@ -82,6 +82,7 @@ type RecurringReservationRepository interface {
 	Update(ctx context.Context, reservation *domain.RecurringReservation) error
 	Cancel(ctx context.Context, id primitive.ObjectID, cancelledBy string, reason string) error
 	Delete(ctx context.Context, id primitive.ObjectID) error
+	AddCancelledDate(ctx context.Context, id primitive.ObjectID, date string) error
 }
 
 // Mailer envía correos transaccionales (p. ej. confirmación de reserva)
@@ -223,7 +224,7 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 	dayOfWeek := int(searchDate.Weekday())
 
 	// Agrupar reservas recurrentes por courtID y hora (filtrar por día de la semana)
-	recurringByCourt := make(map[primitive.ObjectID]map[int]bool)
+	recurringByCourt := make(map[primitive.ObjectID]map[int]*domain.RecurringReservation)
 	for i := range recurringReservations {
 		r := &recurringReservations[i]
 		if r.Status != domain.RecurringReservationStatusActive {
@@ -234,10 +235,10 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 			continue
 		}
 		if recurringByCourt[r.CourtID] == nil {
-			recurringByCourt[r.CourtID] = make(map[int]bool)
+			recurringByCourt[r.CourtID] = make(map[int]*domain.RecurringReservation)
 		}
 		key := r.Hour*60 + r.Minutes
-		recurringByCourt[r.CourtID][key] = true
+		recurringByCourt[r.CourtID][key] = r
 	}
 
 	nowInLoc := time.Now().In(loc)
@@ -360,14 +361,25 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 				sch.Status = "passed"
 			}
 
-			// Check for recurring reservation first (takes priority)
-			if recurringHours != nil && recurringHours[slotKey] {
-				if slotTime.Before(nowInLoc) {
-					sch.Status = "passed"
-				} else {
-					sch.Status = "unavailable" // Reservado semanalmente
+			// Check for recurring reservation (excludes cancelled dates)
+			if rec, exists := recurringHours[slotKey]; exists && rec != nil {
+				dateStr := searchDate.Format("2006-01-02")
+				cancelled := false
+				for _, cd := range rec.CancelledDates {
+					if cd == dateStr {
+						cancelled = true
+						break
+					}
 				}
-			} else if bID, exists := bookedHours[slotKey]; exists {
+				if !cancelled {
+					if slotTime.Before(nowInLoc) {
+						sch.Status = "passed"
+					} else {
+						sch.Status = "unavailable" // Reservado semanalmente
+					}
+				}
+			}
+			if bID, exists := bookedHours[slotKey]; exists {
 				sch.Status = "booked"
 				sch.BookingID = bID
 
@@ -600,17 +612,29 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 
 			slotKey := s.Hour*60 + s.Minutes
 			if recurring, exists := recurringHours[slotKey]; exists && recurring != nil {
-				sch.IsRecurringWeekly = true
-				sch.RecurringReservationID = recurring.ID.Hex()
-				sch.CustomerName = recurring.CustomerName
-				sch.CustomerPhone = recurring.CustomerPhone
-				sch.Price = recurring.Price
-				if _, hasBooking := bookedHours[slotKey]; !hasBooking {
-					if slotTime.Before(nowInLoc) {
-						sch.Status = "passed_booked"
-					} else {
-						sch.Status = "recurring_booked"
-						sch.PaymentMethod = "presential"
+				dateStr := searchDate.Format("2006-01-02")
+				isCancelled := false
+				for _, cd := range recurring.CancelledDates {
+					if cd == dateStr {
+						isCancelled = true
+						break
+					}
+				}
+				if isCancelled {
+					// Fecha anulada: slot liberado, no se aplica informacion de recurrencia
+				} else {
+					sch.IsRecurringWeekly = true
+					sch.RecurringReservationID = recurring.ID.Hex()
+					sch.CustomerName = recurring.CustomerName
+					sch.CustomerPhone = recurring.CustomerPhone
+					sch.Price = recurring.Price
+					if _, hasBooking := bookedHours[slotKey]; !hasBooking {
+						if slotTime.Before(nowInLoc) {
+							sch.Status = "passed_booked"
+						} else {
+							sch.Status = "recurring_booked"
+							sch.PaymentMethod = "presential"
+						}
 					}
 				}
 			}

@@ -252,6 +252,7 @@ func main() {
 		api.GET("/admin/recurring/:id", bookingHandler.GetRecurringReservation)
 		api.GET("/admin/recurring/court/:courtId", bookingHandler.GetRecurringReservationsByCourt)
 		api.DELETE("/admin/recurring/:id", bookingHandler.CancelRecurringReservation)
+		api.POST("/admin/recurring/:id/cancel-date", bookingHandler.CancelRecurringDate)
 
 		// Users management routes
 		api.GET("/admin/users", sportCenterHandler.GetCenterUsers)
