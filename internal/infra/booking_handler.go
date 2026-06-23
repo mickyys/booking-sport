@@ -689,6 +689,30 @@ func (h *BookingHandler) CreateInternalBooking(c *gin.Context) {
 	c.JSON(http.StatusCreated, booking)
 }
 
+func (h *BookingHandler) CreateInternalBookingsBatch(c *gin.Context) {
+	var req struct {
+		Bookings []domain.Booking `json:"bookings" binding:"required"`
+		SeriesID string           `json:"series_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if len(req.Bookings) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no bookings provided"})
+		return
+	}
+
+	created, err := h.useCase.CreateInternalBookingsBatch(c.Request.Context(), req.Bookings, req.SeriesID)
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"bookings": created, "count": len(created)})
+}
+
 func (h *BookingHandler) CreateBooking(c *gin.Context) {
 	log := h.baseHandler.GetLogger(c)
 	

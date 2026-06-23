@@ -1760,6 +1760,119 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 	return nil
 }
 
+func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, bookings []domain.Booking, seriesID string) ([]domain.Booking, error) {
+	if len(bookings) == 0 {
+		return nil, fmt.Errorf("no bookings provided")
+	}
+
+	firstBooking := bookings[0]
+	court, err := uc.courtRepo.FindByID(ctx, firstBooking.CourtID)
+	if err != nil {
+		return nil, fmt.Errorf("court not found: %w", err)
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
+	if err != nil {
+		return nil, fmt.Errorf("sport center not found: %w", err)
+	}
+
+	loc, _ := time.LoadLocation("America/Santiago")
+
+	type validatedBooking struct {
+		booking domain.Booking
+		price   float64
+	}
+
+	validated := make([]validatedBooking, 0, len(bookings))
+
+	for _, b := range bookings {
+		b.Date = time.Date(b.Date.In(loc).Year(), b.Date.In(loc).Month(), b.Date.In(loc).Day(), 0, 0, 0, 0, loc)
+
+		price := 0.0
+		minutes := b.Minutes
+		for _, s := range court.Schedule {
+			if s.Hour == b.Hour && s.Minutes == minutes {
+				bookingDateTime := time.Date(b.Date.Year(), b.Date.Month(), b.Date.Day(), b.Hour, minutes, 0, 0, loc)
+				if bookingDateTime.Before(time.Now().In(loc)) {
+					return nil, fmt.Errorf("No disponible: %s - el horario ya pasó", b.Date.Format("02/01/2006"))
+				}
+				price = s.Price
+				break
+			}
+		}
+
+		dateStr := b.Date.Format("02/01/2006")
+
+		conflicting, err := uc.repo.FindConfirmedBySlot(ctx, b.CourtID, b.Date, b.Hour)
+		if err != nil {
+			return nil, fmt.Errorf("error checking availability: %w", err)
+		}
+		if conflicting != nil {
+			return nil, fmt.Errorf("No disponible: %s - ya existe una reserva confirmada para este horario", dateStr)
+		}
+
+		activeHold, _ := uc.holdRepo.FindBySlot(ctx, b.CourtID, b.Date, b.Hour)
+		if activeHold != nil && time.Now().Before(activeHold.ExpiresAt) {
+			return nil, fmt.Errorf("No disponible: %s - otro usuario está en proceso de pago", dateStr)
+		}
+
+		pending, _ := uc.repo.FindPendingBySlot(ctx, b.CourtID, b.Date, b.Hour)
+		if pending != nil {
+			if pending.LockExpiresAt == nil || time.Now().After(*pending.LockExpiresAt) {
+				if pending.HoldID != nil {
+					uc.holdRepo.Delete(ctx, *pending.HoldID)
+				}
+				uc.repo.MarkExpired(ctx, pending.ID)
+			} else {
+				return nil, fmt.Errorf("No disponible: %s - otro usuario está en proceso de pago", dateStr)
+			}
+		}
+
+		b.SportCenterID = court.SportCenterID
+		b.SportCenterName = center.Name
+		b.CourtName = court.Name
+		b.Price = price
+		b.FinalPrice = price
+		b.Status = domain.BookingStatusConfirmed
+		b.BookingCode = generateBookingCode()
+		b.PaymentMethod = "internal"
+		b.SeriesID = seriesID
+		b.CreatedAt = time.Now()
+		b.UpdatedAt = time.Now()
+
+		if b.GuestDetails != nil {
+			if b.CustomerName == "" {
+				b.CustomerName = b.GuestDetails.Name
+			}
+			if b.CustomerPhone == "" {
+				b.CustomerPhone = b.GuestDetails.Phone
+			}
+		}
+
+		validated = append(validated, validatedBooking{booking: b, price: price})
+	}
+
+	created := make([]domain.Booking, 0, len(validated))
+	for _, vb := range validated {
+		b := vb.booking
+		if err := uc.repo.Create(ctx, &b); err != nil {
+			return nil, fmt.Errorf("error creating booking for %s: %w", b.Date.Format("02/01/2006"), err)
+		}
+		created = append(created, b)
+	}
+
+	log := logger.FromContext(ctx)
+	log.Infow("batch_bookings_created",
+		"msg", fmt.Sprintf("Batch de %d bookings internos creados para %s en %s (%s) — serie %s",
+			len(created), firstBooking.CustomerName, firstBooking.SportCenterName, firstBooking.CourtName, seriesID),
+		"count", len(created),
+		"series_id", seriesID,
+		"center_id", court.SportCenterID.Hex(),
+	)
+
+	return created, nil
+}
+
 func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) error {
 	court, err := uc.courtRepo.FindByID(ctx, booking.CourtID)
 	if err != nil {
