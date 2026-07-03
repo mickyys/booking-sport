@@ -2358,7 +2358,12 @@ func (uc *BookingUseCase) CancelRecurringDate(ctx context.Context, id primitive.
 		return fmt.Errorf("recurring reservation is already cancelled")
 	}
 
-	parsedDate, err := time.Parse("2006-01-02", date)
+	loc, err := time.LoadLocation("America/Santiago")
+	if err != nil {
+		return fmt.Errorf("failed to load timezone: %w", err)
+	}
+
+	parsedDate, err := time.ParseInLocation("2006-01-02", date, loc)
 	if err != nil {
 		return fmt.Errorf("invalid date format, expected YYYY-MM-DD")
 	}
@@ -2367,7 +2372,6 @@ func (uc *BookingUseCase) CancelRecurringDate(ctx context.Context, id primitive.
 		return fmt.Errorf("la fecha no corresponde al dia semanal de la recurrencia (%s)", reservation.DayOfWeekName)
 	}
 
-	loc, _ := time.LoadLocation("America/Santiago")
 	today := time.Now().In(loc)
 	todayStart := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, loc)
 	if parsedDate.Before(todayStart) {
