@@ -1090,10 +1090,13 @@ func (r *BookingRepository) ConfirmPaymentWithVersion(ctx context.Context, id pr
 
 func (r *BookingRepository) FindActiveSeriesByCourtHour(ctx context.Context, courtID primitive.ObjectID, hour int) ([]domain.Booking, error) {
 	filter := bson.M{
-		"court_id":  courtID,
-		"hour":      hour,
-		"series_id": bson.M{"$ne": ""},
-		"status":    domain.BookingStatusConfirmed,
+		"court_id": courtID,
+		"hour":     hour,
+		"status":   domain.BookingStatusConfirmed,
+		"$and": []bson.M{
+			{"series_id": bson.M{"$exists": true}},
+			{"series_id": bson.M{"$ne": ""}},
+		},
 	}
 	cursor, err := r.collection.Find(ctx, filter)
 	if err != nil {
