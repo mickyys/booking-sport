@@ -843,7 +843,10 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"init_point": initPoint})
+	c.JSON(http.StatusCreated, gin.H{
+		"init_point":   initPoint,
+		"booking_code": input.Booking.BookingCode,
+	})
 }
 
 func (h *BookingHandler) MercadoPagoWebhook(c *gin.Context) {
@@ -890,6 +893,32 @@ func (h *BookingHandler) MercadoPagoWebhook(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "received"})
+}
+
+func (h *BookingHandler) MockMercadoPagoConfirm(c *gin.Context) {
+	env := os.Getenv("ENVIRONMENT")
+	if env != "development" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "mock only available in development"})
+		return
+	}
+
+	var req struct {
+		Code   string `json:"code" binding:"required"`
+		Status string `json:"status" binding:"required"` // "approved" | "rejected"
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := h.useCase.MockConfirmPayment(c.Request.Context(), req.Code, req.Status)
+	if err != nil {
+		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
 }
 
 func (h *BookingHandler) SyncConfirmedPayment(c *gin.Context) {

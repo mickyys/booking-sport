@@ -206,6 +206,7 @@ func main() {
 	r.POST("/api/bookings/mercadopago", bookingHandler.CreateMercadoPagoPayment)
 	r.POST("/api/bookings/mercadopago/webhook", bookingHandler.MercadoPagoWebhook)
 	r.GET("/api/bookings/mercadopago/return", bookingHandler.MercadoPagoReturn)
+	r.POST("/api/bookings/mercadopago/mock-confirm", bookingHandler.MockMercadoPagoConfirm)
 	r.POST("/api/internal/sync-payment", bookingHandler.SyncConfirmedPayment)
 	r.GET("/api/bookings/code/:code", bookingHandler.GetByBookingCode)
 	r.POST("/api/bookings/code/:code/cancel", bookingHandler.CancelByBookingCode)

@@ -966,6 +966,54 @@ func (uc *BookingUseCase) StoreMPPaymentID(ctx context.Context, bookingCode, pay
 	return uc.repo.UpdateMPPaymentID(ctx, booking.ID, paymentIDStr)
 }
 
+func (uc *BookingUseCase) MockConfirmPayment(ctx context.Context, bookingCode, status string) (*domain.MockPaymentResult, error) {
+	booking, err := uc.repo.FindByBookingCode(ctx, bookingCode)
+	if err != nil {
+		return nil, fmt.Errorf("booking not found: %w", err)
+	}
+
+	paymentID := fmt.Sprintf("MOCK-%d", time.Now().UnixMilli())
+
+	switch status {
+	case "approved":
+		paymentInfo := &domain.PaymentInfo{
+			PaymentMethodID:   "mock_credit_card",
+			PaymentMethodType: "credit_card",
+			Installments:      1,
+			InstallmentAmount: booking.Price,
+			NetReceivedAmount: booking.Price,
+			CardLastFour:      "2580",
+			CardholderName:    "Test User",
+		}
+
+		if err := uc.repo.UpdateMPPaymentID(ctx, booking.ID, paymentID); err != nil {
+			return nil, fmt.Errorf("failed to store mock payment id: %w", err)
+		}
+
+		if err := uc.repo.ConfirmPayment(ctx, booking.ID, domain.BookingStatusConfirmed, booking.Price, 0, paymentInfo); err != nil {
+			return nil, fmt.Errorf("failed to confirm booking: %w", err)
+		}
+
+	case "rejected":
+		if err := uc.repo.UpdateMPPaymentID(ctx, booking.ID, paymentID); err != nil {
+			return nil, fmt.Errorf("failed to store mock payment id: %w", err)
+		}
+
+		if err := uc.repo.ConfirmPayment(ctx, booking.ID, domain.BookingStatusCancelled, 0, booking.Price, nil); err != nil {
+			return nil, fmt.Errorf("failed to cancel booking: %w", err)
+		}
+
+	default:
+		return nil, fmt.Errorf("invalid status: %s", status)
+	}
+
+	return &domain.MockPaymentResult{
+		Status:      status,
+		PaymentID:   paymentID,
+		BookingCode: bookingCode,
+	}, nil
+}
+
 func (uc *BookingUseCase) HandleMercadoPagoWebhook(ctx context.Context, paymentIDStr string) error {
 	paymentID, err := strconv.Atoi(paymentIDStr)
 	if err != nil {

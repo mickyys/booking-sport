@@ -237,6 +237,12 @@ type PaymentInfo struct {
 	NetReceivedAmount float64 `bson:"net_received_amount,omitempty" json:"net_received_amount,omitempty"`
 }
 
+type MockPaymentResult struct {
+	Status      string `json:"status"`
+	PaymentID   string `json:"payment_id"`
+	BookingCode string `json:"booking_code"`
+}
+
 type Refund struct {
 	ID        string    `bson:"id" json:"id"`
 	Amount    int       `bson:"amount" json:"amount"`
