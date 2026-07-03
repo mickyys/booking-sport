@@ -1691,6 +1691,14 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 		return fmt.Errorf("ya existe un proceso de reserva o reserva confirmada para este horario")
 	}
 
+	if uc.recurringReservationRepo != nil {
+		dayOfWeek := int(booking.Date.Weekday())
+		existingRecurring, _ := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, booking.CourtID, booking.Hour, dayOfWeek)
+		if existingRecurring != nil {
+			return domain.NewConflictError("no disponible: existe una reserva recurrente semanal para este horario")
+		}
+	}
+
 	activeHold, _ := uc.holdRepo.FindBySlot(ctx, booking.CourtID, booking.Date, booking.Hour)
 	if activeHold != nil && time.Now().Before(activeHold.ExpiresAt) {
 		return domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
@@ -1809,6 +1817,14 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 		}
 		if conflicting != nil {
 			return nil, fmt.Errorf("No disponible: %s - ya existe una reserva confirmada para este horario", dateStr)
+		}
+
+		if uc.recurringReservationRepo != nil {
+			dayOfWeek := int(b.Date.Weekday())
+			existingRecurring, _ := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, b.CourtID, b.Hour, dayOfWeek)
+			if existingRecurring != nil {
+				return nil, fmt.Errorf("No disponible: %s - existe una reserva recurrente semanal para este horario", dateStr)
+			}
 		}
 
 		activeHold, _ := uc.holdRepo.FindBySlot(ctx, b.CourtID, b.Date, b.Hour)
