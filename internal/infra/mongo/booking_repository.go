@@ -1088,6 +1088,26 @@ func (r *BookingRepository) ConfirmPaymentWithVersion(ctx context.Context, id pr
 	return nil
 }
 
+func (r *BookingRepository) FindActiveSeriesByCourtHour(ctx context.Context, courtID primitive.ObjectID, hour int) ([]domain.Booking, error) {
+	filter := bson.M{
+		"court_id":  courtID,
+		"hour":      hour,
+		"series_id": bson.M{"$ne": ""},
+		"status":    domain.BookingStatusConfirmed,
+	}
+	cursor, err := r.collection.Find(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var bookings []domain.Booking
+	if err := cursor.All(ctx, &bookings); err != nil {
+		return nil, err
+	}
+	return bookings, nil
+}
+
 func (r *BookingRepository) GetDB() *mongo.Database {
 	return r.db
 }

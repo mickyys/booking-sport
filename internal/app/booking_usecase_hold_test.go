@@ -41,6 +41,10 @@ type findPendingBySlotCall struct {
 	Hour    int
 }
 
+func (m *mockBookingRepoForHold) FindActiveSeriesByCourtHour(ctx context.Context, courtID primitive.ObjectID, hour int) ([]domain.Booking, error) {
+	return nil, nil
+}
+
 func (m *mockBookingRepoForHold) FindConfirmedBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
 	m.FindConfirmedBySlotCalls = append(m.FindConfirmedBySlotCalls, findConfirmedBySlotCall{courtID, date, hour})
 	if m.FindConfirmedBySlotFn != nil {

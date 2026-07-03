@@ -59,6 +59,7 @@ type BookingRepository interface {
 	CountConfirmedByUserID(ctx context.Context, userID string) (int64, error)
 	FindByUserIDAndStatusPaged(ctx context.Context, userID string, cancelled domain.BookingStatus, page int, limit int) ([]domain.BookingSummary, int64, error)
 	Delete(ctx context.Context, id primitive.ObjectID) error
+	FindActiveSeriesByCourtHour(ctx context.Context, courtID primitive.ObjectID, hour int) ([]domain.Booking, error)
 	DeleteBySeriesID(ctx context.Context, seriesID string) error
 	GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name string, code string, status string) (*domain.AdminDashboardData, error)
 	GetRecurringSeries(ctx context.Context, centerIDs []primitive.ObjectID, sportCenterID string) ([]domain.RecurringSeries, error)

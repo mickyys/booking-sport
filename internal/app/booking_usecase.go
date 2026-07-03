@@ -2141,6 +2141,18 @@ func (uc *BookingUseCase) CreateRecurringReservation(ctx context.Context, reserv
 		return fmt.Errorf("ya existe una reserva recurrente semanal para esta cancha, hora y día")
 	}
 
+	// Verificar si ya existen reservas individuales activas en serie para esta cancha, hora y día de la semana
+	if uc.repo != nil {
+		seriesBookings, err := uc.repo.FindActiveSeriesByCourtHour(ctx, reservation.CourtID, reservation.Hour)
+		if err == nil {
+			for _, b := range seriesBookings {
+				if int(b.Date.Weekday()) == dayOfWeek {
+					return fmt.Errorf("ya existe una reserva recurrente semanal para esta cancha, hora y día")
+				}
+			}
+		}
+	}
+
 	// Verificar que el precio no sea 0
 	if reservation.Price <= 0 {
 		// Obtener precio del schedule
