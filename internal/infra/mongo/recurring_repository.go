@@ -149,3 +149,13 @@ func (r *RecurringReservationRepository) Delete(ctx context.Context, id primitiv
 	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": id})
 	return err
 }
+
+func (r *RecurringReservationRepository) AddCancelledDate(ctx context.Context, id primitive.ObjectID, date string) error {
+	filter := bson.M{"_id": id}
+	update := bson.M{
+		"$addToSet": bson.M{"cancelled_dates": date},
+		"$set":      bson.M{"updated_at": time.Now()},
+	}
+	_, err := r.collection.UpdateOne(ctx, filter, update)
+	return err
+}

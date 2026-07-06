@@ -206,6 +206,7 @@ func main() {
 	r.POST("/api/bookings/mercadopago", bookingHandler.CreateMercadoPagoPayment)
 	r.POST("/api/bookings/mercadopago/webhook", bookingHandler.MercadoPagoWebhook)
 	r.GET("/api/bookings/mercadopago/return", bookingHandler.MercadoPagoReturn)
+	r.POST("/api/bookings/mercadopago/mock-confirm", bookingHandler.MockMercadoPagoConfirm)
 	r.POST("/api/internal/sync-payment", bookingHandler.SyncConfirmedPayment)
 	r.GET("/api/bookings/code/:code", bookingHandler.GetByBookingCode)
 	r.POST("/api/bookings/code/:code/cancel", bookingHandler.CancelByBookingCode)
@@ -242,6 +243,7 @@ func main() {
 		api.PATCH("/admin/sport-centers/:id/settings", sportCenterHandler.UpdateSportCenterSettings)
 		api.GET("/admin/sport-centers/:id", sportCenterHandler.GetByID)
 		api.POST("/admin/bookings/internal", bookingHandler.CreateInternalBooking)
+		api.POST("/admin/bookings/internal/batch", bookingHandler.CreateInternalBookingsBatch)
 		api.POST("/admin/bookings/:id/pay-balance", bookingHandler.MarkPartialPaymentAsPaid)
 		api.PATCH("/admin/bookings/:id/undo-pay-balance", bookingHandler.UndoBalancePayment)
 		api.DELETE("/admin/bookings/:id", bookingHandler.DeleteBooking)
@@ -252,6 +254,7 @@ func main() {
 		api.GET("/admin/recurring/:id", bookingHandler.GetRecurringReservation)
 		api.GET("/admin/recurring/court/:courtId", bookingHandler.GetRecurringReservationsByCourt)
 		api.DELETE("/admin/recurring/:id", bookingHandler.CancelRecurringReservation)
+		api.POST("/admin/recurring/:id/cancel-date", bookingHandler.CancelRecurringDate)
 
 		// Users management routes
 		api.GET("/admin/users", sportCenterHandler.GetCenterUsers)

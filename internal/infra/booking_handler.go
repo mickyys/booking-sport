@@ -689,6 +689,30 @@ func (h *BookingHandler) CreateInternalBooking(c *gin.Context) {
 	c.JSON(http.StatusCreated, booking)
 }
 
+func (h *BookingHandler) CreateInternalBookingsBatch(c *gin.Context) {
+	var req struct {
+		Bookings []domain.Booking `json:"bookings" binding:"required"`
+		SeriesID string           `json:"series_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if len(req.Bookings) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no bookings provided"})
+		return
+	}
+
+	created, err := h.useCase.CreateInternalBookingsBatch(c.Request.Context(), req.Bookings, req.SeriesID)
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"bookings": created, "count": len(created)})
+}
+
 func (h *BookingHandler) CreateBooking(c *gin.Context) {
 	log := h.baseHandler.GetLogger(c)
 	
@@ -819,7 +843,10 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"init_point": initPoint})
+	c.JSON(http.StatusCreated, gin.H{
+		"init_point":   initPoint,
+		"booking_code": input.Booking.BookingCode,
+	})
 }
 
 func (h *BookingHandler) MercadoPagoWebhook(c *gin.Context) {
@@ -866,6 +893,32 @@ func (h *BookingHandler) MercadoPagoWebhook(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "received"})
+}
+
+func (h *BookingHandler) MockMercadoPagoConfirm(c *gin.Context) {
+	env := os.Getenv("ENVIRONMENT")
+	if env != "development" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "mock only available in development"})
+		return
+	}
+
+	var req struct {
+		Code   string `json:"code" binding:"required"`
+		Status string `json:"status" binding:"required"` // "approved" | "rejected"
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := h.useCase.MockConfirmPayment(c.Request.Context(), req.Code, req.Status)
+	if err != nil {
+		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
 }
 
 func (h *BookingHandler) SyncConfirmedPayment(c *gin.Context) {
@@ -1091,6 +1144,31 @@ func (h *BookingHandler) CancelRecurringReservation(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
+}
+
+func (h *BookingHandler) CancelRecurringDate(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid recurring reservation id"})
+		return
+	}
+
+	var body struct {
+		Date string `json:"date"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.Date == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "date is required"})
+		return
+	}
+
+	err = h.useCase.CancelRecurringDate(c.Request.Context(), id, body.Date)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "date_cancelled"})
 }
 
 func errorStatusCode(err error) int {

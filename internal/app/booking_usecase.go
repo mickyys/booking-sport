@@ -966,6 +966,54 @@ func (uc *BookingUseCase) StoreMPPaymentID(ctx context.Context, bookingCode, pay
 	return uc.repo.UpdateMPPaymentID(ctx, booking.ID, paymentIDStr)
 }
 
+func (uc *BookingUseCase) MockConfirmPayment(ctx context.Context, bookingCode, status string) (*domain.MockPaymentResult, error) {
+	booking, err := uc.repo.FindByBookingCode(ctx, bookingCode)
+	if err != nil {
+		return nil, fmt.Errorf("booking not found: %w", err)
+	}
+
+	paymentID := fmt.Sprintf("MOCK-%d", time.Now().UnixMilli())
+
+	switch status {
+	case "approved":
+		paymentInfo := &domain.PaymentInfo{
+			PaymentMethodID:   "mock_credit_card",
+			PaymentMethodType: "credit_card",
+			Installments:      1,
+			InstallmentAmount: booking.Price,
+			NetReceivedAmount: booking.Price,
+			CardLastFour:      "2580",
+			CardholderName:    "Test User",
+		}
+
+		if err := uc.repo.UpdateMPPaymentID(ctx, booking.ID, paymentID); err != nil {
+			return nil, fmt.Errorf("failed to store mock payment id: %w", err)
+		}
+
+		if err := uc.repo.ConfirmPayment(ctx, booking.ID, domain.BookingStatusConfirmed, booking.Price, 0, paymentInfo); err != nil {
+			return nil, fmt.Errorf("failed to confirm booking: %w", err)
+		}
+
+	case "rejected":
+		if err := uc.repo.UpdateMPPaymentID(ctx, booking.ID, paymentID); err != nil {
+			return nil, fmt.Errorf("failed to store mock payment id: %w", err)
+		}
+
+		if err := uc.repo.ConfirmPayment(ctx, booking.ID, domain.BookingStatusCancelled, 0, booking.Price, nil); err != nil {
+			return nil, fmt.Errorf("failed to cancel booking: %w", err)
+		}
+
+	default:
+		return nil, fmt.Errorf("invalid status: %s", status)
+	}
+
+	return &domain.MockPaymentResult{
+		Status:      status,
+		PaymentID:   paymentID,
+		BookingCode: bookingCode,
+	}, nil
+}
+
 func (uc *BookingUseCase) HandleMercadoPagoWebhook(ctx context.Context, paymentIDStr string) error {
 	paymentID, err := strconv.Atoi(paymentIDStr)
 	if err != nil {
@@ -1691,6 +1739,14 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 		return fmt.Errorf("ya existe un proceso de reserva o reserva confirmada para este horario")
 	}
 
+	if uc.recurringReservationRepo != nil {
+		dayOfWeek := int(booking.Date.Weekday())
+		existingRecurring, _ := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, booking.CourtID, booking.Hour, dayOfWeek)
+		if existingRecurring != nil {
+			return domain.NewConflictError("no disponible: existe una reserva recurrente semanal para este horario")
+		}
+	}
+
 	activeHold, _ := uc.holdRepo.FindBySlot(ctx, booking.CourtID, booking.Date, booking.Hour)
 	if activeHold != nil && time.Now().Before(activeHold.ExpiresAt) {
 		return domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
@@ -1758,6 +1814,127 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 	}
 
 	return nil
+}
+
+func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, bookings []domain.Booking, seriesID string) ([]domain.Booking, error) {
+	if len(bookings) == 0 {
+		return nil, fmt.Errorf("no bookings provided")
+	}
+
+	firstBooking := bookings[0]
+	court, err := uc.courtRepo.FindByID(ctx, firstBooking.CourtID)
+	if err != nil {
+		return nil, fmt.Errorf("court not found: %w", err)
+	}
+
+	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
+	if err != nil {
+		return nil, fmt.Errorf("sport center not found: %w", err)
+	}
+
+	loc, _ := time.LoadLocation("America/Santiago")
+
+	type validatedBooking struct {
+		booking domain.Booking
+		price   float64
+	}
+
+	validated := make([]validatedBooking, 0, len(bookings))
+
+	for _, b := range bookings {
+		b.Date = time.Date(b.Date.In(loc).Year(), b.Date.In(loc).Month(), b.Date.In(loc).Day(), 0, 0, 0, 0, loc)
+
+		price := 0.0
+		minutes := b.Minutes
+		for _, s := range court.Schedule {
+			if s.Hour == b.Hour && s.Minutes == minutes {
+				bookingDateTime := time.Date(b.Date.Year(), b.Date.Month(), b.Date.Day(), b.Hour, minutes, 0, 0, loc)
+				if bookingDateTime.Before(time.Now().In(loc)) {
+					return nil, fmt.Errorf("No disponible: %s - el horario ya pasó", b.Date.Format("02/01/2006"))
+				}
+				price = s.Price
+				break
+			}
+		}
+
+		dateStr := b.Date.Format("02/01/2006")
+
+		conflicting, err := uc.repo.FindConfirmedBySlot(ctx, b.CourtID, b.Date, b.Hour)
+		if err != nil {
+			return nil, fmt.Errorf("error checking availability: %w", err)
+		}
+		if conflicting != nil {
+			return nil, fmt.Errorf("No disponible: %s - ya existe una reserva confirmada para este horario", dateStr)
+		}
+
+		if uc.recurringReservationRepo != nil {
+			dayOfWeek := int(b.Date.Weekday())
+			existingRecurring, _ := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, b.CourtID, b.Hour, dayOfWeek)
+			if existingRecurring != nil {
+				return nil, fmt.Errorf("No disponible: %s - existe una reserva recurrente semanal para este horario", dateStr)
+			}
+		}
+
+		activeHold, _ := uc.holdRepo.FindBySlot(ctx, b.CourtID, b.Date, b.Hour)
+		if activeHold != nil && time.Now().Before(activeHold.ExpiresAt) {
+			return nil, fmt.Errorf("No disponible: %s - otro usuario está en proceso de pago", dateStr)
+		}
+
+		pending, _ := uc.repo.FindPendingBySlot(ctx, b.CourtID, b.Date, b.Hour)
+		if pending != nil {
+			if pending.LockExpiresAt == nil || time.Now().After(*pending.LockExpiresAt) {
+				if pending.HoldID != nil {
+					uc.holdRepo.Delete(ctx, *pending.HoldID)
+				}
+				uc.repo.MarkExpired(ctx, pending.ID)
+			} else {
+				return nil, fmt.Errorf("No disponible: %s - otro usuario está en proceso de pago", dateStr)
+			}
+		}
+
+		b.SportCenterID = court.SportCenterID
+		b.SportCenterName = center.Name
+		b.CourtName = court.Name
+		b.Price = price
+		b.FinalPrice = price
+		b.Status = domain.BookingStatusConfirmed
+		b.BookingCode = generateBookingCode()
+		b.PaymentMethod = "internal"
+		b.SeriesID = seriesID
+		b.CreatedAt = time.Now()
+		b.UpdatedAt = time.Now()
+
+		if b.GuestDetails != nil {
+			if b.CustomerName == "" {
+				b.CustomerName = b.GuestDetails.Name
+			}
+			if b.CustomerPhone == "" {
+				b.CustomerPhone = b.GuestDetails.Phone
+			}
+		}
+
+		validated = append(validated, validatedBooking{booking: b, price: price})
+	}
+
+	created := make([]domain.Booking, 0, len(validated))
+	for _, vb := range validated {
+		b := vb.booking
+		if err := uc.repo.Create(ctx, &b); err != nil {
+			return nil, fmt.Errorf("error creating booking for %s: %w", b.Date.Format("02/01/2006"), err)
+		}
+		created = append(created, b)
+	}
+
+	log := logger.FromContext(ctx)
+	log.Infow("batch_bookings_created",
+		"msg", fmt.Sprintf("Batch de %d bookings internos creados para %s en %s (%s) — serie %s",
+			len(created), firstBooking.CustomerName, firstBooking.SportCenterName, firstBooking.CourtName, seriesID),
+		"count", len(created),
+		"series_id", seriesID,
+		"center_id", court.SportCenterID.Hex(),
+	)
+
+	return created, nil
 }
 
 func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) error {
@@ -2012,6 +2189,23 @@ func (uc *BookingUseCase) CreateRecurringReservation(ctx context.Context, reserv
 		return fmt.Errorf("ya existe una reserva recurrente semanal para esta cancha, hora y día")
 	}
 
+	// Verificar si ya existen reservas individuales activas en serie para esta cancha, hora y día de la semana
+	if uc.repo != nil {
+		seriesBookings, err := uc.repo.FindActiveSeriesByCourtHour(ctx, reservation.CourtID, reservation.Hour)
+		if err != nil {
+			log.Warnw("find_active_series_error", "error", err)
+		} else {
+			log.Infow("active_series_check", "court_id", reservation.CourtID.Hex(), "hour", reservation.Hour, "day_of_week", dayOfWeek, "count", len(seriesBookings))
+			for _, b := range seriesBookings {
+				bDay := int(b.Date.Weekday())
+				log.Infow("active_series_booking", "booking_id", b.ID.Hex(), "series_id", b.SeriesID, "date", b.Date.Format("2006-01-02"), "weekday", bDay)
+				if bDay == dayOfWeek {
+					return fmt.Errorf("ya existe una reserva recurrente semanal para esta cancha, hora y día")
+				}
+			}
+		}
+	}
+
 	// Verificar que el precio no sea 0
 	if reservation.Price <= 0 {
 		// Obtener precio del schedule
@@ -2200,6 +2394,39 @@ func (uc *BookingUseCase) CancelRecurringReservation(ctx context.Context, id pri
 	}
 
 	return uc.recurringReservationRepo.Cancel(ctx, id, cancelledBy, reason)
+}
+
+func (uc *BookingUseCase) CancelRecurringDate(ctx context.Context, id primitive.ObjectID, date string) error {
+	reservation, err := uc.recurringReservationRepo.FindByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("recurring reservation not found: %w", err)
+	}
+
+	if reservation.Status == domain.RecurringReservationStatusCancelled {
+		return fmt.Errorf("recurring reservation is already cancelled")
+	}
+
+	loc, err := time.LoadLocation("America/Santiago")
+	if err != nil {
+		return fmt.Errorf("failed to load timezone: %w", err)
+	}
+
+	parsedDate, err := time.ParseInLocation("2006-01-02", date, loc)
+	if err != nil {
+		return fmt.Errorf("invalid date format, expected YYYY-MM-DD")
+	}
+
+	if int(parsedDate.Weekday()) != reservation.DayOfWeek {
+		return fmt.Errorf("la fecha no corresponde al dia semanal de la recurrencia (%s)", reservation.DayOfWeekName)
+	}
+
+	today := time.Now().In(loc)
+	todayStart := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, loc)
+	if parsedDate.Before(todayStart) {
+		return fmt.Errorf("no se puede anular una fecha pasada")
+	}
+
+	return uc.recurringReservationRepo.AddCancelledDate(ctx, id, date)
 }
 
 func (uc *BookingUseCase) IsSlotAvailableForRecurring(ctx context.Context, courtID primitive.ObjectID, hour int) (bool, error) {
