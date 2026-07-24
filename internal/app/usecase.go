@@ -363,21 +363,11 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 			}
 
 			// Check for recurring reservation (excludes cancelled dates)
-			if rec, exists := recurringHours[slotKey]; exists && rec != nil {
-				dateStr := searchDate.Format("2006-01-02")
-				cancelled := false
-				for _, cd := range rec.CancelledDates {
-					if cd == dateStr {
-						cancelled = true
-						break
-					}
-				}
-				if !cancelled {
-					if slotTime.Before(nowInLoc) {
-						sch.Status = "passed"
-					} else {
-						sch.Status = "unavailable" // Reservado semanalmente
-					}
+			if rec, exists := recurringHours[slotKey]; exists && rec != nil && !rec.IsDateCancelled(searchDate) {
+				if slotTime.Before(nowInLoc) {
+					sch.Status = "passed"
+				} else {
+					sch.Status = "unavailable" // Reservado semanalmente
 				}
 			}
 			if bID, exists := bookedHours[slotKey]; exists {
@@ -612,30 +602,18 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetails(ctx cont
 			}
 
 			slotKey := s.Hour*60 + s.Minutes
-			if recurring, exists := recurringHours[slotKey]; exists && recurring != nil {
-				dateStr := searchDate.Format("2006-01-02")
-				isCancelled := false
-				for _, cd := range recurring.CancelledDates {
-					if cd == dateStr {
-						isCancelled = true
-						break
-					}
-				}
-				if isCancelled {
-					// Fecha anulada: slot liberado, no se aplica informacion de recurrencia
-				} else {
-					sch.IsRecurringWeekly = true
-					sch.RecurringReservationID = recurring.ID.Hex()
-					sch.CustomerName = recurring.CustomerName
-					sch.CustomerPhone = recurring.CustomerPhone
-					sch.Price = recurring.Price
-					if _, hasBooking := bookedHours[slotKey]; !hasBooking {
-						if slotTime.Before(nowInLoc) {
-							sch.Status = "passed_booked"
-						} else {
-							sch.Status = "recurring_booked"
-							sch.PaymentMethod = "presential"
-						}
+			if recurring, exists := recurringHours[slotKey]; exists && recurring != nil && !recurring.IsDateCancelled(searchDate) {
+				sch.IsRecurringWeekly = true
+				sch.RecurringReservationID = recurring.ID.Hex()
+				sch.CustomerName = recurring.CustomerName
+				sch.CustomerPhone = recurring.CustomerPhone
+				sch.Price = recurring.Price
+				if _, hasBooking := bookedHours[slotKey]; !hasBooking {
+					if slotTime.Before(nowInLoc) {
+						sch.Status = "passed_booked"
+					} else {
+						sch.Status = "recurring_booked"
+						sch.PaymentMethod = "presential"
 					}
 				}
 			}
