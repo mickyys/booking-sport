@@ -1742,7 +1742,7 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 	if uc.recurringReservationRepo != nil {
 		dayOfWeek := int(booking.Date.Weekday())
 		existingRecurring, _ := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, booking.CourtID, booking.Hour, dayOfWeek)
-		if existingRecurring != nil {
+		if existingRecurring != nil && !existingRecurring.IsDateCancelled(booking.Date) {
 			return domain.NewConflictError("no disponible: existe una reserva recurrente semanal para este horario")
 		}
 	}
@@ -1870,7 +1870,7 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 		if uc.recurringReservationRepo != nil {
 			dayOfWeek := int(b.Date.Weekday())
 			existingRecurring, _ := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, b.CourtID, b.Hour, dayOfWeek)
-			if existingRecurring != nil {
+			if existingRecurring != nil && !existingRecurring.IsDateCancelled(b.Date) {
 				return nil, fmt.Errorf("No disponible: %s - existe una reserva recurrente semanal para este horario", dateStr)
 			}
 		}

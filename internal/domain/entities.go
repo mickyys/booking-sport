@@ -283,6 +283,16 @@ type RecurringReservation struct {
 	UpdatedAt     time.Time                  `bson:"updated_at" json:"updated_at"`
 }
 
+func (r *RecurringReservation) IsDateCancelled(date time.Time) bool {
+	dateStr := date.Format("2006-01-02")
+	for _, cd := range r.CancelledDates {
+		if cd == dateStr {
+			return true
+		}
+	}
+	return false
+}
+
 type RecurringReservationResponse struct {
 	ID              primitive.ObjectID         `bson:"_id,omitempty" json:"id,omitempty"`
 	SportCenterID   primitive.ObjectID         `bson:"sport_center_id" json:"sport_center_id"`
