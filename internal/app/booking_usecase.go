@@ -1058,6 +1058,10 @@ func (uc *BookingUseCase) HandleMercadoPagoWebhook(ctx context.Context, paymentI
 		}
 	}
 
+	if booking.Status == domain.BookingStatusConfirmed {
+		return nil
+	}
+
 	// Obtener el centro deportivo por ID
 	center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
 	if err != nil {
@@ -1372,6 +1376,10 @@ func (uc *BookingUseCase) HandleFintocWebhook(ctx context.Context, id string, st
 	if err != nil {
 		fmt.Printf("[WEBHOOK ERROR] Reserva no encontrada para Fintoc ID: %s\n", id)
 		return err
+	}
+
+	if booking.Status == domain.BookingStatusConfirmed {
+		return nil
 	}
 
 	newStatus := domain.BookingStatusPending
