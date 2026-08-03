@@ -65,7 +65,7 @@ func (r *BookingRepository) FindByUserIDAndStatusPaged(ctx context.Context, user
 		bson.D{{Key: "$addFields", Value: bson.M{
 			"sport_center_name":    "$sport_center_info.name",
 			"court_name":           "$court_info.name",
-			"payment_method":       bson.M{"$ifNull": []interface{}{"$payment_method", "fintoc"}},
+			"payment_method":       bson.M{"$ifNull": []interface{}{"$payment_method", "internal"}},
 			"cancellation_hours":   bson.M{"$ifNull": []interface{}{"$sport_center_info.cancellation_hours", 3}},
 			"retention_percent":    bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
 			"paid_amount":          bson.M{"$ifNull": []interface{}{"$paid_amount", 0}},
@@ -183,24 +183,6 @@ func (r *BookingRepository) FindByPreferenceID(ctx context.Context, preferenceID
 	return &booking, nil
 }
 
-func (r *BookingRepository) FindByFintocPaymentID(ctx context.Context, fintocPaymentID string) (*domain.Booking, error) {
-	var booking domain.Booking
-	err := r.collection.FindOne(ctx, bson.M{"fintoc_payment_id": fintocPaymentID}).Decode(&booking)
-	if err != nil {
-		return nil, err
-	}
-	return &booking, nil
-}
-
-func (r *BookingRepository) FindByFintocPaymentIntentID(ctx context.Context, paymentIntentID string) (*domain.Booking, error) {
-	var booking domain.Booking
-	err := r.collection.FindOne(ctx, bson.M{"fintoc_payment_intent_id": paymentIntentID}).Decode(&booking)
-	if err != nil {
-		return nil, err
-	}
-	return &booking, nil
-}
-
 func (r *BookingRepository) FindByBookingCode(ctx context.Context, code string) (*domain.Booking, error) {
 	var booking domain.Booking
 	err := r.collection.FindOne(ctx, bson.M{"booking_code": code}).Decode(&booking)
@@ -225,13 +207,6 @@ func (r *BookingRepository) UpdateCancellation(ctx context.Context, id primitive
 		"cancellation_reason": reason,
 		"updated_at":          time.Now(),
 	}}
-	_, err := r.collection.UpdateOne(ctx, filter, update)
-	return err
-}
-
-func (r *BookingRepository) UpdateFintocPaymentIntentID(ctx context.Context, id primitive.ObjectID, paymentIntentID string) error {
-	filter := bson.M{"_id": id}
-	update := bson.M{"$set": bson.M{"fintoc_payment_intent_id": paymentIntentID}}
 	_, err := r.collection.UpdateOne(ctx, filter, update)
 	return err
 }
@@ -393,7 +368,7 @@ func (r *BookingRepository) FindByUserIDPaged(ctx context.Context, userID string
 		{{Key: "$addFields", Value: bson.M{
 			"sport_center_name":    "$sport_center_info.name",
 			"court_name":           "$court_info.name",
-			"payment_method":       bson.M{"$ifNull": []interface{}{"$payment_method", "fintoc"}},
+			"payment_method":       bson.M{"$ifNull": []interface{}{"$payment_method", "internal"}},
 			"cancellation_hours":   bson.M{"$ifNull": []interface{}{"$sport_center_info.cancellation_hours", 3}},
 			"retention_percent":    bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
 			"paid_amount":          bson.M{"$ifNull": []interface{}{"$paid_amount", 0}},
@@ -488,19 +463,6 @@ func (r *BookingRepository) FindByUserID(ctx context.Context, userID string) ([]
 		return nil, err
 	}
 	return bookings, nil
-}
-
-func (r *BookingRepository) AddRefund(ctx context.Context, paymentIntentID string, refund domain.Refund) error {
-	filter := bson.M{"fintoc_payment_intent_id": paymentIntentID}
-
-	// Agregamos el refund al array y restamos el monto del final_price
-	update := bson.M{
-		"$push": bson.M{"refunds": refund},
-		"$inc":  bson.M{"final_price": -float64(refund.Amount)},
-	}
-
-	_, err := r.collection.UpdateOne(ctx, filter, update)
-	return err
 }
 
 func (r *BookingRepository) AddRefundByBookingID(ctx context.Context, bookingID primitive.ObjectID, refund domain.Refund) error {
@@ -820,7 +782,7 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 			"customer_phone":       bson.M{"$ifNull": []interface{}{"$customer_phone", "$guest_details.phone", ""}},
 			"customer_email":       bson.M{"$ifNull": []interface{}{"$customer_email", "$guest_details.email", ""}},
 			"is_guest":             bson.M{"$cond": []interface{}{bson.M{"$ne": []interface{}{"$guest_details", nil}}, true, false}},
-			"payment_method":       bson.M{"$ifNull": []interface{}{"$payment_method", "fintoc"}},
+			"payment_method":       bson.M{"$ifNull": []interface{}{"$payment_method", "internal"}},
 			"cancelled_by":         bson.M{"$ifNull": []interface{}{"$cancelled_by", ""}},
 			"cancellation_hours":   bson.M{"$ifNull": []interface{}{"$sport_center_info.cancellation_hours", 3}},
 			"retention_percent":    bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
@@ -1047,16 +1009,6 @@ func (r *BookingRepository) MarkExpired(ctx context.Context, id primitive.Object
 		"status":     domain.BookingStatusExpired,
 		"expired_at": now,
 		"updated_at": now,
-	}}
-	_, err := r.collection.UpdateOne(ctx, filter, update)
-	return err
-}
-
-func (r *BookingRepository) UpdateFintocPaymentID(ctx context.Context, id primitive.ObjectID, paymentID string) error {
-	filter := bson.M{"_id": id}
-	update := bson.M{"$set": bson.M{
-		"fintoc_payment_id": paymentID,
-		"updated_at":        time.Now(),
 	}}
 	_, err := r.collection.UpdateOne(ctx, filter, update)
 	return err

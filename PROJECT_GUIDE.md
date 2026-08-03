@@ -39,7 +39,7 @@ booking-sport/
 | Auth | JWT (Auth0) | v5.3.1 |
 | CORS | gin-contrib/cors | v1.7.6 |
 | Email | Mailgun | v4.11.0 |
-| Pagos | MercadoPago, Fintoc | - |
+| Pagos | MercadoPago | - |
 
 ## Patrón de Arquitectura (Clean Architecture)
 

@@ -96,12 +96,6 @@ func (m *mockBookingRepoForHold) Update(ctx context.Context, booking *domain.Boo
 func (m *mockBookingRepoForHold) FindByPreferenceID(ctx context.Context, preferenceID string) (*domain.Booking, error) {
 	return nil, nil
 }
-func (m *mockBookingRepoForHold) FindByFintocPaymentID(ctx context.Context, fintocPaymentID string) (*domain.Booking, error) {
-	return nil, nil
-}
-func (m *mockBookingRepoForHold) FindByFintocPaymentIntentID(ctx context.Context, paymentIntentID string) (*domain.Booking, error) {
-	return nil, nil
-}
 func (m *mockBookingRepoForHold) FindByMPPreferenceID(ctx context.Context, preferenceID string) (*domain.Booking, error) {
 	return nil, nil
 }
@@ -126,16 +120,7 @@ func (m *mockBookingRepoForHold) UndoBalancePayment(ctx context.Context, id prim
 func (m *mockBookingRepoForHold) UpdateCancellation(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, cancelledBy string, reason string) error {
 	return nil
 }
-func (m *mockBookingRepoForHold) UpdateFintocPaymentIntentID(ctx context.Context, id primitive.ObjectID, paymentIntentID string) error {
-	return nil
-}
 func (m *mockBookingRepoForHold) UpdateMPPaymentID(ctx context.Context, id primitive.ObjectID, mpPaymentID string) error {
-	return nil
-}
-func (m *mockBookingRepoForHold) UpdateFintocPaymentID(ctx context.Context, id primitive.ObjectID, paymentID string) error {
-	return nil
-}
-func (m *mockBookingRepoForHold) AddRefund(ctx context.Context, paymentIntentID string, refund domain.Refund) error {
 	return nil
 }
 func (m *mockBookingRepoForHold) AddRefundByBookingID(ctx context.Context, bookingID primitive.ObjectID, refund domain.Refund) error {
