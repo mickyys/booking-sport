@@ -698,14 +698,14 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 			"venue_revenue": bson.M{"$sum": bson.M{
 				"$cond": []interface{}{
 					bson.M{"$or": []interface{}{
-						bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "internal"}}},
-						bson.M{"$eq": []interface{}{"$partial_payment_paid", true}},
-					}},
-					bson.M{"$cond": []interface{}{
-						bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "internal"}}},
-						"$price",
-						"$pending_amount",
-					}},
+					bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "presential", "internal"}}},
+					bson.M{"$eq": []interface{}{"$partial_payment_paid", true}},
+				}},
+				bson.M{"$cond": []interface{}{
+					bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "presential", "internal"}}},
+					"$price",
+					"$pending_amount",
+				}},
 					0,
 				},
 			}},
@@ -742,7 +742,7 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 			}},
 			"venue_revenue": bson.M{"$sum": bson.M{
 				"$cond": []interface{}{
-					bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "internal"}}},
+					bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "presential", "internal"}}},
 					"$price",
 					0,
 				},
