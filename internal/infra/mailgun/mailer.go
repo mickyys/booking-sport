@@ -1,13 +1,17 @@
 package mailgun
 
 import (
+	"bytes"
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
+	"text/template"
 	"time"
 
+	"github.com/hamp/booking-sport/internal/app"
 	"github.com/hamp/booking-sport/internal/domain"
 	"github.com/hamp/booking-sport/pkg/logger"
 	mg "github.com/mailgun/mailgun-go/v4"
@@ -31,14 +35,15 @@ func formatNumber(n float64) string {
 }
 
 type MailgunMailer struct {
-	mg                  mg.Mailgun
-	from                string
-	templateConfirm     string
-	templateConfirmPaid string
-	templateCancel      string
+	mg                    mg.Mailgun
+	from                  string
+	templateConfirm       string
+	templateConfirmPaid   string
+	templateCancel        string
+	templateWelcomeCenter string
 }
 
-func NewMailgunMailer(apiKey, domain, from, templateConfirm, templateConfirmPaid, templateCancel string) *MailgunMailer {
+func NewMailgunMailer(apiKey, domain, from, templateConfirm, templateConfirmPaid, templateCancel, templateWelcomeCenter string) *MailgunMailer {
 	mgClient := mg.NewMailgun(domain, apiKey)
 	// Forzar el nombre "ReservaloYA" en el campo From
 	fromName := "ReservaloYA"
@@ -47,7 +52,7 @@ func NewMailgunMailer(apiKey, domain, from, templateConfirm, templateConfirmPaid
 		fromAddress = "reservas@reservaloya.cl"
 	}
 	fullFrom := fmt.Sprintf("%s <%s>", fromName, fromAddress)
-	return &MailgunMailer{mg: mgClient, from: fullFrom, templateConfirm: templateConfirm, templateConfirmPaid: templateConfirmPaid, templateCancel: templateCancel}
+	return &MailgunMailer{mg: mgClient, from: fullFrom, templateConfirm: templateConfirm, templateConfirmPaid: templateConfirmPaid, templateCancel: templateCancel, templateWelcomeCenter: templateWelcomeCenter}
 }
 
 func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *domain.Booking, cancellationHours, retentionPercent int, paidAmount, pendingAmount float64) error {
@@ -283,6 +288,141 @@ func (m *MailgunMailer) SendContactEmail(ctx context.Context, to string, name st
 			logger.MaskEmail(to), logger.MaskEmail(email)),
 		"to", logger.MaskEmail(to),
 		"from", logger.MaskEmail(email),
+		"message_id", id,
+	)
+	return nil
+}
+
+// logoReservaloYA es el logo oficial usado en el encabezado del correo.
+const logoReservaloYA = "https://res.cloudinary.com/dn2q4cqi2/image/upload/v1774231856/reservaloya/hgv0velyekp4jnjsiqmz.png"
+
+// welcomeCenterTemplateFile es la plantilla del correo de bienvenida por
+// creación de centro deportivo (diseño de referencia de ReservaloYA). Va
+// embebida en el binario: se edita en templates/welcome_center.html sin
+// tocar código Go.
+//
+//go:embed templates/welcome_center.html
+var welcomeCenterFS embed.FS
+
+var welcomeCenterTemplate = template.Must(template.ParseFS(welcomeCenterFS, "templates/welcome_center.html"))
+
+// welcomeTemplateData son los valores que recibe la plantilla. La plantilla
+// se procesa con text/template (sin escapado contextual) porque su contenido
+// es HTML de correo controlado por nosotros.
+type welcomeTemplateData struct {
+	LogoURL        string
+	HomeURL        string
+	GreetingName   string // nombre del usuario; fallback al correo
+	Email          string
+	CenterName     string
+	Address        string
+	TenantURL      string
+	NextStepText   string
+	ButtonLabel    string
+	ActionURL      string
+	ShowExpiration bool // solo cuentas nuevas (ticket de un solo uso)
+}
+
+// SendCenterOnboardWelcome envía el correo de bienvenida por cada creación de
+// centro deportivo. Incluye información del usuario (nombre/correo) y del
+// centro (nombre, dirección, URL pública del subdominio). Para cuentas nuevas
+// agrega el enlace de Auth0 para configurar la clave; para cuentas existentes
+// enlaza directo al panel.
+func (m *MailgunMailer) SendCenterOnboardWelcome(ctx context.Context, data app.CenterWelcomeEmail) error {
+	if data.To == "" {
+		return fmt.Errorf("no recipient email for center welcome")
+	}
+
+	subject := fmt.Sprintf("¡Bienvenido a ReservaloYA! - %s", data.CenterName)
+
+	loginURL := data.LoginURL
+	if loginURL == "" {
+		loginURL = strings.TrimRight(os.Getenv("URL_FRONTEND"), "/") + "/admin"
+	}
+	isNewAccount := data.SetupURL != ""
+	actionURL := loginURL
+	buttonLabel := "Ir a mi panel"
+	nextStepText := "Ingresa al panel para gestionar tus espacios, horarios y reservas."
+	if isNewAccount {
+		actionURL = data.SetupURL
+		buttonLabel = "Configurar mi cuenta"
+		nextStepText = "Para comenzar, configura tu contraseña y activa tu cuenta."
+	}
+
+	message := m.mg.NewMessage(m.from, subject, "", data.To)
+	if m.templateWelcomeCenter != "" {
+		message.SetTemplate(m.templateWelcomeCenter)
+		vars := map[string]interface{}{
+			"user_name":    data.UserName,
+			"email":        data.To,
+			"center_name":  data.CenterName,
+			"address":      data.Address,
+			"site_url":     data.TenantURL,
+			"login_url":    loginURL,
+			"setup_url":    data.SetupURL,
+			"action_url":   actionURL,
+			"button_label": buttonLabel,
+		}
+		if b, err := json.Marshal(vars); err != nil {
+			logger.GetLogger().Warnw("mailgun_template_vars_error",
+				"msg", fmt.Sprintf("Error al serializar variables de template de bienvenida para centro %q", data.CenterName),
+				"error", err,
+			)
+		} else {
+			message.AddHeader("X-Mailgun-Variables", string(b))
+		}
+	} else {
+		greetingName := data.UserName
+		if greetingName == "" {
+			greetingName = data.To
+		}
+		homeURL := strings.TrimRight(os.Getenv("URL_FRONTEND"), "/")
+		if homeURL == "" {
+			homeURL = "http://localhost:3000"
+		}
+		var body bytes.Buffer
+		err := welcomeCenterTemplate.Execute(&body, welcomeTemplateData{
+			LogoURL:        logoReservaloYA,
+			HomeURL:        homeURL,
+			GreetingName:   greetingName,
+			Email:          data.To,
+			CenterName:     data.CenterName,
+			Address:        data.Address,
+			TenantURL:      data.TenantURL,
+			NextStepText:   nextStepText,
+			ButtonLabel:    buttonLabel,
+			ActionURL:      actionURL,
+			ShowExpiration: isNewAccount,
+		})
+		if err != nil {
+			logger.GetLogger().Errorw("mailgun_welcome_template_error",
+				"msg", fmt.Sprintf("Error al ejecutar plantilla de bienvenida para centro %s", data.CenterName),
+				"error", err,
+			)
+			return fmt.Errorf("mailgun welcome template error: %w", err)
+		}
+		message.SetHtml(body.String())
+	}
+
+	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	_, id, err := m.mg.Send(sendCtx, message)
+	if err != nil {
+		logger.GetLogger().Errorw("mailgun_welcome_email_failed",
+			"msg", fmt.Sprintf("Error al enviar correo de bienvenida a %s para centro %s",
+				logger.MaskEmail(data.To), data.CenterName),
+			"error", err,
+			"to", logger.MaskEmail(data.To),
+			"template", m.templateWelcomeCenter,
+		)
+		return fmt.Errorf("mailgun send error: %w", err)
+	}
+
+	logger.GetLogger().Infow("mailgun_welcome_email_sent",
+		"msg", fmt.Sprintf("Correo de bienvenida enviado a %s para centro %s",
+			logger.MaskEmail(data.To), data.CenterName),
+		"to", logger.MaskEmail(data.To),
 		"message_id", id,
 	)
 	return nil

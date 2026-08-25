@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/hamp/booking-sport/internal/domain"
@@ -61,6 +62,43 @@ func (r *SportCenterRepository) FindBySlug(ctx context.Context, slug string) (*d
 	return &center, nil
 }
 
+func (r *SportCenterRepository) FindBySubdomain(ctx context.Context, subdomain string) (*domain.SportCenter, error) {
+	var center domain.SportCenter
+	err := r.collection.FindOne(ctx, bson.M{"subdomain": subdomain}).Decode(&center)
+	if err != nil {
+		return nil, err
+	}
+	return &center, nil
+}
+
+func (r *SportCenterRepository) FindByNameAndRUT(ctx context.Context, name, rut string) (*domain.SportCenter, error) {
+	var center domain.SportCenter
+	err := r.collection.FindOne(ctx, bson.M{"name": name, "rut": rut}).Decode(&center)
+	if err != nil {
+		return nil, err
+	}
+	return &center, nil
+}
+
+func (r *SportCenterRepository) FindByAdminEmail(ctx context.Context, email string) (*domain.SportCenter, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	var center domain.SportCenter
+	err := r.collection.FindOne(ctx, bson.M{"admin_email": email}).Decode(&center)
+	if err != nil {
+		return nil, err
+	}
+	return &center, nil
+}
+
+func (r *SportCenterRepository) FindByHost(ctx context.Context, host string) (*domain.SportCenter, error) {
+	var center domain.SportCenter
+	err := r.collection.FindOne(ctx, bson.M{"domains": host}).Decode(&center)
+	if err != nil {
+		return nil, err
+	}
+	return &center, nil
+}
+
 func (r *SportCenterRepository) FindAll(ctx context.Context) ([]domain.SportCenter, error) {
 	cursor, err := r.collection.Find(ctx, bson.M{})
 	if err != nil {
@@ -75,25 +113,75 @@ func (r *SportCenterRepository) FindAll(ctx context.Context) ([]domain.SportCent
 	return centers, nil
 }
 
-func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int) ([]domain.SportCenter, int64, error) {
-	matchStage := bson.D{}
-	
-	if name != "" {
-		matchStage = append(matchStage, bson.E{
-			Key: "name",
-			Value: bson.M{"$regex": regexp.QuoteMeta(name), "$options": "i"},
-		})
-	}
-	
-	if city != "" {
-		matchStage = append(matchStage, bson.E{
-			Key: "city",
-			Value: bson.M{"$regex": "^" + regexp.QuoteMeta(city), "$options": "i"},
-		})
-	}
+func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int, lat, lng *float64, priorityCity string) ([]domain.SportCenter, int64, error) {
+	pipeline := mongodb.Pipeline{}
 
-	pipeline := mongodb.Pipeline{
-		{{"$match", matchStage}},
+	useGeoNear := lat != nil && lng != nil
+
+	if useGeoNear {
+		// $geoNear debe ser el primer stage. Los filtros name/city van en su campo "query".
+		geoNear := bson.D{
+			{Key: "near", Value: bson.D{
+				{Key: "type", Value: "Point"},
+				{Key: "coordinates", Value: bson.A{*lng, *lat}},
+			}},
+			{Key: "distanceField", Value: "distance"},
+			{Key: "spherical", Value: true},
+		}
+		query := bson.D{}
+		if name != "" {
+			query = append(query, bson.E{
+				Key:   "name",
+				Value: bson.M{"$regex": regexp.QuoteMeta(name), "$options": "i"},
+			})
+		}
+		if city != "" {
+			query = append(query, bson.E{
+				Key:   "city",
+				Value: bson.M{"$regex": "^" + regexp.QuoteMeta(city), "$options": "i"},
+			})
+		}
+		if len(query) > 0 {
+			geoNear = append(geoNear, bson.E{Key: "query", Value: query})
+		}
+		pipeline = append(pipeline, bson.D{{Key: "$geoNear", Value: geoNear}})
+
+		// Prioridad: destacados en la ciudad de referencia primero, luego por distancia.
+		priorityExpr := bson.D{{Key: "$eq", Value: bson.A{"$is_featured", true}}}
+		if priorityCity != "" {
+			priorityExpr = bson.D{{Key: "$and", Value: bson.A{
+				bson.D{{Key: "$eq", Value: bson.A{"$is_featured", true}}},
+				bson.D{{Key: "$eq", Value: bson.A{"$city", priorityCity}}},
+			}}}
+		}
+		pipeline = append(pipeline,
+			bson.D{{Key: "$addFields", Value: bson.D{
+				{Key: "priority", Value: priorityExpr},
+				{Key: "distance_km", Value: bson.D{{Key: "$divide", Value: bson.A{"$distance", 1000}}}},
+			}}},
+			bson.D{{Key: "$sort", Value: bson.D{
+				{Key: "priority", Value: -1},
+				{Key: "distance", Value: 1},
+			}}},
+		)
+	} else {
+		matchStage := bson.D{}
+
+		if name != "" {
+			matchStage = append(matchStage, bson.E{
+				Key:   "name",
+				Value: bson.M{"$regex": regexp.QuoteMeta(name), "$options": "i"},
+			})
+		}
+
+		if city != "" {
+			matchStage = append(matchStage, bson.E{
+				Key:   "city",
+				Value: bson.M{"$regex": "^" + regexp.QuoteMeta(city), "$options": "i"},
+			})
+		}
+
+		pipeline = append(pipeline, bson.D{{Key: "$match", Value: matchStage}})
 	}
 
 	if hour != nil && date != nil {
@@ -101,11 +189,16 @@ func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, 
 		searchDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 
 		pipeline = append(pipeline,
-			// Join with courts
+			// Join with spaces (canchas) que tengan el horario solicitado
 			bson.D{{Key: "$lookup", Value: bson.D{
-				{Key: "from", Value: "courts"},
-				{Key: "localField", Value: "_id"},
-				{Key: "foreignField", Value: "sport_center_id"},
+				{Key: "from", Value: "spaces"},
+				{Key: "let", Value: bson.D{{Key: "center_id", Value: "$_id"}}},
+				{Key: "pipeline", Value: mongodb.Pipeline{
+					{{Key: "$match", Value: bson.D{
+						{Key: "$expr", Value: bson.D{{Key: "$eq", Value: bson.A{"$sport_center_id", "$$center_id"}}}},
+						{Key: "category", Value: domain.SpaceCategoryCancha},
+					}}},
+				}},
 				{Key: "as", Value: "courts"},
 			}}},
 			// Filter courts that have the requested hour in their schedule
@@ -239,7 +332,7 @@ func (r *SportCenterRepository) Update(ctx context.Context, center *domain.Sport
 	return err
 }
 
-func (r *SportCenterRepository) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string) error {
+func (r *SportCenterRepository) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates) error {
 	updateData := bson.M{
 		"updated_at": time.Now(),
 	}
@@ -262,9 +355,77 @@ func (r *SportCenterRepository) UpdateSettings(ctx context.Context, id primitive
 	if imageURL != nil {
 		updateData["image_url"] = *imageURL
 	}
+	if marketplaceFeePercent != nil {
+		updateData["marketplace_fee_percent"] = *marketplaceFeePercent
+	}
+	if isFeatured != nil {
+		updateData["is_featured"] = *isFeatured
+	}
+	if address != nil {
+		updateData["address"] = *address
+	}
+	if city != nil {
+		updateData["city"] = *city
+	}
+	if coordinates != nil {
+		updateData["coordinates"] = bson.M{
+			"lat": coordinates.Lat,
+			"lng": coordinates.Lng,
+		}
+		// location es la representación GeoJSON ([lng, lat]) usada por el índice
+		// 2dsphere y $geoNear; debe mantenerse sincronizada con coordinates.
+		updateData["location"] = bson.M{
+			"type":        "Point",
+			"coordinates": bson.A{coordinates.Lng, coordinates.Lat},
+		}
+	}
+
+	if branding != nil {
+		if branding.Name != "" {
+			updateData["branding.name"] = branding.Name
+		}
+		if branding.LogoURL != "" {
+			updateData["branding.logo_url"] = branding.LogoURL
+		}
+		if branding.PrimaryColor != "" {
+			updateData["branding.primary_color"] = branding.PrimaryColor
+		}
+		if branding.PrimaryDark != "" {
+			updateData["branding.primary_dark"] = branding.PrimaryDark
+		}
+		if branding.Accent != "" {
+			updateData["branding.accent"] = branding.Accent
+		}
+		if branding.NavBg != "" {
+			updateData["branding.nav_bg"] = branding.NavBg
+		}
+		if branding.HeroGradient != "" {
+			updateData["branding.hero_gradient"] = branding.HeroGradient
+		}
+	}
 
 	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
 		"$set": updateData,
+	})
+	return err
+}
+
+// UpdateMercadoPagoConfig guarda o limpia las credenciales de Mercado Pago
+// Connect de un centro deportivo. Si config es nil, elimina la configuración.
+func (r *SportCenterRepository) UpdateMercadoPagoConfig(ctx context.Context, id primitive.ObjectID, config *domain.MercadoPagoConfig) error {
+	if config == nil {
+		_, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
+			"$unset": bson.M{"mercadopago": ""},
+			"$set":   bson.M{"updated_at": time.Now()},
+		})
+		return err
+	}
+
+	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
+		"$set": bson.M{
+			"mercadopago": config,
+			"updated_at":  time.Now(),
+		},
 	})
 	return err
 }
@@ -301,7 +462,7 @@ func (r *SportCenterRepository) SyncCourtsCount(ctx context.Context) error {
 			continue
 		}
 
-		count, err := r.db.Collection("courts").CountDocuments(ctx, bson.M{"sport_center_id": center.ID})
+		count, err := r.db.Collection("spaces").CountDocuments(ctx, bson.M{"sport_center_id": center.ID, "category": domain.SpaceCategoryCancha})
 		if err != nil {
 			log.Printf("[MONGODB] Error al contar canchas para centro %s: %v", center.ID.Hex(), err)
 			continue
@@ -327,15 +488,20 @@ type CourtRepository struct {
 func NewCourtRepository(db *mongodb.Database) *CourtRepository {
 	return &CourtRepository{
 		db:         db,
-		collection: db.Collection("courts"),
+		collection: db.Collection("spaces"),
 	}
 }
 
 func (r *CourtRepository) Create(ctx context.Context, court *domain.Court) error {
-	if court.ID.IsZero() {
-		court.ID = primitive.NewObjectID()
+	space := domain.SpaceFromCourt(court)
+	if space.ID.IsZero() {
+		space.ID = primitive.NewObjectID()
+		court.ID = space.ID
 	}
-	_, err := r.collection.InsertOne(ctx, court)
+	space.Enabled = true
+	space.CreatedAt = time.Now()
+	space.UpdatedAt = time.Now()
+	_, err := r.collection.InsertOne(ctx, space)
 	if err != nil {
 		return err
 	}
@@ -343,14 +509,14 @@ func (r *CourtRepository) Create(ctx context.Context, court *domain.Court) error
 	// Incrementar contador de canchas en el centro deportivo
 	_, err = r.db.Collection("sport_centers").UpdateOne(
 		ctx,
-		bson.M{"_id": court.SportCenterID},
+		bson.M{"_id": space.SportCenterID},
 		bson.M{"$inc": bson.M{"courts_count": 1}},
 	)
 	return err
 }
 
 func (r *CourtRepository) FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.Court, error) {
-	cursor, err := r.collection.Find(ctx, bson.M{"sport_center_id": centerID})
+	cursor, err := r.collection.Find(ctx, bson.M{"sport_center_id": centerID, "category": domain.SpaceCategoryCancha})
 	if err != nil {
 		return nil, err
 	}
@@ -365,7 +531,7 @@ func (r *CourtRepository) FindByCenterID(ctx context.Context, centerID primitive
 
 func (r *CourtRepository) FindByID(ctx context.Context, id primitive.ObjectID) (*domain.Court, error) {
 	var court domain.Court
-	err := r.collection.FindOne(ctx, bson.M{"_id": id}).Decode(&court)
+	err := r.collection.FindOne(ctx, bson.M{"_id": id, "category": domain.SpaceCategoryCancha}).Decode(&court)
 	if err != nil {
 		return nil, err
 	}
@@ -373,7 +539,10 @@ func (r *CourtRepository) FindByID(ctx context.Context, id primitive.ObjectID) (
 }
 
 func (r *CourtRepository) Update(ctx context.Context, court *domain.Court) error {
-	_, err := r.collection.ReplaceOne(ctx, bson.M{"_id": court.ID}, court)
+	space := domain.SpaceFromCourt(court)
+	space.Enabled = true
+	space.UpdatedAt = time.Now()
+	_, err := r.collection.ReplaceOne(ctx, bson.M{"_id": space.ID}, space)
 	return err
 }
 
@@ -431,7 +600,7 @@ func (r *CourtRepository) Delete(ctx context.Context, id primitive.ObjectID) err
 }
 
 func (r *CourtRepository) FindAllPaged(ctx context.Context, page, limit int) ([]domain.Court, int64, error) {
-	total, err := r.collection.CountDocuments(ctx, bson.M{})
+	total, err := r.collection.CountDocuments(ctx, bson.M{"category": domain.SpaceCategoryCancha})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -439,7 +608,7 @@ func (r *CourtRepository) FindAllPaged(ctx context.Context, page, limit int) ([]
 	skip := int64((page - 1) * limit)
 	opts := options.Find().SetLimit(int64(limit)).SetSkip(skip)
 
-	cursor, err := r.collection.Find(ctx, bson.M{}, opts)
+	cursor, err := r.collection.Find(ctx, bson.M{"category": domain.SpaceCategoryCancha}, opts)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -462,6 +631,7 @@ func (r *CourtRepository) SyncPartialPaymentSlots(ctx context.Context, centerID 
 		ctx,
 		bson.M{
 			"sport_center_id":                  centerID,
+			"category":                         domain.SpaceCategoryCancha,
 			"schedule.partial_payment_enabled": nil,
 		},
 		bson.M{

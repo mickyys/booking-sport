@@ -11,11 +11,13 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/hamp/booking-sport/internal/app"
 	"github.com/hamp/booking-sport/internal/infra"
+	"github.com/hamp/booking-sport/internal/infra/auth0mgmt"
 	mg "github.com/hamp/booking-sport/internal/infra/mailgun"
 	"github.com/hamp/booking-sport/internal/infra/middleware"
 	"github.com/hamp/booking-sport/internal/infra/mongo"
 	"github.com/hamp/booking-sport/pkg/auth"
 	"github.com/hamp/booking-sport/pkg/logger"
+	"github.com/hamp/booking-sport/pkg/mercadopago"
 	nr "github.com/hamp/booking-sport/pkg/newrelic"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -89,11 +91,20 @@ func main() {
 	holdRepo := mongo.NewSlotHoldRepository(db)
 	recurringReservationRepo := mongo.NewRecurringReservationRepository(db)
 	userDeviceRepo := mongo.NewUserDeviceRepository(db)
+	facilityRepo := mongo.NewFacilityRepository(db)
+	spaceRepo := mongo.NewSpaceRepository(db)
+	scheduleRuleRepo := mongo.NewScheduleRuleRepository(db)
+	scheduleExceptionRepo := mongo.NewScheduleExceptionRepository(db)
+	blockRepo := mongo.NewBlockRepository(db)
 
 	log.Infow("repositories_initialized")
 
 	sportCenterUC := app.NewSportCenterUseCase(sportCenterRepo, courtRepo, userRepo, bookingRepo, holdRepo, recurringReservationRepo)
 	courtUC := app.NewCourtUseCase(courtRepo, sportCenterRepo, bookingRepo)
+	facilityUC := app.NewFacilityUseCase(facilityRepo, sportCenterRepo)
+	spaceUC := app.NewSpaceUseCase(spaceRepo, sportCenterRepo)
+	scheduleUC := app.NewScheduleUseCase(scheduleRuleRepo, scheduleExceptionRepo, blockRepo, spaceRepo, sportCenterRepo)
+	sportCenterUC.SetScheduleResolver(app.NewScheduleResolver(scheduleRuleRepo, scheduleExceptionRepo, blockRepo))
 
 	var notifier app.NotificationService
 	firebaseCredentialsFile := os.Getenv("FIREBASE_CREDENTIALS_FILE")
@@ -116,9 +127,10 @@ func main() {
 	mailgunTemplate := os.Getenv("MAILGUN_TEMPLATE_CONFIRMATION")
 	mailgunTemplatePaid := os.Getenv("MAILGUN_TEMPLATE_PAID")
 	mailgunTemplateCancel := os.Getenv("MAILGUN_TEMPLATE_CANCEL")
+	mailgunTemplateWelcomeCenter := os.Getenv("MAILGUN_TEMPLATE_WELCOME_CENTER")
 
 	if mailgunAPIKey != "" && mailgunDomain != "" && mailgunFrom != "" {
-		mgMailer := mg.NewMailgunMailer(mailgunAPIKey, mailgunDomain, mailgunFrom, mailgunTemplate, mailgunTemplatePaid, mailgunTemplateCancel)
+		mgMailer := mg.NewMailgunMailer(mailgunAPIKey, mailgunDomain, mailgunFrom, mailgunTemplate, mailgunTemplatePaid, mailgunTemplateCancel, mailgunTemplateWelcomeCenter)
 		bookingMailer = mgMailer
 		log.Infow("mailgun_initialized",
 			"domain", mailgunDomain,
@@ -128,14 +140,36 @@ func main() {
 		log.Warnw("mailgun_not_configured")
 	}
 
-	bookingUC := app.NewBookingUseCase(bookingRepo, holdRepo, courtRepo, sportCenterRepo, userRepo, userDeviceRepo, bookingMailer, notifier, recurringReservationRepo, client)
+	bookingUC := app.NewBookingUseCase(bookingRepo, holdRepo, courtRepo, sportCenterRepo, userRepo, userDeviceRepo, bookingMailer, notifier, recurringReservationRepo, client, mercadopago.NewClient(getEnv("MP_ACCESS_TOKEN", "")))
+	bookingUC.SetScheduleResolver(app.NewScheduleResolver(scheduleRuleRepo, scheduleExceptionRepo, blockRepo))
 
 	log.Infow("use_cases_initialized")
 
-	sportCenterHandler := infra.NewSportCenterHandler(sportCenterUC)
+	auth0Mgmt := auth0mgmt.NewManagementClient()
+	if os.Getenv("AUTH0_ADMIN_ROLE_ID") == "" {
+		log.Warnw("auth0_admin_role_id_not_configured", "effect", "onboard no asignará rol de administrador")
+	}
+	sportCenterHandler := infra.NewSportCenterHandler(sportCenterUC, auth0Mgmt, bookingMailer)
 	courtHandler := infra.NewCourtHandler(courtUC)
 	bookingHandler := infra.NewBookingHandler(bookingUC)
 	contactHandler := infra.NewContactHandler(bookingMailer)
+
+	mpConnectClient := mercadopago.NewConnectClient(
+		getEnv("NEXT_PUBLIC_MP_CLIENT_ID", ""),
+		getEnv("MP_CLIENT_SECRET", ""),
+		getEnv("MP_REDIRECT_URI", ""),
+		getEnv("MP_AUTH_BASE", ""),
+		getEnv("NEXT_PUBLIC_MP_PUBLIC_KEY", ""),
+	)
+	mpConnectUC := app.NewMPConnectUseCase(sportCenterRepo, mpConnectClient, getEnv("MP_CLIENT_SECRET", ""))
+	mpConnectHandler := infra.NewMPConnectHandler(mpConnectUC)
+
+	tenantUC := app.NewTenantUseCase(sportCenterRepo)
+	tenantHandler := infra.NewTenantHandler(tenantUC)
+
+	facilityHandler := infra.NewFacilityHandler(facilityUC)
+	spaceHandler := infra.NewSpaceHandler(spaceUC)
+	scheduleHandler := infra.NewScheduleHandler(scheduleUC)
 
 	log.Infow("handlers_initialized")
 
@@ -148,11 +182,11 @@ func main() {
 	r.Use(middleware.NewRelicMiddleware())
 
 	r.Use(cors.New(cors.Config{
+		// White-label multi-tenant: cada cliente puede traer su propio dominio
+		// (ej: www.unioncatolica.cl), por lo que no podemos hardcodear origins.
+		// La autenticación es vía header Authorization (JWT) y guest_device_id.
 		AllowOriginFunc: func(origin string) bool {
-			return origin == "http://localhost:5173" ||
-				origin == "http://localhost:3000" ||
-				strings.HasSuffix(origin, ".localhost:3000") ||
-				strings.HasSuffix(origin, ".reservaloya.cl")
+			return true
 		},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Trace-ID"},
@@ -189,15 +223,23 @@ func main() {
 	log.Infow("routes_configured")
 
 	// Rutas Públicas
+	r.GET("/api/tenants/host/:host", tenantHandler.GetByHost)
+	r.GET("/api/tenants/:subdomain", tenantHandler.GetBySubdomain)
 	r.GET("/api/sport-centers", sportCenterHandler.List)
 	r.GET("/api/cities", sportCenterHandler.ListCities)
 	r.GET("/api/sport-centers/slug/:slug", sportCenterHandler.GetBySlug)
 	r.POST("/api/sport-centers", sportCenterHandler.Create)
+	r.POST("/api/sport-centers/onboard", sportCenterHandler.OnboardCreate)
+	r.GET("/api/sport-centers/onboard/verification-status", sportCenterHandler.OnboardVerificationStatus)
 	r.PUT("/api/sport-centers/:id", sportCenterHandler.Update)
 	r.GET("/api/sport-centers/:id/schedules", sportCenterHandler.GetSchedules)
 	r.GET("/api/courts", courtHandler.List)
 	r.POST("/api/courts", courtHandler.CreateCourt)
 	r.GET("/api/courts/:id/schedule", courtHandler.GetSchedule)
+	// Facilities (quinchos, sedes, piscinas)
+	r.GET("/api/sport-centers/:id/facilities", facilityHandler.GetByCenterID)
+	r.GET("/api/sport-centers/slug/:slug/facilities", facilityHandler.GetBySlug)
+	r.POST("/api/facilities/inquiries", facilityHandler.CreateInquiry)
 	// MercadoPago payment routes
 	r.POST("/api/bookings/mercadopago", bookingHandler.CreateMercadoPagoPayment)
 	r.POST("/api/bookings/mercadopago/webhook", bookingHandler.MercadoPagoWebhook)
@@ -208,6 +250,10 @@ func main() {
 	r.POST("/api/bookings/code/:code/cancel", bookingHandler.CancelByBookingCode)
 	r.POST("/api/bookings", bookingHandler.CreateBooking)
 	r.POST("/api/contact", contactHandler.Submit)
+	// Disponibilidad pública de un espacio (usado por facilities: quincho/sede/piscina)
+	r.GET("/api/spaces/:id/availability", scheduleHandler.PublicAvailability)
+	// MercadoPago Connect (marketplace) - callback público (redirección de MP)
+	r.GET("/api/admin/mercadopago/callback", mpConnectHandler.Callback)
 
 	// Rutas Protegidas
 	api := r.Group("/api")
@@ -238,6 +284,24 @@ func main() {
 		api.PUT("/admin/sport-centers/:id", sportCenterHandler.Update)
 		api.PATCH("/admin/sport-centers/:id/settings", sportCenterHandler.UpdateSportCenterSettings)
 		api.GET("/admin/sport-centers/:id", sportCenterHandler.GetByID)
+		api.GET("/admin/facilities", facilityHandler.GetAdmin)
+		api.POST("/admin/facilities", facilityHandler.Create)
+		api.PUT("/admin/facilities/:id", facilityHandler.Update)
+		api.DELETE("/admin/facilities/:id", facilityHandler.Delete)
+		api.GET("/admin/spaces", spaceHandler.GetAdminSpaces)
+		api.POST("/admin/spaces", spaceHandler.Create)
+		api.PUT("/admin/spaces/:id", spaceHandler.Update)
+		api.DELETE("/admin/spaces/:id", spaceHandler.Delete)
+		// Configuración de horarios por espacio (reglas, excepciones y bloqueos)
+		api.GET("/admin/spaces/:id/schedule", scheduleHandler.GetSchedule)
+		api.PUT("/admin/spaces/:id/schedule", scheduleHandler.SaveSchedule)
+		api.GET("/admin/spaces/:id/schedule/exceptions", scheduleHandler.ListExceptions)
+		api.POST("/admin/spaces/:id/schedule/exceptions", scheduleHandler.CreateException)
+		api.PUT("/admin/spaces/:id/schedule/exceptions/:exceptionId", scheduleHandler.UpdateException)
+		api.DELETE("/admin/spaces/:id/schedule/exceptions/:exceptionId", scheduleHandler.DeleteException)
+		api.GET("/admin/spaces/:id/blocks", scheduleHandler.ListBlocks)
+		api.POST("/admin/spaces/:id/blocks", scheduleHandler.CreateBlock)
+		api.DELETE("/admin/spaces/:id/blocks/:blockId", scheduleHandler.DeleteBlock)
 		api.POST("/admin/bookings/internal", bookingHandler.CreateInternalBooking)
 		api.POST("/admin/bookings/internal/batch", bookingHandler.CreateInternalBookingsBatch)
 		api.POST("/admin/bookings/:id/pay-balance", bookingHandler.MarkPartialPaymentAsPaid)
@@ -255,6 +319,11 @@ func main() {
 		// Users management routes
 		api.GET("/admin/users", sportCenterHandler.GetCenterUsers)
 		api.DELETE("/admin/users/:userId", sportCenterHandler.RemoveCenterUser)
+
+		// MercadoPago Connect (marketplace) routes
+		api.GET("/admin/mercadopago/connect", mpConnectHandler.GetAuthorizationURL)
+		api.GET("/admin/mercadopago/status", mpConnectHandler.GetStatus)
+		api.POST("/admin/mercadopago/disconnect", mpConnectHandler.Disconnect)
 	}
 
 	port := getEnv("PORT", "8080")
@@ -265,7 +334,7 @@ func main() {
 	)
 
 	fmt.Printf("Servidor escuchando en puerto %s...\n", port)
-	
+
 	if err := r.Run(":" + port); err != nil {
 		log.Fatalw("server_startup_failed", "error", err, "port", port)
 	}

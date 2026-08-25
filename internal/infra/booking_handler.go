@@ -1,29 +1,33 @@
 package infra
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"io"
 	"math"
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hamp/booking-sport/internal/app"
 	"github.com/hamp/booking-sport/internal/domain"
+	"github.com/hamp/booking-sport/pkg/logger"
+	"github.com/hamp/booking-sport/pkg/mercadopago"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type BookingHandler struct {
-	useCase *app.BookingUseCase
+	useCase     *app.BookingUseCase
 	baseHandler *BaseHandler
 }
 
 func NewBookingHandler(uc *app.BookingUseCase) *BookingHandler {
 	return &BookingHandler{
-		useCase: uc,
+		useCase:     uc,
 		baseHandler: NewBaseHandler(),
 	}
 }
@@ -342,12 +346,12 @@ func (h *BookingHandler) CancelBooking(c *gin.Context) {
 
 	err = h.useCase.CancelBooking(c.Request.Context(), bookingID, userID.(string))
 	if err != nil {
-	h.baseHandler.GetLogger(c).Errorw("booking_cancel_failed",
-		"msg", fmt.Sprintf("Falló la cancelación del booking %s", bookingID.Hex()),
-		"booking_id", bookingID.Hex(),
-		"user_id", userID.(string),
-		"error", err,
-	)
+		h.baseHandler.GetLogger(c).Errorw("booking_cancel_failed",
+			"msg", fmt.Sprintf("Falló la cancelación del booking %s", bookingID.Hex()),
+			"booking_id", bookingID.Hex(),
+			"user_id", userID.(string),
+			"error", err,
+		)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -488,7 +492,11 @@ func (h *BookingHandler) CreateInternalBooking(c *gin.Context) {
 		booking.Booking.Minutes = 0
 	}
 
-	log.Printf("📝 CreateInternalBooking: date=%s, hour=%d, minutes=%d", booking.Booking.Date, booking.Booking.Hour, booking.Booking.Minutes)
+	h.baseHandler.GetLogger(c).Infow("create_internal_booking",
+		"date", booking.Booking.Date,
+		"hour", booking.Booking.Hour,
+		"minutes", booking.Booking.Minutes,
+	)
 
 	err := h.useCase.CreateInternalBooking(c.Request.Context(), &booking.Booking, "internal")
 	if err != nil {
@@ -525,11 +533,11 @@ func (h *BookingHandler) CreateInternalBookingsBatch(c *gin.Context) {
 
 func (h *BookingHandler) CreateBooking(c *gin.Context) {
 	log := h.baseHandler.GetLogger(c)
-	
+
 	var booking struct {
 		domain.Booking
 		SeriesID string `json:"series_id"`
-		Partial bool   `json:"partial"`
+		Partial  bool   `json:"partial"`
 	}
 	if err := c.ShouldBindJSON(&booking); err != nil {
 		log.Warnw("booking_create_invalid_json",
@@ -659,10 +667,65 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 	})
 }
 
+// webhookDedup evita reprocesar la misma notificación de Mercado Pago dentro de
+// una ventana de tiempo, usando el header x-request-id como identificador.
+var webhookDedup = struct {
+	mu sync.Mutex
+	m  map[string]time.Time
+}{m: make(map[string]time.Time)}
+
+const webhookDedupWindow = 10 * time.Minute
+
+func isDuplicateWebhookNotification(requestID string) bool {
+	if requestID == "" {
+		return false
+	}
+	webhookDedup.mu.Lock()
+	defer webhookDedup.mu.Unlock()
+
+	now := time.Now()
+	for id, seen := range webhookDedup.m {
+		if now.Sub(seen) > webhookDedupWindow {
+			delete(webhookDedup.m, id)
+		}
+	}
+	if _, ok := webhookDedup.m[requestID]; ok {
+		return true
+	}
+	webhookDedup.m[requestID] = now
+	return false
+}
+
 func (h *BookingHandler) MercadoPagoWebhook(c *gin.Context) {
 	// MercadoPago sends webhook notifications
 	// Query param: type=payment, data.id=<payment_id>
 	// Or JSON body: { "action": "payment.updated", "data": { "id": "123" } }
+
+	log := h.baseHandler.GetLogger(c)
+	requestID := c.GetHeader("X-Request-Id")
+	signature := c.GetHeader("X-Signature")
+	traceID := logger.GetTraceID(c.Request.Context())
+
+	// Deduplicar notificaciones ya procesadas (Mercado Pago reintenta varias veces)
+	if requestID != "" && isDuplicateWebhookNotification(requestID) {
+		log.Infow("mp_webhook_duplicate_ignored",
+			"trace_id", traceID,
+			"request_id", requestID,
+		)
+		c.JSON(http.StatusOK, gin.H{"status": "received"})
+		return
+	}
+
+	rawBody, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		log.Warnw("mp_webhook_read_body_error",
+			"trace_id", traceID,
+			"request_id", requestID,
+			"error", err,
+		)
+		c.JSON(http.StatusOK, gin.H{"status": "received"})
+		return
+	}
 
 	var event struct {
 		Action string `json:"action"`
@@ -672,37 +735,73 @@ func (h *BookingHandler) MercadoPagoWebhook(c *gin.Context) {
 		} `json:"data"`
 	}
 
-	if err := c.ShouldBindJSON(&event); err != nil {
-		// Try query params as fallback (IPN style)
-		topic := c.Query("topic")
-		id := c.Query("id")
-		if topic == "payment" && id != "" {
-			err := h.useCase.HandleMercadoPagoWebhook(c.Request.Context(), id)
-			if err != nil {
-				log.Printf("[MP WEBHOOK ERROR] %v\n", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	// Notificación JSON (formato webhook moderno con x-signature)
+	if len(rawBody) > 0 && json.Unmarshal(rawBody, &event) == nil && event.Data.ID != "" {
+		secret := os.Getenv("MP_WEBHOOK_SECRET")
+		if secret != "" {
+			if verifyErr := mercadopago.VerifyWebhookSignature(secret, event.Data.ID, signature, requestID); verifyErr != nil {
+				log.Warnw("mp_webhook_invalid_signature",
+					"trace_id", traceID,
+					"request_id", requestID,
+					"payment_id", event.Data.ID,
+					"error", verifyErr,
+				)
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid signature"})
 				return
 			}
-			c.JSON(http.StatusOK, gin.H{"status": "received"})
-			return
+		} else {
+			log.Warnw("mp_webhook_secret_not_configured",
+				"trace_id", traceID,
+				"request_id", requestID,
+			)
 		}
-		c.JSON(http.StatusOK, gin.H{"status": "ignored"})
+
+		// Only process payment-related events
+		if event.Type == "payment" || event.Action == "payment.created" || event.Action == "payment.updated" {
+			if processErr := h.useCase.HandleMercadoPagoWebhook(c.Request.Context(), event.Data.ID); processErr != nil {
+				// Loggear internamente pero siempre responder 200 para no
+				// provocar reintentos masivos de Mercado Pago.
+				log.Errorw("mp_webhook_processing_error",
+					"trace_id", traceID,
+					"request_id", requestID,
+					"payment_id", event.Data.ID,
+					"error", processErr,
+				)
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{"status": "received"})
 		return
 	}
 
-	// Only process payment-related events
-	if event.Type == "payment" || event.Action == "payment.created" || event.Action == "payment.updated" {
-		if event.Data.ID != "" {
-			err := h.useCase.HandleMercadoPagoWebhook(c.Request.Context(), event.Data.ID)
-			if err != nil {
-				log.Printf("[MP WEBHOOK ERROR] %v\n", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
+	// Fallback IPN (query params). El IPN clásico no incluye x-signature.
+	topic := c.Query("topic")
+	id := c.Query("id")
+	if topic == "payment" && id != "" {
+		if signature == "" {
+			log.Warnw("mp_webhook_ipn_without_signature",
+				"trace_id", traceID,
+				"request_id", requestID,
+				"payment_id", id,
+			)
 		}
+		if processErr := h.useCase.HandleMercadoPagoWebhook(c.Request.Context(), id); processErr != nil {
+			log.Errorw("mp_webhook_ipn_processing_error",
+				"trace_id", traceID,
+				"request_id", requestID,
+				"payment_id", id,
+				"error", processErr,
+			)
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "received"})
+		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "received"})
+	log.Infow("mp_webhook_ignored",
+		"trace_id", traceID,
+		"request_id", requestID,
+	)
+	c.JSON(http.StatusOK, gin.H{"status": "ignored"})
 }
 
 func (h *BookingHandler) MockMercadoPagoConfirm(c *gin.Context) {
@@ -758,10 +857,14 @@ func (h *BookingHandler) SyncConfirmedPayment(c *gin.Context) {
 }
 
 func (h *BookingHandler) MercadoPagoReturn(c *gin.Context) {
+	log := h.baseHandler.GetLogger(c)
 	url := os.Getenv("URL_FRONTEND")
 	bookingCode := c.Query("code")
 	paymentID := c.Query("payment_id")
-	log.Printf("[MP RETURN] code=%s payment_id=%s\n", bookingCode, paymentID)
+	log.Infow("mp_return_received",
+		"booking_code", bookingCode,
+		"payment_id", paymentID,
+	)
 
 	if bookingCode == "" {
 		// Try external_reference as fallback
@@ -776,16 +879,26 @@ func (h *BookingHandler) MercadoPagoReturn(c *gin.Context) {
 	// Si tenemos payment_id, guardarlo en la reserva antes de procesar el webhook
 	if paymentID != "" {
 		if err := h.useCase.StoreMPPaymentID(c.Request.Context(), bookingCode, paymentID); err != nil {
-			log.Printf("[MP RETURN] Error storing payment_id %s for code %s: %v\n", paymentID, bookingCode, err)
+			log.Warnw("mp_return_store_payment_id_error",
+				"payment_id", paymentID,
+				"booking_code", bookingCode,
+				"error", err,
+			)
 		}
 		if err := h.useCase.HandleMercadoPagoWebhook(c.Request.Context(), paymentID); err != nil {
-			log.Printf("[MP RETURN] Error processing payment %s: %v\n", paymentID, err)
+			log.Errorw("mp_return_webhook_error",
+				"payment_id", paymentID,
+				"error", err,
+			)
 		}
 	}
 
 	code, err := h.useCase.ValidateMercadoPagoPaymentAndGetCode(c.Request.Context(), bookingCode)
 	if err != nil {
-		log.Printf("[MP RETURN] Error validating payment for code %s: %v\n", bookingCode, err)
+		log.Warnw("mp_return_validation_error",
+			"booking_code", bookingCode,
+			"error", err,
+		)
 		c.Redirect(http.StatusFound, url+"/booking/failure?error=validation_failed")
 		return
 	}
@@ -854,8 +967,15 @@ func (h *BookingHandler) CreateRecurringReservation(c *gin.Context) {
 
 	// Dump del body para debug
 	body, _ := c.GetRawData()
-	log.Printf("[CreateRecurringReservation] raw body: %s", string(body))
-	log.Printf("[CreateRecurringReservation] received: hour=%d, minutes=%d, courtID=%s", input.Hour, input.Minutes, input.CourtID.Hex())
+	log := h.baseHandler.GetLogger(c)
+	log.Infow("create_recurring_reservation_raw_body",
+		"body", string(body),
+	)
+	log.Infow("create_recurring_reservation_received",
+		"hour", input.Hour,
+		"minutes", input.Minutes,
+		"court_id", input.CourtID.Hex(),
+	)
 
 	// Parsear la fecha
 	date, err := time.Parse("2006-01-02", input.Date)
