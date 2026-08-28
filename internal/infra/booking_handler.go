@@ -1038,15 +1038,25 @@ func (h *BookingHandler) CreateRecurringReservation(c *gin.Context) {
 		domain.RecurringReservation
 		Date string `json:"date"` // Format: "2006-01-02"
 	}
+
+	// Dump del body crudo antes del binding para conservarlo en los logs
+	body, _ := c.GetRawData()
+	log := h.baseHandler.GetLogger(c)
+	log.Infow("create_recurring_reservation_raw_body",
+		"body", string(body),
+	)
+
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Dump del body para debug
-	body, _ := c.GetRawData()
-	log.Printf("[CreateRecurringReservation] raw body: %s", string(body))
-	log.Printf("[CreateRecurringReservation] received: hour=%d, minutes=%d, courtID=%s", input.Hour, input.Minutes, input.CourtID.Hex())
+	log.Infow("create_recurring_reservation_received",
+		"hour", input.Hour,
+		"minutes", input.Minutes,
+		"court_id", input.CourtID.Hex(),
+		"customer_name", input.CustomerName,
+	)
 
 	// Parsear la fecha
 	date, err := time.Parse("2006-01-02", input.Date)
@@ -1057,6 +1067,13 @@ func (h *BookingHandler) CreateRecurringReservation(c *gin.Context) {
 
 	err = h.useCase.CreateRecurringReservation(c.Request.Context(), &input.RecurringReservation, date)
 	if err != nil {
+		h.baseHandler.LogError(c, "create_recurring_reservation_error", err,
+			"date", input.Date,
+			"hour", input.Hour,
+			"minutes", input.Minutes,
+			"court_id", input.CourtID.Hex(),
+			"customer_name", input.CustomerName,
+		)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
