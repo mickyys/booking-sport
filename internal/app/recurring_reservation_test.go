@@ -242,6 +242,13 @@ func TestCreateRecurringReservation_Conflict_ActiveWithCancelledDates(t *testing
 		recurringReservationRepo: recurringRepo,
 		courtRepo:                courtRepo,
 		centerRepo:               centerRepo,
+		repo: &mockBookingRepoForHold{
+			FindConfirmedBookingsAfterFn: func(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error) {
+				return []domain.Booking{
+					{ID: newObjectID(), CourtID: courtID, Hour: hour, Date: time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC), Status: domain.BookingStatusConfirmed},
+				}, nil
+			},
+		},
 	}
 
 	date := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC) // martes
@@ -292,6 +299,13 @@ func TestCreateRecurringReservation_Conflict_ActiveWithoutCancelledDates(t *test
 		recurringReservationRepo: recurringRepo,
 		courtRepo:                courtRepo,
 		centerRepo:               centerRepo,
+		repo: &mockBookingRepoForHold{
+			FindConfirmedBookingsAfterFn: func(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error) {
+				return []domain.Booking{
+					{ID: newObjectID(), CourtID: courtID, Hour: hour, Date: time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC), Status: domain.BookingStatusConfirmed},
+				}, nil
+			},
+		},
 	}
 
 	date := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)

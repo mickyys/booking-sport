@@ -21,6 +21,7 @@ type mockBookingRepoForHold struct {
 	UpdateLockExpiresAtFn func(ctx context.Context, id primitive.ObjectID, expiresAt time.Time) error
 	MarkExpiredFn         func(ctx context.Context, id primitive.ObjectID) error
 	FindByIDFn            func(ctx context.Context, id primitive.ObjectID) (*domain.Booking, error)
+	FindConfirmedBookingsAfterFn func(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error)
 
 	FindConfirmedBySlotCalls []findConfirmedBySlotCall
 	FindPendingBySlotCalls   []findPendingBySlotCall
@@ -42,6 +43,10 @@ type findPendingBySlotCall struct {
 }
 
 func (m *mockBookingRepoForHold) FindActiveSeriesByCourtHour(ctx context.Context, courtID primitive.ObjectID, hour int) ([]domain.Booking, error) {
+	return nil, nil
+}
+
+func (m *mockBookingRepoForHold) FindActiveSeriesByCourtHourAfter(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error) {
 	return nil, nil
 }
 
@@ -157,6 +162,9 @@ func (m *mockBookingRepoForHold) HasConfirmedBookingsAfter(ctx context.Context, 
 	return false, nil
 }
 func (m *mockBookingRepoForHold) FindConfirmedBookingsAfter(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error) {
+	if m.FindConfirmedBookingsAfterFn != nil {
+		return m.FindConfirmedBookingsAfterFn(ctx, courtID, hour, since)
+	}
 	return nil, nil
 }
 func (m *mockBookingRepoForHold) FindByUserID(ctx context.Context, userID string) ([]domain.Booking, error) {
