@@ -2176,6 +2176,10 @@ func (uc *BookingUseCase) UndoBalancePayment(ctx context.Context, id primitive.O
 
 // ==================== Recurring Reservation Methods ====================
 
+// ErrRecurringReservationExists se devuelve cuando ya existe una reserva recurrente
+// activa y vigente (con reservas futuras) para la misma cancha, hora y día.
+var ErrRecurringReservationExists = fmt.Errorf("ya existe una reserva recurrente semanal para esta cancha, hora y día")
+
 func (uc *BookingUseCase) CreateRecurringReservation(ctx context.Context, reservation *domain.RecurringReservation, date time.Time) error {
 	log := logger.FromContext(ctx)
 
@@ -2220,9 +2224,60 @@ func (uc *BookingUseCase) CreateRecurringReservation(ctx context.Context, reserv
 	reservation.DayOfWeekName = dayNames[dayOfWeek]
 
 	// Verificar si ya existe una reserva recurrente activa para esta cancha, hora y día de la semana
+	log.Infow("create_recurring_reservation_check_existing",
+		"msg", "Verificando recurrencia existente",
+		"court_id", reservation.CourtID.Hex(),
+		"hour", reservation.Hour,
+		"day_of_week", reservation.DayOfWeek,
+		"day_of_week_name", reservation.DayOfWeekName,
+		"customer_name", reservation.CustomerName,
+	)
 	existing, err := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, reservation.CourtID, reservation.Hour, dayOfWeek)
 	if err == nil && existing != nil {
-		return logRecurringError("existing_recurring_reservation", fmt.Errorf("ya existe una reserva recurrente semanal para esta cancha, hora y día"))
+		log.Infow("create_recurring_reservation_existing_found",
+			"msg", "Se encontró una recurrencia activa para cancha, hora y día",
+			"recurring_id", existing.ID.Hex(),
+			"court_id", existing.CourtID.Hex(),
+			"hour", existing.Hour,
+			"status", existing.Status,
+			"customer_name", existing.CustomerName,
+		)
+		// Si la recurrencia existente ya no tiene reservas confirmadas futuras (su serie venció),
+		// se cancela automáticamente y se permite crear la nueva serie en su lugar.
+		hasFuture, ferr := uc.repo.HasConfirmedBookingsAfter(ctx, existing.CourtID, existing.Hour, time.Now())
+		log.Infow("create_recurring_reservation_existing_has_future",
+			"msg", "Resultado de verificación de reservas futuras",
+			"recurring_id", existing.ID.Hex(),
+			"has_future_bookings", hasFuture,
+			"error", ferr,
+		)
+		if ferr != nil {
+			log.Warnw("cannot_check_future_bookings_for_recurring",
+				"msg", "no se pudo verificar reservas futuras de la recurrencia existente",
+				"error", ferr,
+				"recurring_id", existing.ID.Hex(),
+				"court_id", existing.CourtID.Hex(),
+				"hour", existing.Hour,
+			)
+		}
+		if !hasFuture {
+			log.Infow("recurring_reservation_expired_auto_cancel",
+				"msg", "La recurrencia existente ya no tiene reservas futuras confirmadas; se cancela automáticamente para permitir la nueva serie",
+				"recurring_id", existing.ID.Hex(),
+				"court_id", existing.CourtID.Hex(),
+				"hour", existing.Hour,
+			)
+			cancelErr := uc.recurringReservationRepo.Cancel(ctx, existing.ID, "system", "Serie vencida: sin reservas futuras confirmadas")
+			if cancelErr != nil {
+				log.Errorw("auto_cancel_expired_recurring_failed",
+					"msg", "no se pudo cancelar la recurrencia vencida",
+					"error", cancelErr,
+					"recurring_id", existing.ID.Hex(),
+				)
+			}
+		} else {
+			return logRecurringError("existing_recurring_reservation", ErrRecurringReservationExists)
+		}
 	}
 
 	// Verificar si ya existen reservas individuales activas en serie para esta cancha, hora y día de la semana
