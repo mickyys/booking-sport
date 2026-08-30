@@ -2244,8 +2244,13 @@ func (uc *BookingUseCase) CreateRecurringReservation(ctx context.Context, reserv
 		)
 		// Si la recurrencia existente ya no tiene reservas confirmadas futuras (su serie venció),
 		// se cancela automáticamente y se permite crear la nueva serie en su lugar.
-		futureBookings, ferr := uc.repo.FindConfirmedBookingsAfter(ctx, existing.CourtID, existing.Hour, time.Now())
-		hasFuture := len(futureBookings) > 0
+		var futureBookings []domain.Booking
+		var ferr error
+		hasFuture := false
+		if uc.repo != nil {
+			futureBookings, ferr = uc.repo.FindConfirmedBookingsAfter(ctx, existing.CourtID, existing.Hour, time.Now())
+			hasFuture = len(futureBookings) > 0
+		}
 		log.Infow("create_recurring_reservation_existing_has_future",
 			"msg", "Resultado de verificación de reservas futuras",
 			"recurring_id", existing.ID.Hex(),
@@ -2298,9 +2303,11 @@ func (uc *BookingUseCase) CreateRecurringReservation(ctx context.Context, reserv
 		}
 	}
 
-	// Verificar si ya existen reservas individuales activas en serie para esta cancha, hora y día de la semana
+	// Verificar si ya existen reservas individuales activas en serie para esta cancha, hora y día de la semana.
+	// Solo se consideran bookings con fecha futura, para no bloquear la creación de una nueva serie
+	// por bookings históricos de series ya vencidas.
 	if uc.repo != nil {
-		seriesBookings, err := uc.repo.FindActiveSeriesByCourtHour(ctx, reservation.CourtID, reservation.Hour)
+		seriesBookings, err := uc.repo.FindActiveSeriesByCourtHourAfter(ctx, reservation.CourtID, reservation.Hour, time.Now())
 		if err != nil {
 			log.Warnw("find_active_series_error", "error", err)
 		} else {

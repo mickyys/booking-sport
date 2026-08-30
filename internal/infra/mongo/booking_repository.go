@@ -1146,6 +1146,34 @@ func (r *BookingRepository) FindActiveSeriesByCourtHour(ctx context.Context, cou
 	return bookings, nil
 }
 
+// FindActiveSeriesByCourtHourAfter devuelve los bookings confirmados de series para una
+// cancha y hora, considerando únicamente aquellos con fecha mayor o igual a `since`.
+// Se usa para validar conflictos de reservas recurrentes sin que los bookings históricos
+// de series ya vencidas sigan bloqueando la creación de una nueva serie.
+func (r *BookingRepository) FindActiveSeriesByCourtHourAfter(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error) {
+	filter := bson.M{
+		"court_id": courtID,
+		"hour":     hour,
+		"status":   domain.BookingStatusConfirmed,
+		"date":     bson.M{"$gte": since},
+		"$and": []bson.M{
+			{"series_id": bson.M{"$exists": true}},
+			{"series_id": bson.M{"$ne": ""}},
+		},
+	}
+	cursor, err := r.collection.Find(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var bookings []domain.Booking
+	if err := cursor.All(ctx, &bookings); err != nil {
+		return nil, err
+	}
+	return bookings, nil
+}
+
 func (r *BookingRepository) GetDB() *mongo.Database {
 	return r.db
 }
