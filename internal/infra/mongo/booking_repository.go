@@ -1009,6 +1009,27 @@ func (r *BookingRepository) HasConfirmedBookingsAfter(ctx context.Context, court
 	return count > 0, nil
 }
 
+func (r *BookingRepository) FindConfirmedBookingsAfter(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error) {
+	filter := bson.M{
+		"court_id": courtID,
+		"hour":     hour,
+		"date":     bson.M{"$gte": since},
+		"status":   domain.BookingStatusConfirmed,
+	}
+
+	cursor, err := r.collection.Find(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var bookings []domain.Booking
+	if err := cursor.All(ctx, &bookings); err != nil {
+		return nil, err
+	}
+	return bookings, nil
+}
+
 func (r *BookingRepository) FindPendingBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
 	loc, _ := time.LoadLocation("America/Santiago")
 	dateCL := date.In(loc)
