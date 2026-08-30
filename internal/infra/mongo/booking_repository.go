@@ -949,6 +949,20 @@ func (r *BookingRepository) FindConfirmedByCourtAndDate(ctx context.Context, cou
 	return bookings, nil
 }
 
+func (r *BookingRepository) HasConfirmedBookingsAfter(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) (bool, error) {
+	filter := bson.M{
+		"court_id": courtID,
+		"hour":     hour,
+		"date":     bson.M{"$gte": since},
+		"status":   domain.BookingStatusConfirmed,
+	}
+	count, err := r.collection.CountDocuments(ctx, filter)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (r *BookingRepository) FindPendingBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
 	loc, _ := time.LoadLocation("America/Santiago")
 	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)

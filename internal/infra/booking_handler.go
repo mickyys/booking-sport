@@ -993,7 +993,16 @@ func (h *BookingHandler) CreateRecurringReservation(c *gin.Context) {
 		"body", string(body),
 	)
 
+	// Restaurar el body para que ShouldBindJSON pueda leerlo nuevamente
+	// (GetRawData consume el stream del request body)
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
+
 	if err := c.ShouldBindJSON(&input); err != nil {
+		log.Warnw("create_recurring_reservation_bind_error",
+			"reason", "bind_failed",
+			"error", err,
+			"raw_body", string(body),
+		)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -1014,6 +1023,18 @@ func (h *BookingHandler) CreateRecurringReservation(c *gin.Context) {
 
 	err = h.useCase.CreateRecurringReservation(c.Request.Context(), &input.RecurringReservation, date)
 	if err != nil {
+		if errors.Is(err, app.ErrRecurringReservationExists) {
+			log.Warnw("create_recurring_reservation_conflict",
+				"reason", "existing_recurring_reservation",
+				"error", err,
+				"date", input.Date,
+				"hour", input.Hour,
+				"minutes", input.Minutes,
+				"court_id", input.CourtID.Hex(),
+			)
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
 		h.baseHandler.LogError(c, "create_recurring_reservation_error", err,
 			"date", input.Date,
 			"hour", input.Hour,
