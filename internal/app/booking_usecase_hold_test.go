@@ -152,6 +152,9 @@ func (m *mockBookingRepoForHold) FindConfirmedByCourtAndDate(ctx context.Context
 func (m *mockBookingRepoForHold) HasConfirmedBookingsAfter(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) (bool, error) {
 	return false, nil
 }
+func (m *mockBookingRepoForHold) FindConfirmedBookingsAfter(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error) {
+	return nil, nil
+}
 func (m *mockBookingRepoForHold) FindByUserID(ctx context.Context, userID string) ([]domain.Booking, error) {
 	return nil, nil
 }

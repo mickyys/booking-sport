@@ -1899,13 +1899,31 @@ func (uc *BookingUseCase) CreateRecurringReservation(ctx context.Context, reserv
 		)
 		// Si la recurrencia existente ya no tiene reservas confirmadas futuras (su serie venció),
 		// se cancela automáticamente y se permite crear la nueva serie en su lugar.
-		hasFuture, ferr := uc.repo.HasConfirmedBookingsAfter(ctx, existing.CourtID, existing.Hour, time.Now())
+		futureBookings, ferr := uc.repo.FindConfirmedBookingsAfter(ctx, existing.CourtID, existing.Hour, time.Now())
+		hasFuture := len(futureBookings) > 0
 		log.Infow("create_recurring_reservation_existing_has_future",
 			"msg", "Resultado de verificación de reservas futuras",
 			"recurring_id", existing.ID.Hex(),
 			"has_future_bookings", hasFuture,
+			"future_bookings_count", len(futureBookings),
 			"error", ferr,
 		)
+		for i := range futureBookings {
+			b := &futureBookings[i]
+			log.Infow("recurring_future_booking_blocking",
+				"msg", "Booking confirmado futuro que mantiene vigente la recurrencia",
+				"booking_id", b.ID.Hex(),
+				"booking_code", b.BookingCode,
+				"series_id", b.SeriesID,
+				"recurring_id", b.RecurringID,
+				"court_id", b.CourtID.Hex(),
+				"hour", b.Hour,
+				"minutes", b.Minutes,
+				"date", b.Date.Format("2006-01-02"),
+				"customer_name", b.CustomerName,
+				"status", b.Status,
+			)
+		}
 		if ferr != nil {
 			log.Warnw("cannot_check_future_bookings_for_recurring",
 				"msg", "no se pudo verificar reservas futuras de la recurrencia existente",
