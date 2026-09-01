@@ -2,7 +2,6 @@ package infra
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,18 +15,17 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/hamp/booking-sport/internal/app"
 	"github.com/hamp/booking-sport/internal/domain"
-	"github.com/hamp/booking-sport/pkg/fintoc"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type BookingHandler struct {
-	useCase *app.BookingUseCase
+	useCase     *app.BookingUseCase
 	baseHandler *BaseHandler
 }
 
 func NewBookingHandler(uc *app.BookingUseCase) *BookingHandler {
 	return &BookingHandler{
-		useCase: uc,
+		useCase:     uc,
 		baseHandler: NewBaseHandler(),
 	}
 }
@@ -125,200 +123,16 @@ func (h *BookingHandler) GetRecurringSeries(c *gin.Context) {
 			"hour":               s.Hour,
 			"start_date":         s.StartDate.Format("2006-01-02"),
 			"end_date":           s.EndDate.Format("2006-01-02"),
+			"finished_at":        s.FinishedAt,
 			"total_bookings":     s.BookingsCount,
-			"confirmed_bookings": s.BookingsCount,
+			"confirmed_bookings": s.ConfirmedBookings,
+			"status":             string(s.Status),
 			"price":              s.Price,
 			"created_at":         s.StartDate.Format(time.RFC3339),
 		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": response})
-}
-
-func (h *BookingHandler) CreateFintocPaymentIntent(c *gin.Context) {
-	var booking domain.Booking
-	if err := c.ShouldBindJSON(&booking); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	booking.GuestDeviceID = c.GetString("guest_device_id")
-
-	redirectURL, err := h.useCase.CreateFintocPaymentIntent(c.Request.Context(), &booking)
-	if err != nil {
-		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusCreated, gin.H{"redirect_url": redirectURL})
-}
-
-func (h *BookingHandler) FintocWebhook(c *gin.Context) {
-	// 1. Read body to verify signature before unmarshaling
-	bodyBytes, err := io.ReadAll(c.Request.Body)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read request body"})
-		return
-	}
-	// Restore body for ShouldBindJSON later if needed, but we'll use json.Unmarshal
-	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-
-	var event struct {
-		ID   string          `json:"id"`
-		Type string          `json:"type"`
-		Data json.RawMessage `json:"data"`
-	}
-
-	if err := json.Unmarshal(bodyBytes, &event); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
-		return
-	}
-
-	// 2. Validate Signature if header present
-	signature := c.GetHeader("Fintoc-Signature")
-	if signature != "" {
-		// Extract generic ID from data to find the sport center and its secret
-		var data struct {
-			ID string `json:"id"`
-		}
-		json.Unmarshal(event.Data, &data)
-
-		// We use the ID to find the booking/center (could be checkout session or intent ID)
-		secret, err := h.useCase.GetWebhookSecret(c.Request.Context(), data.ID)
-
-		if err != nil {
-			log.Printf("[FINTOC WEBHOOK] ERROR GETTING SECRET for ID %s: %v\n", data.ID, err)
-		}
-
-		if err == nil {
-			if !fintoc.VerifySignature(bodyBytes, signature, secret) {
-				log.Printf("[FINTOC WEBHOOK] INVALID SIGNATURE for ID: %s\n", data.ID)
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid signature"})
-				return
-			}
-			// Log valid signature with center and amount if possible
-			booking, errB := h.useCase.GetBookingByFintocID(c.Request.Context(), data.ID)
-			if errB == nil && booking != nil {
-				center, _ := h.useCase.GetSportCenterByID(c.Request.Context(), booking.SportCenterID)
-				centerName := "Unknown"
-				if center != nil {
-					centerName = center.Name
-				}
-				log.Printf("[FINTOC WEBHOOK] VALID SIGNATURE - Center: %s, Amount: %.2f, Event: %s, ID: %s\n",
-					centerName, booking.Price, event.Type, data.ID)
-			} else {
-				log.Printf("[FINTOC WEBHOOK] VALID SIGNATURE (Unknown Booking) - Event: %s, ID: %s\n", event.Type, data.ID)
-			}
-		}
-	}
-
-	log.Printf("[FINTOC WEBHOOK] Evento recibido: %s\n", event.Type)
-
-	switch event.Type {
-	case "checkout_session.finished":
-		var data struct {
-			ID              string `json:"id"`
-			Status          string `json:"status"`
-			PaymentResource struct {
-				PaymentIntent struct {
-					ID string `json:"id"`
-				} `json:"payment_intent"`
-			} `json:"payment_resource"`
-		}
-		if err := json.Unmarshal(event.Data, &data); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		if data.Status == "finished" {
-			paymentIntentID := data.PaymentResource.PaymentIntent.ID
-			checkoutSessionID := data.ID
-			err := h.useCase.HandleFintocCheckoutFinished(c.Request.Context(), checkoutSessionID, paymentIntentID)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-		}
-	case "payment_intent.succeeded":
-		var data struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal(event.Data, &data); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		err := h.useCase.HandleFintocWebhook(c.Request.Context(), data.ID, "succeeded")
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-	case "payment_intent.failed":
-		var data struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal(event.Data, &data); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		err := h.useCase.HandleFintocWebhook(c.Request.Context(), data.ID, "failed")
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-	case "refund.succeeded":
-		var data struct {
-			ID         string `json:"id"`
-			Amount     int    `json:"amount"`
-			Status     string `json:"status"`
-			ResourceID string `json:"resource_id"` // Fintoc payment_intent_id
-		}
-		if err := json.Unmarshal(event.Data, &data); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		err := h.useCase.HandleFintocRefund(c.Request.Context(), data.ResourceID, data.ID, data.Amount, data.Status)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{"status": "received"})
-}
-
-func (h *BookingHandler) GetFintocPaymentIntentStatus(c *gin.Context) {
-	id := c.Param("id")
-	if id == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "payment intent id is required"})
-		return
-	}
-
-	status, err := h.useCase.GetFintocPaymentStatus(c.Request.Context(), id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"status": status})
-}
-
-func (h *BookingHandler) FintocReturn(c *gin.Context) {
-	url := os.Getenv("URL_FRONTEND")
-	bookingCode := c.Query("id") // Fintoc envía el id en el query param 'id', que mapeamos al booking_code
-	fmt.Println("============== ID =================", bookingCode)
-	if bookingCode == "" {
-		c.Redirect(http.StatusFound, url+"/booking/failure?error=missing_id")
-		return
-	}
-
-	code, err := h.useCase.ValidateFintocPaymentAndGetCode(c.Request.Context(), bookingCode)
-	if err != nil {
-		c.Redirect(http.StatusFound, url+"/booking/failure?error=not_found")
-		return
-	}
-
-	// Redirigir al front con el código único de la reserva
-	redirectURL := fmt.Sprintf("%s/booking/status?code=%s", url, code)
-	c.Redirect(http.StatusFound, redirectURL)
 }
 
 func (h *BookingHandler) GetConfirmedCount(c *gin.Context) {
@@ -373,13 +187,22 @@ func (h *BookingHandler) DeleteBookingSeries(c *gin.Context) {
 		return
 	}
 
-	err := h.useCase.DeleteSeries(c.Request.Context(), seriesID)
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "admin_id not found in token"})
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	err := h.useCase.DeleteSeries(c.Request.Context(), seriesID, userID.(string), body.Reason)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Series deleted successfully"})
+	c.JSON(http.StatusOK, gin.H{"status": "finished"})
 }
 
 func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
@@ -532,12 +355,12 @@ func (h *BookingHandler) CancelBooking(c *gin.Context) {
 
 	err = h.useCase.CancelBooking(c.Request.Context(), bookingID, userID.(string))
 	if err != nil {
-	h.baseHandler.GetLogger(c).Errorw("booking_cancel_failed",
-		"msg", fmt.Sprintf("Falló la cancelación del booking %s", bookingID.Hex()),
-		"booking_id", bookingID.Hex(),
-		"user_id", userID.(string),
-		"error", err,
-	)
+		h.baseHandler.GetLogger(c).Errorw("booking_cancel_failed",
+			"msg", fmt.Sprintf("Falló la cancelación del booking %s", bookingID.Hex()),
+			"booking_id", bookingID.Hex(),
+			"user_id", userID.(string),
+			"error", err,
+		)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -548,7 +371,7 @@ func (h *BookingHandler) CancelBooking(c *gin.Context) {
 		"user_id", userID.(string),
 	)
 
-	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
+	c.JSON(http.StatusOK, gin.H{"status": "finished"})
 }
 
 func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
@@ -715,11 +538,11 @@ func (h *BookingHandler) CreateInternalBookingsBatch(c *gin.Context) {
 
 func (h *BookingHandler) CreateBooking(c *gin.Context) {
 	log := h.baseHandler.GetLogger(c)
-	
+
 	var booking struct {
 		domain.Booking
 		SeriesID string `json:"series_id"`
-		Partial bool   `json:"partial"`
+		Partial  bool   `json:"partial"`
 	}
 	if err := c.ShouldBindJSON(&booking); err != nil {
 		log.Warnw("booking_create_invalid_json",
@@ -923,11 +746,11 @@ func (h *BookingHandler) MockMercadoPagoConfirm(c *gin.Context) {
 
 func (h *BookingHandler) SyncConfirmedPayment(c *gin.Context) {
 	var req struct {
-		BookingCode   string  `json:"booking_code"`
-		MPPaymentID   string  `json:"mp_payment_id"`
-		FintocPaymentID string `json:"fintoc_payment_id"`
-		PaidAmount    float64 `json:"paid_amount"`
-		PendingAmount float64 `json:"pending_amount"`
+		BookingCode     string  `json:"booking_code"`
+		MPPaymentID     string  `json:"mp_payment_id"`
+		FintocPaymentID string  `json:"fintoc_payment_id"`
+		PaidAmount      float64 `json:"paid_amount"`
+		PendingAmount   float64 `json:"pending_amount"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -1167,15 +990,18 @@ func (h *BookingHandler) CancelRecurringReservation(c *gin.Context) {
 	}
 
 	var body struct {
-		CancelledBy string `json:"cancelled_by"`
-		Reason      string `json:"reason"`
+		Reason string `json:"reason"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		body.CancelledBy = "admin"
-		body.Reason = "Cancelled by admin"
+		body.Reason = ""
 	}
 
-	err = h.useCase.CancelRecurringReservation(c.Request.Context(), id, body.CancelledBy, body.Reason)
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "admin_id not found in token"})
+		return
+	}
+	err = h.useCase.CancelRecurringReservation(c.Request.Context(), id, userID.(string), body.Reason)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

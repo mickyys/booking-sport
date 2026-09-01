@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/hamp/booking-sport/internal/domain"
-	"github.com/hamp/booking-sport/pkg/fintoc"
 	"github.com/hamp/booking-sport/pkg/logger"
 	"github.com/hamp/booking-sport/pkg/mercadopago"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -192,7 +191,7 @@ func (uc *BookingUseCase) notifyAdmins(ctx context.Context, booking *domain.Book
 
 	// Determinar estado de pago
 	paymentStatus := "not_required"
-	if booking.PaymentMethod == "mercadopago" || booking.PaymentMethod == "fintoc" {
+	if booking.PaymentMethod == "mercadopago" {
 		if booking.PendingAmount <= 0 {
 			paymentStatus = "paid"
 		} else {
@@ -261,8 +260,23 @@ func (uc *BookingUseCase) GetUserCancelledBookingsPaged(ctx context.Context, use
 	return uc.repo.FindByUserIDAndStatusPaged(ctx, userID, domain.BookingStatusCancelled, page, limit)
 }
 
-func (uc *BookingUseCase) DeleteSeries(ctx context.Context, seriesID string) error {
-	return uc.repo.DeleteBySeriesID(ctx, seriesID)
+func (uc *BookingUseCase) DeleteSeries(ctx context.Context, seriesID, userID, reason string) error {
+	centers, err := uc.centerRepo.FindByUserID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	centerIDs := make([]primitive.ObjectID, 0, len(centers))
+	for _, center := range centers {
+		centerIDs = append(centerIDs, center.ID)
+	}
+	if len(centerIDs) == 0 {
+		return fmt.Errorf("series not found")
+	}
+	if reason == "" {
+		reason = "Serie finalizada por el administrador"
+	}
+	_, err = uc.repo.FinishSeries(ctx, seriesID, centerIDs, userID, reason, time.Now())
+	return err
 }
 
 func (uc *BookingUseCase) GetRecurringSeries(ctx context.Context, userID string, sportCenterID string) ([]domain.RecurringSeries, error) {
@@ -479,291 +493,6 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 		"hold_id", existingHold.ID.Hex(),
 	)
 	return nil, nil, domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
-}
-
-func (uc *BookingUseCase) CreateFintocPaymentIntent(ctx context.Context, booking *domain.Booking) (string, error) {
-	court, err := uc.courtRepo.FindByID(ctx, booking.CourtID)
-	if err != nil {
-		return "", fmt.Errorf("court not found: %w", err)
-	}
-
-	price := 0.0
-	found := false
-	for _, s := range court.Schedule {
-		if s.Hour == booking.Hour {
-			// Check if slot has already passed
-			loc, _ := time.LoadLocation("America/Santiago")
-			bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, loc)
-			if bookingDateTime.Before(time.Now().In(loc)) {
-				return "", fmt.Errorf("cannot book a past slot")
-			}
-
-			if s.Status != "available" {
-				return "", fmt.Errorf("hour %d is not available", booking.Hour)
-			}
-
-			if !s.PaymentRequired && !s.PaymentOptional {
-				return "", fmt.Errorf("payment not enabled for this slot, use standard booking")
-			}
-
-			price = s.Price
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		return "", fmt.Errorf("hour %d not found in schedule", booking.Hour)
-	}
-
-	booking.Price = price
-	booking.FinalPrice = price
-	booking.Status = domain.BookingStatusPending
-	booking.BookingCode = generateBookingCode()
-	booking.PaymentMethod = "fintoc"
-	booking.SportCenterID = court.SportCenterID
-
-	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
-	if err != nil {
-		return "", fmt.Errorf("sport center not found: %w", err)
-	}
-
-	booking.SportCenterName = center.Name
-	booking.CourtName = court.Name
-	booking.CreatedAt = time.Now()
-	booking.UpdatedAt = time.Now()
-
-	if center.Fintoc == nil || center.Fintoc.Payment.SecretKey == "" {
-		return "", fmt.Errorf("fintoc payment not configured for this sport center")
-	}
-
-	fintocSecret := center.Fintoc.Payment.SecretKey
-
-	email := "cliente@email.com"
-	if booking.GuestDetails != nil {
-		email = booking.GuestDetails.Email
-		if booking.CustomerName == "" {
-			booking.CustomerName = booking.GuestDetails.Name
-		}
-		if booking.CustomerPhone == "" {
-			booking.CustomerPhone = booking.GuestDetails.Phone
-		}
-	}
-
-	effectiveUserID := resolveEffectiveUserID(booking)
-	if booking.GuestDeviceID == "" {
-		booking.GuestDeviceID = effectiveUserID
-	}
-
-	hold, existingBooking, err := uc.ClaimOrRenewSlot(ctx, booking.CourtID, booking.Date, booking.Hour, effectiveUserID)
-	if err != nil {
-		return "", err
-	}
-
-	if existingBooking != nil {
-		existingBooking.UserID = booking.UserID
-		existingBooking.GuestDetails = booking.GuestDetails
-		existingBooking.CustomerName = booking.CustomerName
-		existingBooking.CustomerPhone = booking.CustomerPhone
-		existingBooking.FinalPrice = price
-		existingBooking.Price = price
-		existingBooking.PaidAmount = 0
-		existingBooking.PendingAmount = price
-		existingBooking.UpdatedAt = time.Now()
-
-		lockExpires := hold.ExpiresAt
-		existingBooking.LockExpiresAt = &lockExpires
-		existingBooking.HoldID = &hold.ID
-
-		uc.repo.Update(ctx, existingBooking)
-
-		client := fintoc.NewClient(fintocSecret)
-
-		urlFrontend := os.Getenv("URL_FRONTEND")
-		if urlFrontend == "" {
-			urlFrontend = "http://localhost:5173"
-		}
-		urlPaymentCallback := os.Getenv("URL_PAYMENT_CALLBACK")
-		if urlPaymentCallback == "" {
-			urlPaymentCallback = "http://localhost:3000/payment/callback"
-		}
-		successURL := fmt.Sprintf("%s?id=%s", urlPaymentCallback, existingBooking.BookingCode)
-		cancelURL := fmt.Sprintf("%s/booking/failure?reason=cancelled", urlFrontend)
-
-		orderID := fmt.Sprintf("booking-%s-%d", existingBooking.CourtID.Hex(), existingBooking.Hour)
-		res, err := client.CreateCheckoutSession(int(existingBooking.Price), "CLP", email, orderID, successURL, cancelURL)
-		if err != nil {
-			return "", fmt.Errorf("error creating fintoc checkout: %w", err)
-		}
-
-		existingBooking.FintocPaymentID = res.ID
-		existingBooking.PaymentMethod = "fintoc"
-		uc.repo.Update(ctx, existingBooking)
-		return res.RedirectURL, nil
-	}
-
-	lockExpires := hold.ExpiresAt
-	booking.HoldID = &hold.ID
-	booking.LockExpiresAt = &lockExpires
-
-	if err := uc.repo.Create(ctx, booking); err != nil {
-		uc.holdRepo.Delete(ctx, hold.ID)
-		return "", err
-	}
-
-	hold.BookingID = booking.ID
-
-	client := fintoc.NewClient(fintocSecret)
-
-	urlFrontend := os.Getenv("URL_FRONTEND")
-	if urlFrontend == "" {
-		urlFrontend = "http://localhost:5173"
-	}
-	urlPaymentCallback := os.Getenv("URL_PAYMENT_CALLBACK")
-	if urlPaymentCallback == "" {
-		urlPaymentCallback = "http://localhost:3000/payment/callback"
-	}
-	successURL := fmt.Sprintf("%s?id=%s", urlPaymentCallback, booking.BookingCode)
-	cancelURL := fmt.Sprintf("%s/booking/failure?reason=cancelled", urlFrontend)
-
-	orderID := fmt.Sprintf("booking-%s-%d", booking.CourtID.Hex(), booking.Hour)
-	res, err := client.CreateCheckoutSession(int(booking.Price), "CLP", email, orderID, successURL, cancelURL)
-	if err != nil {
-		return "", fmt.Errorf("error creating fintoc checkout: %w", err)
-	}
-
-	booking.FintocPaymentID = res.ID
-	uc.repo.UpdateFintocPaymentID(ctx, booking.ID, res.ID)
-
-	return res.RedirectURL, nil
-}
-
-func (uc *BookingUseCase) HandleFintocCheckoutFinished(ctx context.Context, checkoutSessionID string, paymentIntentID string) error {
-	booking, err := uc.repo.FindByFintocPaymentID(ctx, checkoutSessionID)
-	if err != nil {
-		fmt.Printf("[FINTOC WEBHOOK ERROR] Reserva no encontrada para CheckoutSession ID: %s, Error: %v\n", checkoutSessionID, err)
-		return err
-	}
-
-	fmt.Printf("[FINTOC WEBHOOK] Reserva encontrada para CheckoutSession ID: %s. Actualizando PaymentIntent ID a: %s\n", checkoutSessionID, paymentIntentID)
-
-	err = uc.repo.UpdateFintocPaymentIntentID(ctx, booking.ID, paymentIntentID)
-	if err != nil {
-		fmt.Printf("[FINTOC WEBHOOK ERROR] Error al actualizar PaymentIntent ID para CheckoutSession %s: %v\n", checkoutSessionID, err)
-		return err
-	}
-
-	return nil
-}
-
-func (uc *BookingUseCase) GetFintocPaymentStatus(ctx context.Context, paymentIntentID string) (string, error) {
-	// Buscar la reserva para saber a qué centro pertenece
-	booking, err := uc.repo.FindByFintocPaymentIntentID(ctx, paymentIntentID)
-	if err != nil {
-		return "", fmt.Errorf("booking not found for payment intent: %w", err)
-	}
-
-	// Obtener el centro para sacar la secret key
-	center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
-	if err != nil {
-		return "", fmt.Errorf("sport center not found: %w", err)
-	}
-
-	if center.Fintoc == nil || center.Fintoc.Payment.SecretKey == "" {
-		return "", fmt.Errorf("fintoc not configured for this center")
-	}
-
-	client := fintoc.NewClient(center.Fintoc.Payment.SecretKey)
-
-	res, err := client.GetPaymentIntent(paymentIntentID)
-	if err != nil {
-		return "", err
-	}
-
-	return res.Status, nil
-}
-
-func (uc *BookingUseCase) ValidateFintocPaymentAndGetCode(ctx context.Context, bookingCode string) (string, error) {
-	booking, err := uc.repo.FindByBookingCode(ctx, bookingCode)
-	if err != nil {
-		return "", fmt.Errorf("booking not found for code: %w", err)
-	}
-
-	// Si el estado ya es confirmado, redireccionamos directamente
-	if booking.Status == domain.BookingStatusConfirmed {
-		return booking.BookingCode, nil
-	}
-
-	// Si el estado es pendiente, consultamos Fintoc
-	if booking.Status == domain.BookingStatusPending && booking.FintocPaymentID != "" {
-		// Obtener el centro para sacar la secret key
-		center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
-		if err != nil {
-			return booking.BookingCode, fmt.Errorf("sport center not found: %w", err)
-		}
-
-		if center.Fintoc == nil || center.Fintoc.Payment.SecretKey == "" {
-			return booking.BookingCode, fmt.Errorf("fintoc not configured for this center")
-		}
-
-		client := fintoc.NewClient(center.Fintoc.Payment.SecretKey)
-
-		// 1. Consultar la sesión de checkout
-		session, err := client.GetCheckoutSession(booking.FintocPaymentID)
-		if err != nil {
-			return booking.BookingCode, fmt.Errorf("error getting checkout session: %w", err)
-		}
-
-		// 2. Verificar si la sesión terminó exitosamente y obtener el payment intent id
-		if session.Status == "finished" && session.PaymentResource.PaymentIntent.ID != "" {
-			paymentIntentID := session.PaymentResource.PaymentIntent.ID
-
-			// 3. Consultar el pago (payment intent)
-			payment, err := client.GetPaymentIntent(paymentIntentID)
-			if err != nil {
-				return booking.BookingCode, fmt.Errorf("error getting payment intent: %w", err)
-			}
-
-			// 4. Si el pago fue exitoso, actualizamos a confirmado
-			if payment.Status == "succeeded" {
-				booking.Status = domain.BookingStatusConfirmed
-				booking.FintocPaymentIntentID = paymentIntentID
-				booking.UpdatedAt = time.Now()
-				if err := uc.repo.Update(ctx, booking); err != nil {
-					return booking.BookingCode, fmt.Errorf("error updating booking: %w", err)
-				}
-				if booking.HoldID != nil {
-					uc.holdRepo.Delete(ctx, *booking.HoldID)
-				}
-				// Enviar correo de confirmación (si está configurado)
-				if uc.mailer != nil {
-					cancellationHours := center.CancellationHours
-					if cancellationHours == 0 {
-						cancellationHours = 3
-					}
-					retentionPercent := center.RetentionPercent
-					if retentionPercent == 0 {
-						retentionPercent = 10
-					}
-					paidAmount := booking.PaidAmount
-					pendingAmount := booking.FinalPrice - booking.PaidAmount
-					go func() {
-						if err := uc.mailer.SendBookingConfirmation(context.Background(), booking, cancellationHours, retentionPercent, paidAmount, pendingAmount); err != nil {
-							logger.FromContext(context.Background()).Errorw("mail_booking_confirmation_error",
-								"msg", fmt.Sprintf("Error al enviar correo de confirmación para el booking %s", booking.BookingCode),
-								"booking_code", booking.BookingCode,
-								"error", err,
-							)
-						}
-					}()
-				}
-				return booking.BookingCode, nil
-			}
-		}
-	}
-
-	// Para cualquier otro caso (failed, cancelled o si sigue pendiente en Fintoc)
-	return booking.BookingCode, nil
 }
 
 // ==================== MercadoPago Payment Methods ====================
@@ -1293,163 +1022,12 @@ func (uc *BookingUseCase) GetByMPPaymentID(ctx context.Context, paymentID string
 	return uc.repo.FindByMPPaymentID(ctx, paymentID)
 }
 
-func (uc *BookingUseCase) HandleFintocRefund(ctx context.Context, paymentIntentID string, refundID string, amount int, status string) error {
-	refund := domain.Refund{
-		ID:        refundID,
-		Amount:    amount,
-		Status:    status,
-		CreatedAt: time.Now(),
-	}
-
-	return uc.repo.AddRefund(ctx, paymentIntentID, refund)
-}
-
-func (uc *BookingUseCase) GetWebhookSecret(ctx context.Context, id string) (string, error) {
-	log := logger.FromContext(ctx)
-	var booking *domain.Booking
-	var err error
-
-	log.Debugw("fintoc_webhook_search_by_checkout_id",
-		"msg", fmt.Sprintf("Buscando booking por Fintoc checkout ID: %s", id),
-		"payment_id", id,
-	)
-	booking, err = uc.repo.FindByFintocPaymentID(ctx, id)
-	if err != nil || booking == nil {
-		log.Debugw("fintoc_webhook_search_by_intent_id",
-			"msg", fmt.Sprintf("Buscando booking por Fintoc payment intent ID: %s", id),
-			"payment_intent_id", id,
-		)
-		booking, err = uc.repo.FindByFintocPaymentIntentID(ctx, id)
-	}
-
-	log.Debugw("fintoc_webhook_booking_found",
-		"msg", fmt.Sprintf("Booking encontrado para webhook Fintoc: %s", booking.BookingCode),
-		"booking_id", booking.ID.Hex(),
-		"booking_code", booking.BookingCode,
-	)
-	if err != nil || booking == nil {
-		return "", fmt.Errorf("booking not found for webhook validation (ID: %s)", id)
-	}
-
-	center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
-	if err != nil {
-		return "", fmt.Errorf("sport center not found for webhook validation")
-	}
-	log.Debugw("fintoc_webhook_center_found",
-		"msg", fmt.Sprintf("Centro deportivo encontrado para webhook Fintoc: %s", center.Name),
-		"center_id", center.ID.Hex(),
-		"center_name", center.Name,
-	)
-	if center.Fintoc == nil || center.Fintoc.Webhook.SecretKey == "" {
-		return "", fmt.Errorf("fintoc webhook secret not configured")
-	}
-
-	log.Debugw("fintoc_webhook_secret_retrieved",
-		"msg", "Secreto de webhook Fintoc recuperado correctamente",
-	)
-	return center.Fintoc.Webhook.SecretKey, nil
-}
-
-func (uc *BookingUseCase) GetBookingByFintocID(ctx context.Context, fintocID string) (*domain.Booking, error) {
-	booking, err := uc.repo.FindByFintocPaymentID(ctx, fintocID)
-	if err != nil || booking == nil {
-		booking, err = uc.repo.FindByFintocPaymentIntentID(ctx, fintocID)
-	}
-	return booking, err
-}
-
 func (uc *BookingUseCase) GetSportCenterByID(ctx context.Context, id primitive.ObjectID) (*domain.SportCenter, error) {
 	return uc.centerRepo.FindByID(ctx, id)
 }
 
 func (uc *BookingUseCase) GetCourtByID(ctx context.Context, id primitive.ObjectID) (*domain.Court, error) {
 	return uc.courtRepo.FindByID(ctx, id)
-}
-
-func (uc *BookingUseCase) HandleFintocWebhook(ctx context.Context, id string, status string) error {
-	// Intentamos buscar por PaymentIntentID primero, luego por CheckoutSessionID (para compatibilidad)
-	booking, err := uc.repo.FindByFintocPaymentIntentID(ctx, id)
-	if err != nil {
-		booking, err = uc.repo.FindByFintocPaymentID(ctx, id)
-	}
-
-	if err != nil {
-		fmt.Printf("[WEBHOOK ERROR] Reserva no encontrada para Fintoc ID: %s\n", id)
-		return err
-	}
-
-	if booking.Status == domain.BookingStatusConfirmed {
-		return nil
-	}
-
-	newStatus := domain.BookingStatusPending
-	switch status {
-	case "succeeded":
-		newStatus = domain.BookingStatusConfirmed
-	case "failed":
-		newStatus = domain.BookingStatusCancelled
-	}
-
-	err = uc.repo.UpdateStatus(ctx, booking.ID, newStatus)
-	if err != nil {
-		return err
-	}
-
-	if booking.HoldID != nil {
-		uc.holdRepo.Delete(ctx, *booking.HoldID)
-	}
-
-	// Si se confirmó la reserva, notificar a administradores y enviar correo
-	if newStatus == domain.BookingStatusConfirmed {
-		log := logger.FromContext(ctx)
-		log.Infow("fintoc_webhook_reservation_confirmed",
-			"msg", fmt.Sprintf("Reserva confirmada via Fintoc: %s en %s para el %s a las %02d:00 hrs",
-				booking.BookingCode, booking.SportCenterName, booking.Date.Format("02/01/2006"), booking.Hour),
-			"booking_code", booking.BookingCode,
-			"center_id", booking.SportCenterID.Hex(),
-			"center_name", booking.SportCenterName,
-		)
-		title := "Pago Confirmado - Fintoc"
-		body := fmt.Sprintf("Nueva reserva en %s para el %s a las %02d:00 hrs.",
-			booking.SportCenterName, booking.Date.Format("02/01/2006"), booking.Hour)
-
-		log.Infow("fintoc_webhook_sending_notification",
-			"msg", fmt.Sprintf("Enviando notificación push de confirmación Fintoc para booking %s en centro %s",
-				booking.BookingCode, booking.SportCenterName),
-			"booking_code", booking.BookingCode,
-			"center_id", booking.SportCenterID.Hex(),
-		)
-		uc.notifyAdmins(ctx, booking, title, body, "confirmation")
-
-		if uc.mailer != nil {
-			center, err := uc.centerRepo.FindByID(ctx, booking.SportCenterID)
-			cancellationHours := 3
-			retentionPercent := 10
-			paidAmount := booking.PaidAmount
-			pendingAmount := booking.FinalPrice - booking.PaidAmount
-			if err == nil && center != nil {
-				cancellationHours = center.CancellationHours
-				if cancellationHours == 0 {
-					cancellationHours = 3
-				}
-				retentionPercent = center.RetentionPercent
-				if retentionPercent == 0 {
-					retentionPercent = 10
-				}
-			}
-			go func(b *domain.Booking) {
-				if err := uc.mailer.SendBookingConfirmation(context.Background(), b, cancellationHours, retentionPercent, paidAmount, pendingAmount); err != nil {
-					logger.FromContext(context.Background()).Errorw("mail_booking_confirmation_error",
-						"msg", fmt.Sprintf("Error al enviar correo de confirmación Fintoc para booking %s", b.BookingCode),
-						"booking_code", b.BookingCode,
-						"error", err,
-					)
-				}
-			}(booking)
-		}
-	}
-
-	return nil
 }
 
 func (uc *BookingUseCase) GetUserBookings(ctx context.Context, userID string) ([]domain.BookingSummary, error) {
@@ -2403,46 +1981,46 @@ func (uc *BookingUseCase) GetRecurringReservationsByCenter(ctx context.Context, 
 		return []domain.RecurringReservationResponse{}, nil
 	}
 
-	centerID := centers[0].ID
+	results := make([]domain.RecurringReservationResponse, 0)
+	for _, center := range centers {
+		reservations, err := uc.recurringReservationRepo.FindAdminByCenterID(ctx, center.ID)
+		if err != nil {
+			return nil, err
+		}
+		courts, err := uc.courtRepo.FindByCenterID(ctx, center.ID)
+		if err != nil {
+			return nil, err
+		}
+		courtMap := make(map[primitive.ObjectID]string)
+		for _, court := range courts {
+			courtMap[court.ID] = court.Name
+		}
 
-	reservations, err := uc.recurringReservationRepo.FindByCenterID(ctx, centerID)
-	if err != nil {
-		return nil, err
-	}
-
-	court, err := uc.courtRepo.FindByCenterID(ctx, centerID)
-	if err != nil {
-		return nil, err
-	}
-	courtMap := make(map[primitive.ObjectID]string)
-	for _, c := range court {
-		courtMap[c.ID] = c.Name
-	}
-
-	centerName := centers[0].Name
-
-	results := make([]domain.RecurringReservationResponse, 0, len(reservations))
-	for _, r := range reservations {
-		results = append(results, domain.RecurringReservationResponse{
-			ID:              r.ID,
-			SportCenterID:   r.SportCenterID,
-			SportCenterName: centerName,
-			CourtID:         r.CourtID,
-			CourtName:       courtMap[r.CourtID],
-			CustomerName:    r.CustomerName,
-			CustomerPhone:   r.CustomerPhone,
-			Hour:            r.Hour,
-			Minutes:         r.Minutes,
-			DayOfWeek:       r.DayOfWeek,
-			DayOfWeekName:   r.DayOfWeekName,
-			Price:           r.Price,
-			Notes:           r.Notes,
-			Status:          r.Status,
-			CancelledBy:     r.CancelledBy,
-			CancelReason:    r.CancelReason,
-			CreatedAt:       r.CreatedAt,
-			UpdatedAt:       r.UpdatedAt,
-		})
+		for _, r := range reservations {
+			results = append(results, domain.RecurringReservationResponse{
+				ID:              r.ID,
+				SportCenterID:   r.SportCenterID,
+				SportCenterName: center.Name,
+				CourtID:         r.CourtID,
+				CourtName:       courtMap[r.CourtID],
+				CustomerName:    r.CustomerName,
+				CustomerPhone:   r.CustomerPhone,
+				Hour:            r.Hour,
+				Minutes:         r.Minutes,
+				DayOfWeek:       r.DayOfWeek,
+				DayOfWeekName:   r.DayOfWeekName,
+				Price:           r.Price,
+				Notes:           r.Notes,
+				Status:          r.Status,
+				CancelledBy:     r.CancelledBy,
+				CancelReason:    r.CancelReason,
+				FinishedAt:      r.FinishedAt,
+				FinishedBy:      r.FinishedBy,
+				FinishReason:    r.FinishReason,
+				CreatedAt:       r.CreatedAt,
+				UpdatedAt:       r.UpdatedAt,
+			})
+		}
 	}
 
 	return results, nil
@@ -2499,17 +2077,36 @@ func (uc *BookingUseCase) GetRecurringReservationsByCourt(ctx context.Context, c
 	return results, nil
 }
 
-func (uc *BookingUseCase) CancelRecurringReservation(ctx context.Context, id primitive.ObjectID, cancelledBy string, reason string) error {
+func (uc *BookingUseCase) CancelRecurringReservation(ctx context.Context, id primitive.ObjectID, userID string, reason string) error {
 	reservation, err := uc.recurringReservationRepo.FindByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("recurring reservation not found: %w", err)
 	}
 
-	if reservation.Status == domain.RecurringReservationStatusCancelled {
-		return fmt.Errorf("recurring reservation is already cancelled")
+	if reservation.Status == domain.RecurringReservationStatusFinished {
+		return nil
 	}
-
-	return uc.recurringReservationRepo.Cancel(ctx, id, cancelledBy, reason)
+	if reservation.Status != domain.RecurringReservationStatusActive {
+		return fmt.Errorf("recurring reservation is not active")
+	}
+	centers, err := uc.centerRepo.FindByUserID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	authorized := false
+	for _, center := range centers {
+		if center.ID == reservation.SportCenterID {
+			authorized = true
+			break
+		}
+	}
+	if !authorized {
+		return fmt.Errorf("recurring reservation not found")
+	}
+	if reason == "" {
+		reason = "Reserva indefinida finalizada por el administrador"
+	}
+	return uc.recurringReservationRepo.Finish(ctx, id, userID, reason, time.Now())
 }
 
 func (uc *BookingUseCase) CancelRecurringDate(ctx context.Context, id primitive.ObjectID, date string) error {

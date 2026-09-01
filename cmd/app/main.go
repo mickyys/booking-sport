@@ -198,10 +198,6 @@ func main() {
 	r.GET("/api/courts", courtHandler.List)
 	r.POST("/api/courts", courtHandler.CreateCourt)
 	r.GET("/api/courts/:id/schedule", courtHandler.GetSchedule)
-	r.POST("/api/bookings/fintoc", bookingHandler.CreateFintocPaymentIntent)
-	r.POST("/api/bookings/fintoc/webhook", bookingHandler.FintocWebhook)
-	r.GET("/api/bookings/fintoc/return", bookingHandler.FintocReturn)
-	r.GET("/api/bookings/fintoc/:id", bookingHandler.GetFintocPaymentIntentStatus)
 	// MercadoPago payment routes
 	r.POST("/api/bookings/mercadopago", bookingHandler.CreateMercadoPagoPayment)
 	r.POST("/api/bookings/mercadopago/webhook", bookingHandler.MercadoPagoWebhook)

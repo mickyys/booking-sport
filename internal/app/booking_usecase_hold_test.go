@@ -16,12 +16,13 @@ import (
 // ---------- BookingRepository mock for ClaimOrRenewSlot ----------
 
 type mockBookingRepoForHold struct {
-	FindConfirmedBySlotFn func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error)
-	FindPendingBySlotFn   func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error)
-	UpdateLockExpiresAtFn func(ctx context.Context, id primitive.ObjectID, expiresAt time.Time) error
-	MarkExpiredFn         func(ctx context.Context, id primitive.ObjectID) error
-	FindByIDFn            func(ctx context.Context, id primitive.ObjectID) (*domain.Booking, error)
+	FindConfirmedBySlotFn        func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error)
+	FindPendingBySlotFn          func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error)
+	UpdateLockExpiresAtFn        func(ctx context.Context, id primitive.ObjectID, expiresAt time.Time) error
+	MarkExpiredFn                func(ctx context.Context, id primitive.ObjectID) error
+	FindByIDFn                   func(ctx context.Context, id primitive.ObjectID) (*domain.Booking, error)
 	FindConfirmedBookingsAfterFn func(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error)
+	FinishSeriesFn               func(ctx context.Context, seriesID string, centerIDs []primitive.ObjectID, finishedBy, reason string, now time.Time) (int64, error)
 
 	FindConfirmedBySlotCalls []findConfirmedBySlotCall
 	FindPendingBySlotCalls   []findPendingBySlotCall
@@ -101,12 +102,6 @@ func (m *mockBookingRepoForHold) Update(ctx context.Context, booking *domain.Boo
 func (m *mockBookingRepoForHold) FindByPreferenceID(ctx context.Context, preferenceID string) (*domain.Booking, error) {
 	return nil, nil
 }
-func (m *mockBookingRepoForHold) FindByFintocPaymentID(ctx context.Context, fintocPaymentID string) (*domain.Booking, error) {
-	return nil, nil
-}
-func (m *mockBookingRepoForHold) FindByFintocPaymentIntentID(ctx context.Context, paymentIntentID string) (*domain.Booking, error) {
-	return nil, nil
-}
 func (m *mockBookingRepoForHold) FindByMPPreferenceID(ctx context.Context, preferenceID string) (*domain.Booking, error) {
 	return nil, nil
 }
@@ -131,16 +126,7 @@ func (m *mockBookingRepoForHold) UndoBalancePayment(ctx context.Context, id prim
 func (m *mockBookingRepoForHold) UpdateCancellation(ctx context.Context, id primitive.ObjectID, status domain.BookingStatus, cancelledBy string, reason string) error {
 	return nil
 }
-func (m *mockBookingRepoForHold) UpdateFintocPaymentIntentID(ctx context.Context, id primitive.ObjectID, paymentIntentID string) error {
-	return nil
-}
 func (m *mockBookingRepoForHold) UpdateMPPaymentID(ctx context.Context, id primitive.ObjectID, mpPaymentID string) error {
-	return nil
-}
-func (m *mockBookingRepoForHold) UpdateFintocPaymentID(ctx context.Context, id primitive.ObjectID, paymentID string) error {
-	return nil
-}
-func (m *mockBookingRepoForHold) AddRefund(ctx context.Context, paymentIntentID string, refund domain.Refund) error {
 	return nil
 }
 func (m *mockBookingRepoForHold) AddRefundByBookingID(ctx context.Context, bookingID primitive.ObjectID, refund domain.Refund) error {
@@ -184,6 +170,12 @@ func (m *mockBookingRepoForHold) Delete(ctx context.Context, id primitive.Object
 }
 func (m *mockBookingRepoForHold) DeleteBySeriesID(ctx context.Context, seriesID string) error {
 	return nil
+}
+func (m *mockBookingRepoForHold) FinishSeries(ctx context.Context, seriesID string, centerIDs []primitive.ObjectID, finishedBy, reason string, now time.Time) (int64, error) {
+	if m.FinishSeriesFn != nil {
+		return m.FinishSeriesFn(ctx, seriesID, centerIDs, finishedBy, reason, now)
+	}
+	return 0, nil
 }
 func (m *mockBookingRepoForHold) GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name string, code string, status string) (*domain.AdminDashboardData, error) {
 	return nil, nil
