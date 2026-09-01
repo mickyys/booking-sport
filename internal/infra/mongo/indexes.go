@@ -112,14 +112,6 @@ func ensureBookingIndexes(ctx context.Context, db *mongo.Database) error {
 			Options: options.Index().SetUnique(true).SetName("idx_bookings_booking_code"),
 		},
 		{
-			Keys:    bson.D{{Key: "fintoc_payment_id", Value: 1}},
-			Options: options.Index().SetName("idx_bookings_fintoc_payment_id"),
-		},
-		{
-			Keys:    bson.D{{Key: "fintoc_payment_intent_id", Value: 1}},
-			Options: options.Index().SetName("idx_bookings_fintoc_payment_intent_id"),
-		},
-		{
 			Keys:    bson.D{{Key: "preference_id", Value: 1}},
 			Options: options.Index().SetName("idx_bookings_preference_id"),
 		},

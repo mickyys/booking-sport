@@ -363,12 +363,11 @@ Notas importantes:
 
 ### Métodos de Pago (`payment_method`)
 - `mercadopago`: Pago realizado online mediante Mercado Pago.
-- `fintoc`: Pago realizado online mediante Fintoc.
 - `internal`: Reserva creada manualmente por el administrador desde el panel.
 - `presencial` / `venue`: Pago que se realizará directamente en el centro deportivo.
 
 ### Tipos de Reserva y Estados de Slot
-- **Reserva Online:** El slot pasa a `status: "booked"` y el `payment_method` es `mercadopago` o `fintoc`.
+- **Reserva Online:** El slot pasa a `status: "booked"` y el `payment_method` es `mercadopago`.
 - **Reserva Interna:** El slot pasa a `status: "booked"` y el `payment_method` es `internal`.
 - **Bloqueo de Administrador:** El slot tiene `status: "closed"`. No tiene una reserva asociada, simplemente no está disponible para el público.
 

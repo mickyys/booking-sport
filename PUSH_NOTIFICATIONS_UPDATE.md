@@ -104,26 +104,7 @@ uc.notifyAdmins(
 
 ---
 
-#### 4.2 `ProcessFintocWebhook()` (Línea ~877)
-```go
-uc.notifyAdmins(
-    ctx, 
-    booking.SportCenterID, 
-    booking.SportCenterName,
-    "Pago Confirmado - Fintoc",
-    "Nueva reserva en {center} para el {date} a las {hour}:00 hrs.",
-    booking.ID.Hex(),
-    "confirmation",
-)
-```
-
-**Logs**:
-- `fintoc_webhook_reservation_confirmed`
-- `fintoc_webhook_sending_notification`
-
----
-
-#### 4.3 `CancelBooking()` (Línea ~1122)
+#### 4.2 `CancelBooking()` (Línea ~1122)
 ```go
 uc.notifyAdmins(
     ctx, 
@@ -142,7 +123,7 @@ uc.notifyAdmins(
 
 ---
 
-#### 4.4 `CreateInternalBooking()` (Línea ~1213)
+#### 4.3 `CreateInternalBooking()` (Línea ~1213)
 ```go
 uc.notifyAdmins(
     ctx, 
@@ -161,7 +142,7 @@ uc.notifyAdmins(
 
 ---
 
-#### 4.5 `CreateBooking()` (Línea ~1313)
+#### 4.4 `CreateBooking()` (Línea ~1313)
 ```go
 uc.notifyAdmins(
     ctx, 
@@ -323,7 +304,7 @@ FirebaseMessaging.onMessage.listen((RemoteMessage message) {
 ### Coverage de Logging:
 - ✅ Notificaciones push: 100%
 - ✅ Cancelaciones: 100%
-- ✅ Confirmaciones (MP, Fintoc, Directas): 100%
+- ✅ Confirmaciones (MP, Directas): 100%
 - ✅ Errores de email: 100%
 
 ---

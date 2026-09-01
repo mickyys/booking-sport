@@ -187,7 +187,7 @@ Sensitive data is automatically masked:
    - MongoDB query latency
    - Mailgun email delivery
    - Firebase push notifications
-   - MercadoPago/Fintoc payments
+   - MercadoPago payments
 
 ### NRQL Queries
 

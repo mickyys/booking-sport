@@ -23,20 +23,6 @@ type Contact struct {
 	Email string `bson:"email" json:"email"`
 }
 
-type FintocPaymentConfig struct {
-	SecretKey string `bson:"secret_key" json:"secret_key"`
-}
-
-type FintocWebhookConfig struct {
-	ID        string `bson:"id" json:"id"`
-	SecretKey string `bson:"secret_key" json:"secret_key"`
-}
-
-type FintocConfig struct {
-	Payment FintocPaymentConfig `bson:"payment" json:"payment"`
-	Webhook FintocWebhookConfig `bson:"webhook" json:"webhook"`
-}
-
 type MercadoPagoConfig struct {
 	AccessToken string `bson:"access_token" json:"access_token"`
 }
@@ -57,7 +43,6 @@ type SportCenter struct {
 	Services              []string           `bson:"services" json:"services"`
 	Contact               Contact            `bson:"contact" json:"contact"`
 	CourtsCount           int                `bson:"courts_count" json:"courts"`
-	Fintoc                *FintocConfig      `bson:"fintoc,omitempty" json:"-"`
 	MercadoPago           *MercadoPagoConfig `bson:"mercadopago,omitempty" json:"-"`
 	CancellationHours     int                `bson:"cancellation_hours" json:"cancellation_hours"`
 	RetentionPercent      int                `bson:"retention_percent" json:"retention_percent"`
