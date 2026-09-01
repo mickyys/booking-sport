@@ -39,7 +39,7 @@ type SportCenter struct {
 	City                  string             `bson:"city" json:"city"`
 	Address               string             `bson:"address" json:"address"`
 	Coordinates           Coordinates        `bson:"coordinates" json:"coordinates"`
-	ImageURL             string             `bson:"image_url" json:"image_url"`
+	ImageURL              string             `bson:"image_url" json:"image_url"`
 	Services              []string           `bson:"services" json:"services"`
 	Contact               Contact            `bson:"contact" json:"contact"`
 	CourtsCount           int                `bson:"courts_count" json:"courts"`
@@ -48,7 +48,7 @@ type SportCenter struct {
 	RetentionPercent      int                `bson:"retention_percent" json:"retention_percent"`
 	PartialPaymentEnabled bool               `bson:"partial_payment_enabled" json:"partial_payment_enabled"`
 	PartialPaymentPercent int                `bson:"partial_payment_percent" json:"partial_payment_percent"`
-	IsPrivate            bool               `bson:"is_private" json:"is_private"`
+	IsPrivate             bool               `bson:"is_private" json:"is_private"`
 	Users                 []string           `bson:"users" json:"-"`
 	CreatedAt             time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt             time.Time          `bson:"updated_at" json:"updated_at"`
@@ -128,19 +128,29 @@ type BookingSummary struct {
 	CreatedAt          time.Time          `bson:"created_at" json:"created_at"`
 }
 
+type RecurringSeriesStatus string
+
+const (
+	RecurringSeriesStatusActive   RecurringSeriesStatus = "active"
+	RecurringSeriesStatusFinished RecurringSeriesStatus = "finished"
+)
+
 type RecurringSeries struct {
-	SeriesID      string             `bson:"_id,omitempty" json:"series_id"`
-	CustomerName  string             `bson:"customer_name" json:"customer_name"`
-	CustomerPhone string             `bson:"customer_phone" json:"customer_phone"`
-	CourtID       primitive.ObjectID `bson:"court_id,omitempty" json:"court_id"`
-	CourtName     string             `bson:"court_name" json:"court_name"`
-	SportCenterID primitive.ObjectID `bson:"sport_center_id,omitempty" json:"sport_center_id"`
-	Hour          int                `bson:"hour" json:"hour"`
-	StartDate     time.Time          `bson:"start_date" json:"start_date"`
-	EndDate       time.Time          `bson:"end_date" json:"end_date"`
-	BookingsCount int                `bson:"bookings_count" json:"bookings_count"`
-	Price         float64            `bson:"price" json:"price"`
-	TotalBookings int                `bson:"total_bookings" json:"total_bookings"`
+	SeriesID          string                `bson:"_id,omitempty" json:"series_id"`
+	CustomerName      string                `bson:"customer_name" json:"customer_name"`
+	CustomerPhone     string                `bson:"customer_phone" json:"customer_phone"`
+	CourtID           primitive.ObjectID    `bson:"court_id,omitempty" json:"court_id"`
+	CourtName         string                `bson:"court_name" json:"court_name"`
+	SportCenterID     primitive.ObjectID    `bson:"sport_center_id,omitempty" json:"sport_center_id"`
+	Hour              int                   `bson:"hour" json:"hour"`
+	StartDate         time.Time             `bson:"start_date" json:"start_date"`
+	EndDate           time.Time             `bson:"end_date" json:"end_date"`
+	FinishedAt        *time.Time            `bson:"finished_at,omitempty" json:"finished_at,omitempty"`
+	BookingsCount     int                   `bson:"bookings_count" json:"bookings_count"`
+	Price             float64               `bson:"price" json:"price"`
+	TotalBookings     int                   `bson:"total_bookings" json:"total_bookings"`
+	ConfirmedBookings int                   `bson:"confirmed_bookings" json:"confirmed_bookings"`
+	Status            RecurringSeriesStatus `bson:"status" json:"status"`
 }
 
 type AdminDashboardData struct {
@@ -169,45 +179,51 @@ const (
 )
 
 type Booking struct {
-	ID                    primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
-	CourtID               primitive.ObjectID `bson:"court_id" json:"court_id"`
-	SportCenterID         primitive.ObjectID `bson:"sport_center_id" json:"sport_center_id"`
-	CourtName             string             `bson:"court_name,omitempty" json:"court_name,omitempty"`
-	SportCenterName       string             `bson:"sport_center_name,omitempty" json:"sport_center_name,omitempty"`
-	UserID                string             `bson:"user_id,omitempty" json:"user_id,omitempty"`
-	GuestDeviceID         string             `bson:"guest_device_id,omitempty" json:"guest_device_id,omitempty"`
-	GuestDetails          *GuestDetails      `bson:"guest_details,omitempty" json:"guest_details,omitempty"`
-	Date                  time.Time          `bson:"date" json:"date"`
-	Hour                  int                `bson:"hour" json:"hour"`
-	Minutes               int                `bson:"minutes" json:"minutes"`
-	FinalPrice            float64            `bson:"final_price" json:"final_price"`
-	Price                 float64            `bson:"price" json:"price"`
-	PaidAmount            float64            `bson:"paid_amount" json:"paid_amount"`
-	PendingAmount         float64            `bson:"pending_amount" json:"pending_amount"`
-	IsPartialPayment      bool               `bson:"is_partial_payment" json:"is_partial_payment"`
-	PartialPaymentPaid    bool               `bson:"partial_payment_paid" json:"partial_payment_paid"`
-	Status                BookingStatus      `bson:"status" json:"status"`
-	BookingCode           string             `bson:"booking_code,omitempty" json:"booking_code,omitempty"`
-	PaymentMethod         string             `bson:"payment_method,omitempty" json:"payment_method,omitempty"`
-	PaymentID             string             `bson:"payment_id,omitempty" json:"payment_id,omitempty"`
-	MPPreferenceID        string             `bson:"mp_preference_id,omitempty" json:"mp_preference_id,omitempty"`
-	MPPaymentID           string             `bson:"mp_payment_id,omitempty" json:"mp_payment_id,omitempty"`
-	PaymentInfo           *PaymentInfo       `bson:"payment_info,omitempty" json:"payment_info,omitempty"`
-	Refunds               []Refund           `bson:"refunds,omitempty" json:"refunds,omitempty"`
-	CancelledBy           string             `bson:"cancelled_by,omitempty" json:"cancelled_by,omitempty"`
-	CancellationReason    string             `bson:"cancellation_reason,omitempty" json:"cancellation_reason,omitempty"`
-	CustomerName          string             `bson:"customer_name,omitempty" json:"customer_name,omitempty"`
-	CustomerPhone         string             `bson:"customer_phone,omitempty" json:"customer_phone,omitempty"`
-	SeriesID              string             `bson:"series_id,omitempty" json:"series_id,omitempty"`
-	RecurringID           string             `bson:"recurring_id,omitempty" json:"recurring_id,omitempty"`
-	ModifiedBy            string              `bson:"modified_by,omitempty" json:"modified_by,omitempty"`
-	ModifiedAt            *time.Time          `bson:"modified_at,omitempty" json:"modified_at,omitempty"`
-	HoldID                *primitive.ObjectID `bson:"hold_id,omitempty" json:"hold_id,omitempty"`
-	LockExpiresAt         *time.Time          `bson:"lock_expires_at,omitempty" json:"lock_expires_at,omitempty"`
-	Version               int                 `bson:"version" json:"version"`
-	ExpiredAt             *time.Time          `bson:"expired_at,omitempty" json:"expired_at,omitempty"`
-	CreatedAt             time.Time           `bson:"created_at" json:"created_at"`
-	UpdatedAt             time.Time           `bson:"updated_at" json:"updated_at"`
+	ID                    primitive.ObjectID    `bson:"_id,omitempty" json:"id,omitempty"`
+	CourtID               primitive.ObjectID    `bson:"court_id" json:"court_id"`
+	SportCenterID         primitive.ObjectID    `bson:"sport_center_id" json:"sport_center_id"`
+	CourtName             string                `bson:"court_name,omitempty" json:"court_name,omitempty"`
+	SportCenterName       string                `bson:"sport_center_name,omitempty" json:"sport_center_name,omitempty"`
+	UserID                string                `bson:"user_id,omitempty" json:"user_id,omitempty"`
+	GuestDeviceID         string                `bson:"guest_device_id,omitempty" json:"guest_device_id,omitempty"`
+	GuestDetails          *GuestDetails         `bson:"guest_details,omitempty" json:"guest_details,omitempty"`
+	Date                  time.Time             `bson:"date" json:"date"`
+	Hour                  int                   `bson:"hour" json:"hour"`
+	Minutes               int                   `bson:"minutes" json:"minutes"`
+	FinalPrice            float64               `bson:"final_price" json:"final_price"`
+	Price                 float64               `bson:"price" json:"price"`
+	PaidAmount            float64               `bson:"paid_amount" json:"paid_amount"`
+	PendingAmount         float64               `bson:"pending_amount" json:"pending_amount"`
+	IsPartialPayment      bool                  `bson:"is_partial_payment" json:"is_partial_payment"`
+	PartialPaymentPaid    bool                  `bson:"partial_payment_paid" json:"partial_payment_paid"`
+	Status                BookingStatus         `bson:"status" json:"status"`
+	BookingCode           string                `bson:"booking_code,omitempty" json:"booking_code,omitempty"`
+	PaymentMethod         string                `bson:"payment_method,omitempty" json:"payment_method,omitempty"`
+	PaymentID             string                `bson:"payment_id,omitempty" json:"payment_id,omitempty"`
+	FintocPaymentID       string                `bson:"fintoc_payment_id,omitempty" json:"fintoc_payment_id,omitempty"`
+	FintocPaymentIntentID string                `bson:"fintoc_payment_intent_id,omitempty" json:"fintoc_payment_intent_id,omitempty"`
+	MPPreferenceID        string                `bson:"mp_preference_id,omitempty" json:"mp_preference_id,omitempty"`
+	MPPaymentID           string                `bson:"mp_payment_id,omitempty" json:"mp_payment_id,omitempty"`
+	PaymentInfo           *PaymentInfo          `bson:"payment_info,omitempty" json:"payment_info,omitempty"`
+	Refunds               []Refund              `bson:"refunds,omitempty" json:"refunds,omitempty"`
+	CancelledBy           string                `bson:"cancelled_by,omitempty" json:"cancelled_by,omitempty"`
+	CancellationReason    string                `bson:"cancellation_reason,omitempty" json:"cancellation_reason,omitempty"`
+	CustomerName          string                `bson:"customer_name,omitempty" json:"customer_name,omitempty"`
+	CustomerPhone         string                `bson:"customer_phone,omitempty" json:"customer_phone,omitempty"`
+	SeriesID              string                `bson:"series_id,omitempty" json:"series_id,omitempty"`
+	SeriesStatus          RecurringSeriesStatus `bson:"series_status,omitempty" json:"series_status,omitempty"`
+	SeriesFinishedAt      *time.Time            `bson:"series_finished_at,omitempty" json:"series_finished_at,omitempty"`
+	SeriesFinishedBy      string                `bson:"series_finished_by,omitempty" json:"series_finished_by,omitempty"`
+	SeriesFinishReason    string                `bson:"series_finish_reason,omitempty" json:"series_finish_reason,omitempty"`
+	RecurringID           string                `bson:"recurring_id,omitempty" json:"recurring_id,omitempty"`
+	ModifiedBy            string                `bson:"modified_by,omitempty" json:"modified_by,omitempty"`
+	ModifiedAt            *time.Time            `bson:"modified_at,omitempty" json:"modified_at,omitempty"`
+	HoldID                *primitive.ObjectID   `bson:"hold_id,omitempty" json:"hold_id,omitempty"`
+	LockExpiresAt         *time.Time            `bson:"lock_expires_at,omitempty" json:"lock_expires_at,omitempty"`
+	Version               int                   `bson:"version" json:"version"`
+	ExpiredAt             *time.Time            `bson:"expired_at,omitempty" json:"expired_at,omitempty"`
+	CreatedAt             time.Time             `bson:"created_at" json:"created_at"`
+	UpdatedAt             time.Time             `bson:"updated_at" json:"updated_at"`
 }
 
 type PaymentInfo struct {
@@ -243,27 +259,31 @@ type RecurringReservationStatus string
 
 const (
 	RecurringReservationStatusActive    RecurringReservationStatus = "active"
+	RecurringReservationStatusFinished  RecurringReservationStatus = "finished"
 	RecurringReservationStatusCancelled RecurringReservationStatus = "cancelled"
 )
 
 type RecurringReservation struct {
-	ID            primitive.ObjectID         `bson:"_id,omitempty" json:"id,omitempty"`
-	SportCenterID primitive.ObjectID         `bson:"sport_center_id" json:"sport_center_id"`
-	CourtID       primitive.ObjectID         `bson:"court_id" json:"court_id"`
-	CustomerName  string                     `bson:"customer_name" json:"customer_name"`
-	CustomerPhone string                     `bson:"customer_phone" json:"customer_phone"`
-	Hour          int                        `bson:"hour" json:"hour"`
-	Minutes      int                        `bson:"minutes" json:"minutes"`
-	Price         float64                    `bson:"price" json:"price"`
-	DayOfWeek     int                        `bson:"day_of_week" json:"day_of_week"`           // 0=domingo, 1=lunes, ..., 6=sábado
-	DayOfWeekName string                     `bson:"day_of_week_name" json:"day_of_week_name"` // "lunes", "martes", etc.
-	Notes         string                     `bson:"notes,omitempty" json:"notes,omitempty"`
-	Status        RecurringReservationStatus `bson:"status" json:"status"`
-	CancelledBy   string                     `bson:"cancelled_by,omitempty" json:"cancelled_by,omitempty"`
-	CancelReason  string                     `bson:"cancel_reason,omitempty" json:"cancel_reason,omitempty"`
-	CancelledDates []string                  `bson:"cancelled_dates,omitempty" json:"cancelled_dates,omitempty"`
-	CreatedAt     time.Time                  `bson:"created_at" json:"created_at"`
-	UpdatedAt     time.Time                  `bson:"updated_at" json:"updated_at"`
+	ID             primitive.ObjectID         `bson:"_id,omitempty" json:"id,omitempty"`
+	SportCenterID  primitive.ObjectID         `bson:"sport_center_id" json:"sport_center_id"`
+	CourtID        primitive.ObjectID         `bson:"court_id" json:"court_id"`
+	CustomerName   string                     `bson:"customer_name" json:"customer_name"`
+	CustomerPhone  string                     `bson:"customer_phone" json:"customer_phone"`
+	Hour           int                        `bson:"hour" json:"hour"`
+	Minutes        int                        `bson:"minutes" json:"minutes"`
+	Price          float64                    `bson:"price" json:"price"`
+	DayOfWeek      int                        `bson:"day_of_week" json:"day_of_week"`           // 0=domingo, 1=lunes, ..., 6=sábado
+	DayOfWeekName  string                     `bson:"day_of_week_name" json:"day_of_week_name"` // "lunes", "martes", etc.
+	Notes          string                     `bson:"notes,omitempty" json:"notes,omitempty"`
+	Status         RecurringReservationStatus `bson:"status" json:"status"`
+	CancelledBy    string                     `bson:"cancelled_by,omitempty" json:"cancelled_by,omitempty"`
+	CancelReason   string                     `bson:"cancel_reason,omitempty" json:"cancel_reason,omitempty"`
+	FinishedAt     *time.Time                 `bson:"finished_at,omitempty" json:"finished_at,omitempty"`
+	FinishedBy     string                     `bson:"finished_by,omitempty" json:"finished_by,omitempty"`
+	FinishReason   string                     `bson:"finish_reason,omitempty" json:"finish_reason,omitempty"`
+	CancelledDates []string                   `bson:"cancelled_dates,omitempty" json:"cancelled_dates,omitempty"`
+	CreatedAt      time.Time                  `bson:"created_at" json:"created_at"`
+	UpdatedAt      time.Time                  `bson:"updated_at" json:"updated_at"`
 }
 
 func (r *RecurringReservation) IsDateCancelled(date time.Time) bool {
@@ -285,7 +305,7 @@ type RecurringReservationResponse struct {
 	CustomerName    string                     `bson:"customer_name" json:"customer_name"`
 	CustomerPhone   string                     `bson:"customer_phone" json:"customer_phone"`
 	Hour            int                        `bson:"hour" json:"hour"`
-	Minutes        int                        `bson:"minutes" json:"minutes"`
+	Minutes         int                        `bson:"minutes" json:"minutes"`
 	DayOfWeek       int                        `bson:"day_of_week" json:"day_of_week"`
 	DayOfWeekName   string                     `bson:"day_of_week_name,omitempty" json:"day_of_week_name,omitempty"`
 	Price           float64                    `bson:"price" json:"price"`
@@ -293,6 +313,9 @@ type RecurringReservationResponse struct {
 	Status          RecurringReservationStatus `bson:"status" json:"status"`
 	CancelledBy     string                     `bson:"cancelled_by,omitempty" json:"cancelled_by,omitempty"`
 	CancelReason    string                     `bson:"cancel_reason,omitempty" json:"cancel_reason,omitempty"`
+	FinishedAt      *time.Time                 `bson:"finished_at,omitempty" json:"finished_at,omitempty"`
+	FinishedBy      string                     `bson:"finished_by,omitempty" json:"finished_by,omitempty"`
+	FinishReason    string                     `bson:"finish_reason,omitempty" json:"finish_reason,omitempty"`
 	CancelledDates  []string                   `bson:"cancelled_dates,omitempty" json:"cancelled_dates,omitempty"`
 	CreatedAt       time.Time                  `bson:"created_at" json:"created_at"`
 	UpdatedAt       time.Time                  `bson:"updated_at" json:"updated_at"`

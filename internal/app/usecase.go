@@ -48,6 +48,8 @@ type BookingRepository interface {
 	FindBySportCenterAndDate(ctx context.Context, centerID primitive.ObjectID, date time.Time) ([]domain.Booking, error)
 	FindConfirmedBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error)
 	FindConfirmedByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error)
+	HasConfirmedBookingsAfter(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) (bool, error)
+	FindConfirmedBookingsAfter(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error)
 	FindPendingBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error)
 	FindByUserID(ctx context.Context, userID string) ([]domain.Booking, error)
 	FindByUserIDPaged(ctx context.Context, userID string, page, limit int, isOld bool) ([]domain.BookingSummary, int64, error)
@@ -55,7 +57,9 @@ type BookingRepository interface {
 	FindByUserIDAndStatusPaged(ctx context.Context, userID string, cancelled domain.BookingStatus, page int, limit int) ([]domain.BookingSummary, int64, error)
 	Delete(ctx context.Context, id primitive.ObjectID) error
 	FindActiveSeriesByCourtHour(ctx context.Context, courtID primitive.ObjectID, hour int) ([]domain.Booking, error)
+	FindActiveSeriesByCourtHourAfter(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error)
 	DeleteBySeriesID(ctx context.Context, seriesID string) error
+	FinishSeries(ctx context.Context, seriesID string, centerIDs []primitive.ObjectID, finishedBy, reason string, now time.Time) (int64, error)
 	GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name string, code string, status string) (*domain.AdminDashboardData, error)
 	GetRecurringSeries(ctx context.Context, centerIDs []primitive.ObjectID, sportCenterID string) ([]domain.RecurringSeries, error)
 	UpdateLockExpiresAt(ctx context.Context, id primitive.ObjectID, expiresAt time.Time) error
@@ -73,10 +77,12 @@ type RecurringReservationRepository interface {
 	FindByCourtHourAndDay(ctx context.Context, courtID primitive.ObjectID, hour int, dayOfWeek int) (*domain.RecurringReservation, error)
 	FindActiveByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int) (*domain.RecurringReservation, error)
 	FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error)
+	FindAdminByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error)
 	FindByCenterIDAndDayOfWeek(ctx context.Context, centerID primitive.ObjectID, dayOfWeek int) ([]domain.RecurringReservation, error)
 	FindByCourtID(ctx context.Context, courtID primitive.ObjectID) ([]domain.RecurringReservation, error)
 	Update(ctx context.Context, reservation *domain.RecurringReservation) error
 	Cancel(ctx context.Context, id primitive.ObjectID, cancelledBy string, reason string) error
+	Finish(ctx context.Context, id primitive.ObjectID, finishedBy string, reason string, finishedAt time.Time) error
 	Delete(ctx context.Context, id primitive.ObjectID) error
 	AddCancelledDate(ctx context.Context, id primitive.ObjectID, date string) error
 }

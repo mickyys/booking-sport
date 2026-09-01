@@ -12,18 +12,20 @@ import (
 // ---------- Mock RecurringReservationRepository ----------
 
 type mockRecurringReservationRepo struct {
-	CreateFn                 func(ctx context.Context, reservation *domain.RecurringReservation) error
-	FindByIDFn               func(ctx context.Context, id primitive.ObjectID) (*domain.RecurringReservation, error)
-	FindByCourtHourAndDayFn  func(ctx context.Context, courtID primitive.ObjectID, hour int, dayOfWeek int) (*domain.RecurringReservation, error)
-	FindByCourtAndHourFn     func(ctx context.Context, courtID primitive.ObjectID, hour int) (*domain.RecurringReservation, error)
-	FindActiveByCourtAndHourFn func(ctx context.Context, courtID primitive.ObjectID, hour int) (*domain.RecurringReservation, error)
-	FindByCenterIDFn         func(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error)
+	CreateFn                     func(ctx context.Context, reservation *domain.RecurringReservation) error
+	FindByIDFn                   func(ctx context.Context, id primitive.ObjectID) (*domain.RecurringReservation, error)
+	FindByCourtHourAndDayFn      func(ctx context.Context, courtID primitive.ObjectID, hour int, dayOfWeek int) (*domain.RecurringReservation, error)
+	FindByCourtAndHourFn         func(ctx context.Context, courtID primitive.ObjectID, hour int) (*domain.RecurringReservation, error)
+	FindActiveByCourtAndHourFn   func(ctx context.Context, courtID primitive.ObjectID, hour int) (*domain.RecurringReservation, error)
+	FindByCenterIDFn             func(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error)
+	FindAdminByCenterIDFn        func(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error)
 	FindByCenterIDAndDayOfWeekFn func(ctx context.Context, centerID primitive.ObjectID, dayOfWeek int) ([]domain.RecurringReservation, error)
-	FindByCourtIDFn          func(ctx context.Context, courtID primitive.ObjectID) ([]domain.RecurringReservation, error)
-	UpdateFn                 func(ctx context.Context, reservation *domain.RecurringReservation) error
-	CancelFn                 func(ctx context.Context, id primitive.ObjectID, cancelledBy string, reason string) error
-	DeleteFn                 func(ctx context.Context, id primitive.ObjectID) error
-	AddCancelledDateFn       func(ctx context.Context, id primitive.ObjectID, date string) error
+	FindByCourtIDFn              func(ctx context.Context, courtID primitive.ObjectID) ([]domain.RecurringReservation, error)
+	UpdateFn                     func(ctx context.Context, reservation *domain.RecurringReservation) error
+	CancelFn                     func(ctx context.Context, id primitive.ObjectID, cancelledBy string, reason string) error
+	FinishFn                     func(ctx context.Context, id primitive.ObjectID, finishedBy string, reason string, finishedAt time.Time) error
+	DeleteFn                     func(ctx context.Context, id primitive.ObjectID) error
+	AddCancelledDateFn           func(ctx context.Context, id primitive.ObjectID, date string) error
 
 	CreateCalls int
 }
@@ -71,6 +73,13 @@ func (m *mockRecurringReservationRepo) FindByCenterID(ctx context.Context, cente
 	return nil, nil
 }
 
+func (m *mockRecurringReservationRepo) FindAdminByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error) {
+	if m.FindAdminByCenterIDFn != nil {
+		return m.FindAdminByCenterIDFn(ctx, centerID)
+	}
+	return nil, nil
+}
+
 func (m *mockRecurringReservationRepo) FindByCenterIDAndDayOfWeek(ctx context.Context, centerID primitive.ObjectID, dayOfWeek int) ([]domain.RecurringReservation, error) {
 	if m.FindByCenterIDAndDayOfWeekFn != nil {
 		return m.FindByCenterIDAndDayOfWeekFn(ctx, centerID, dayOfWeek)
@@ -95,6 +104,13 @@ func (m *mockRecurringReservationRepo) Update(ctx context.Context, reservation *
 func (m *mockRecurringReservationRepo) Cancel(ctx context.Context, id primitive.ObjectID, cancelledBy string, reason string) error {
 	if m.CancelFn != nil {
 		return m.CancelFn(ctx, id, cancelledBy, reason)
+	}
+	return nil
+}
+
+func (m *mockRecurringReservationRepo) Finish(ctx context.Context, id primitive.ObjectID, finishedBy string, reason string, finishedAt time.Time) error {
+	if m.FinishFn != nil {
+		return m.FinishFn(ctx, id, finishedBy, reason, finishedAt)
 	}
 	return nil
 }
@@ -170,7 +186,9 @@ var _ CourtRepository = (*mockCourtRepoForRecurring)(nil)
 
 // ---------- Mock SportCenterRepository (stub) ----------
 
-type mockCenterRepoForRecurring struct{}
+type mockCenterRepoForRecurring struct {
+	FindByUserIDFn func(ctx context.Context, userID string) ([]domain.SportCenter, error)
+}
 
 func (m *mockCenterRepoForRecurring) FindByID(ctx context.Context, id primitive.ObjectID) (*domain.SportCenter, error) {
 	return &domain.SportCenter{
@@ -184,6 +202,9 @@ func (m *mockCenterRepoForRecurring) FindBySlug(ctx context.Context, slug string
 }
 
 func (m *mockCenterRepoForRecurring) FindByUserID(ctx context.Context, userID string) ([]domain.SportCenter, error) {
+	if m.FindByUserIDFn != nil {
+		return m.FindByUserIDFn(ctx, userID)
+	}
 	return nil, nil
 }
 
@@ -212,6 +233,114 @@ func (m *mockCenterRepoForRecurring) GetCities(ctx context.Context) ([]string, e
 }
 
 var _ SportCenterRepository = (*mockCenterRepoForRecurring)(nil)
+
+func TestCancelRecurringReservationFinishesActiveReservation(t *testing.T) {
+	centerID := primitive.NewObjectID()
+	reservationID := primitive.NewObjectID()
+	var finishedBy string
+	var finishReason string
+	repo := &mockRecurringReservationRepo{
+		FindByIDFn: func(context.Context, primitive.ObjectID) (*domain.RecurringReservation, error) {
+			return &domain.RecurringReservation{
+				ID:            reservationID,
+				SportCenterID: centerID,
+				Status:        domain.RecurringReservationStatusActive,
+			}, nil
+		},
+		FinishFn: func(_ context.Context, _ primitive.ObjectID, userID, reason string, _ time.Time) error {
+			finishedBy = userID
+			finishReason = reason
+			return nil
+		},
+	}
+	uc := &BookingUseCase{
+		recurringReservationRepo: repo,
+		centerRepo: &mockCenterRepoForRecurring{FindByUserIDFn: func(context.Context, string) ([]domain.SportCenter, error) {
+			return []domain.SportCenter{{ID: centerID}}, nil
+		}},
+	}
+
+	err := uc.CancelRecurringReservation(context.Background(), reservationID, "auth0|admin", "Cierre solicitado")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if finishedBy != "auth0|admin" || finishReason != "Cierre solicitado" {
+		t.Fatalf("unexpected finish metadata: by=%q reason=%q", finishedBy, finishReason)
+	}
+}
+
+func TestCancelRecurringReservationIsIdempotentWhenFinished(t *testing.T) {
+	finishCalled := false
+	uc := &BookingUseCase{
+		recurringReservationRepo: &mockRecurringReservationRepo{
+			FindByIDFn: func(context.Context, primitive.ObjectID) (*domain.RecurringReservation, error) {
+				return &domain.RecurringReservation{Status: domain.RecurringReservationStatusFinished}, nil
+			},
+			FinishFn: func(context.Context, primitive.ObjectID, string, string, time.Time) error {
+				finishCalled = true
+				return nil
+			},
+		},
+	}
+
+	if err := uc.CancelRecurringReservation(context.Background(), primitive.NewObjectID(), "admin", ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if finishCalled {
+		t.Fatal("finished reservation must not be updated again")
+	}
+}
+
+func TestCancelRecurringReservationRejectsOtherCenter(t *testing.T) {
+	uc := &BookingUseCase{
+		recurringReservationRepo: &mockRecurringReservationRepo{
+			FindByIDFn: func(context.Context, primitive.ObjectID) (*domain.RecurringReservation, error) {
+				return &domain.RecurringReservation{
+					SportCenterID: primitive.NewObjectID(),
+					Status:        domain.RecurringReservationStatusActive,
+				}, nil
+			},
+		},
+		centerRepo: &mockCenterRepoForRecurring{FindByUserIDFn: func(context.Context, string) ([]domain.SportCenter, error) {
+			return []domain.SportCenter{{ID: primitive.NewObjectID()}}, nil
+		}},
+	}
+
+	if err := uc.CancelRecurringReservation(context.Background(), primitive.NewObjectID(), "admin", ""); err == nil {
+		t.Fatal("expected authorization error")
+	}
+}
+
+func TestDeleteSeriesFinishesOnlyInAdminCenters(t *testing.T) {
+	centerID := primitive.NewObjectID()
+	var receivedSeriesID string
+	var receivedCenterIDs []primitive.ObjectID
+	var receivedUserID string
+	bookingRepo := &mockBookingRepoForHold{
+		FinishSeriesFn: func(_ context.Context, seriesID string, centerIDs []primitive.ObjectID, userID, _ string, _ time.Time) (int64, error) {
+			receivedSeriesID = seriesID
+			receivedCenterIDs = centerIDs
+			receivedUserID = userID
+			return 2, nil
+		},
+	}
+	uc := &BookingUseCase{
+		repo: bookingRepo,
+		centerRepo: &mockCenterRepoForRecurring{FindByUserIDFn: func(context.Context, string) ([]domain.SportCenter, error) {
+			return []domain.SportCenter{{ID: centerID}}, nil
+		}},
+	}
+
+	if err := uc.DeleteSeries(context.Background(), "SERIE-123", "auth0|admin", "Fin anticipado"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if receivedSeriesID != "SERIE-123" || receivedUserID != "auth0|admin" {
+		t.Fatalf("unexpected finish request: series=%q user=%q", receivedSeriesID, receivedUserID)
+	}
+	if len(receivedCenterIDs) != 1 || receivedCenterIDs[0] != centerID {
+		t.Fatalf("unexpected authorized centers: %v", receivedCenterIDs)
+	}
+}
 
 // ---------- Tests ----------
 
@@ -242,15 +371,22 @@ func TestCreateRecurringReservation_Conflict_ActiveWithCancelledDates(t *testing
 		recurringReservationRepo: recurringRepo,
 		courtRepo:                courtRepo,
 		centerRepo:               centerRepo,
+		repo: &mockBookingRepoForHold{
+			FindConfirmedBookingsAfterFn: func(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error) {
+				return []domain.Booking{
+					{ID: newObjectID(), CourtID: courtID, Hour: hour, Date: time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC), Status: domain.BookingStatusConfirmed},
+				}, nil
+			},
+		},
 	}
 
 	date := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC) // martes
 	reservation := &domain.RecurringReservation{
-		CourtID:      courtID,
-		Hour:         hour,
-		CustomerName: "Test User",
+		CourtID:       courtID,
+		Hour:          hour,
+		CustomerName:  "Test User",
 		CustomerPhone: "123456789",
-		Price:        30000,
+		Price:         30000,
 	}
 
 	err := uc.CreateRecurringReservation(context.Background(), reservation, date)
@@ -292,15 +428,22 @@ func TestCreateRecurringReservation_Conflict_ActiveWithoutCancelledDates(t *test
 		recurringReservationRepo: recurringRepo,
 		courtRepo:                courtRepo,
 		centerRepo:               centerRepo,
+		repo: &mockBookingRepoForHold{
+			FindConfirmedBookingsAfterFn: func(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error) {
+				return []domain.Booking{
+					{ID: newObjectID(), CourtID: courtID, Hour: hour, Date: time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC), Status: domain.BookingStatusConfirmed},
+				}, nil
+			},
+		},
 	}
 
 	date := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
 	reservation := &domain.RecurringReservation{
-		CourtID:      courtID,
-		Hour:         hour,
-		CustomerName: "Test User",
+		CourtID:       courtID,
+		Hour:          hour,
+		CustomerName:  "Test User",
 		CustomerPhone: "123456789",
-		Price:        30000,
+		Price:         30000,
 	}
 
 	err := uc.CreateRecurringReservation(context.Background(), reservation, date)
@@ -333,11 +476,11 @@ func TestCreateRecurringReservation_NoConflict_CancelledRecurring(t *testing.T) 
 
 	date := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
 	reservation := &domain.RecurringReservation{
-		CourtID:      courtID,
-		Hour:         hour,
-		CustomerName: "Test User",
+		CourtID:       courtID,
+		Hour:          hour,
+		CustomerName:  "Test User",
 		CustomerPhone: "123456789",
-		Price:        30000,
+		Price:         30000,
 	}
 
 	err := uc.CreateRecurringReservation(context.Background(), reservation, date)
@@ -372,11 +515,11 @@ func TestCreateRecurringReservation_NoConflict_NoExisting(t *testing.T) {
 
 	date := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
 	reservation := &domain.RecurringReservation{
-		CourtID:      courtID,
-		Hour:         hour,
-		CustomerName: "Test User",
+		CourtID:       courtID,
+		Hour:          hour,
+		CustomerName:  "Test User",
 		CustomerPhone: "123456789",
-		Price:        30000,
+		Price:         30000,
 	}
 
 	err := uc.CreateRecurringReservation(context.Background(), reservation, date)
@@ -412,11 +555,11 @@ func TestCreateRecurringReservation_NoConflict_DifferentDay(t *testing.T) {
 	// Miércoles (dayOfWeek=3) mientras que la existente es martes (dayOfWeek=2)
 	date := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	reservation := &domain.RecurringReservation{
-		CourtID:      courtID,
-		Hour:         hour,
-		CustomerName: "Test User",
+		CourtID:       courtID,
+		Hour:          hour,
+		CustomerName:  "Test User",
 		CustomerPhone: "123456789",
-		Price:        30000,
+		Price:         30000,
 	}
 
 	err := uc.CreateRecurringReservation(context.Background(), reservation, date)
@@ -451,11 +594,11 @@ func TestCreateRecurringReservation_NoConflict_DifferentHour(t *testing.T) {
 	// 11:00, mientras que la existente es a las 10:00
 	date := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
 	reservation := &domain.RecurringReservation{
-		CourtID:      courtID,
-		Hour:         11,
-		CustomerName: "Test User",
+		CourtID:       courtID,
+		Hour:          11,
+		CustomerName:  "Test User",
 		CustomerPhone: "123456789",
-		Price:        30000,
+		Price:         30000,
 	}
 
 	err := uc.CreateRecurringReservation(context.Background(), reservation, date)
