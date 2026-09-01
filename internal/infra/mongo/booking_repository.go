@@ -169,9 +169,76 @@ func (r *BookingRepository) FindByID(ctx context.Context, id primitive.ObjectID)
 }
 
 func (r *BookingRepository) DeleteBySeriesID(ctx context.Context, seriesID string) error {
-	filter := bson.M{"series_id": seriesID}
-	_, err := r.collection.DeleteMany(ctx, filter)
+	_, err := r.FinishSeries(ctx, seriesID, nil, "admin", "Serie finalizada por el administrador", time.Now())
 	return err
+}
+
+func (r *BookingRepository) FinishSeries(ctx context.Context, seriesID string, centerIDs []primitive.ObjectID, finishedBy, reason string, now time.Time) (int64, error) {
+	filter := bson.M{"series_id": seriesID}
+	if len(centerIDs) > 0 {
+		filter["sport_center_id"] = bson.M{"$in": centerIDs}
+	}
+
+	var existing domain.Booking
+	if err := r.collection.FindOne(ctx, filter).Decode(&existing); err != nil {
+		return 0, err
+	}
+	if existing.SeriesStatus == domain.RecurringSeriesStatusFinished {
+		return 0, nil
+	}
+
+	loc, err := time.LoadLocation("America/Santiago")
+	if err != nil {
+		return 0, err
+	}
+	nowCL := now.In(loc)
+	futureExpr := bson.M{"$gt": []interface{}{
+		bson.M{"$dateFromParts": bson.M{
+			"year":     bson.M{"$year": bson.M{"date": "$date", "timezone": "America/Santiago"}},
+			"month":    bson.M{"$month": bson.M{"date": "$date", "timezone": "America/Santiago"}},
+			"day":      bson.M{"$dayOfMonth": bson.M{"date": "$date", "timezone": "America/Santiago"}},
+			"hour":     "$hour",
+			"minute":   bson.M{"$ifNull": []interface{}{"$minutes", 0}},
+			"timezone": "America/Santiago",
+		}},
+		nowCL,
+	}}
+	bookingFilter := bson.M{
+		"series_id": seriesID,
+		"status": bson.M{"$in": []string{
+			string(domain.BookingStatusConfirmed),
+			string(domain.BookingStatusPending),
+		}},
+		"$expr": futureExpr,
+	}
+	if len(centerIDs) > 0 {
+		bookingFilter["sport_center_id"] = bson.M{"$in": centerIDs}
+	}
+	bookingUpdate := bson.M{"$set": bson.M{
+		"status":              string(domain.BookingStatusCancelled),
+		"cancelled_by":        finishedBy,
+		"cancellation_reason": reason,
+		"updated_at":          time.Now(),
+	}}
+	result, err := r.collection.UpdateMany(ctx, bookingFilter, bookingUpdate)
+	if err != nil {
+		return 0, err
+	}
+
+	finishFilter := bson.M{"series_id": seriesID}
+	if len(centerIDs) > 0 {
+		finishFilter["sport_center_id"] = bson.M{"$in": centerIDs}
+	}
+	finishUpdate := bson.M{"$set": bson.M{
+		"series_status":        string(domain.RecurringSeriesStatusFinished),
+		"series_finished_at":   nowCL,
+		"series_finished_by":   finishedBy,
+		"series_finish_reason": reason,
+	}}
+	if _, err := r.collection.UpdateMany(ctx, finishFilter, finishUpdate); err != nil {
+		return 0, err
+	}
+	return result.ModifiedCount, nil
 }
 
 func (r *BookingRepository) FindByPreferenceID(ctx context.Context, preferenceID string) (*domain.Booking, error) {
@@ -562,6 +629,17 @@ func (r *BookingRepository) GetRecurringSeries(ctx context.Context, centerIDs []
 		match["sport_center_id"] = bson.M{"$in": centerIDs}
 	}
 
+	loc, _ := time.LoadLocation("America/Santiago")
+	nowCL := time.Now().In(loc)
+	bookingStartExpr := bson.M{"$dateFromParts": bson.M{
+		"year":     bson.M{"$year": bson.M{"date": "$date", "timezone": "America/Santiago"}},
+		"month":    bson.M{"$month": bson.M{"date": "$date", "timezone": "America/Santiago"}},
+		"day":      bson.M{"$dayOfMonth": bson.M{"date": "$date", "timezone": "America/Santiago"}},
+		"hour":     "$hour",
+		"minute":   bson.M{"$ifNull": []interface{}{"$minutes", 0}},
+		"timezone": "America/Santiago",
+	}}
+
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: match}},
 		{{Key: "$lookup", Value: bson.M{
@@ -575,30 +653,45 @@ func (r *BookingRepository) GetRecurringSeries(ctx context.Context, centerIDs []
 			"preserveNullAndEmptyArrays": true,
 		}}},
 		{{Key: "$group", Value: bson.M{
-			"_id":             "$series_id",
-			"customer_name":   bson.M{"$first": "$customer_name"},
-			"customer_phone":  bson.M{"$first": "$customer_phone"},
-			"court_name":      bson.M{"$first": "$court_info.name"},
-			"court_id":        bson.M{"$first": "$court_id"},
-			"sport_center_id": bson.M{"$first": "$sport_center_id"},
-			"hour":            bson.M{"$first": "$hour"},
-			"start_date":      bson.M{"$min": "$date"},
-			"end_date":        bson.M{"$max": "$date"},
-			"bookings_count":  bson.M{"$sum": 1},
-			"price":           bson.M{"$first": "$price"},
+			"_id":                "$series_id",
+			"customer_name":      bson.M{"$first": "$customer_name"},
+			"customer_phone":     bson.M{"$first": "$customer_phone"},
+			"court_name":         bson.M{"$first": "$court_info.name"},
+			"court_id":           bson.M{"$first": "$court_id"},
+			"sport_center_id":    bson.M{"$first": "$sport_center_id"},
+			"hour":               bson.M{"$first": "$hour"},
+			"start_date":         bson.M{"$min": "$date"},
+			"end_date":           bson.M{"$max": "$date"},
+			"finished_at":        bson.M{"$max": "$series_finished_at"},
+			"bookings_count":     bson.M{"$sum": 1},
+			"has_future_active":  bson.M{"$max": bson.M{"$cond": []interface{}{bson.M{"$and": []interface{}{bson.M{"$in": []interface{}{"$status", []string{"confirmed", "pending"}}}, bson.M{"$gt": []interface{}{bookingStartExpr, nowCL}}}}, 1, 0}}},
+			"marked_finished":    bson.M{"$max": bson.M{"$cond": []interface{}{bson.M{"$eq": []interface{}{"$series_status", "finished"}}, 1, 0}}},
+			"confirmed_bookings": bson.M{"$sum": bson.M{"$cond": []interface{}{bson.M{"$eq": []interface{}{"$status", "confirmed"}}, 1, 0}}},
+			"price":              bson.M{"$first": "$price"},
 		}}},
 		{{Key: "$addFields", Value: bson.M{
 			"dayOfWeek": bson.M{
 				"$cond": []interface{}{
 					bson.M{"$eq": []interface{}{bson.M{"$dayOfWeek": "$start_date"}, 1}},
 					7, // Domingo -> 7
-					bson.M{"$dayOfWeek": "$start_date"}, // Lunes(2) a Sábado(7) -> No, MongoDB dayOfWeek es 1=Domingo, 2=Lunes...
+					bson.M{"$dayOfWeek": "$start_date"},
 				},
 			},
+			"total_bookings": "$bookings_count",
+			"status": bson.M{"$cond": []interface{}{
+				bson.M{"$or": []interface{}{bson.M{"$eq": []interface{}{"$marked_finished", 1}}, bson.M{"$eq": []interface{}{"$has_future_active", 0}}}},
+				"finished",
+				"active",
+			}},
+			"end_date": bson.M{"$cond": []interface{}{
+				bson.M{"$ne": []interface{}{"$finished_at", nil}},
+				"$finished_at",
+				"$end_date",
+			}},
 		}}},
 		{{Key: "$sort", Value: bson.M{
 			"dayOfWeek": 1,
-			"hour":       1,
+			"hour":      1,
 		}}},
 	}
 
@@ -698,14 +791,14 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 			"venue_revenue": bson.M{"$sum": bson.M{
 				"$cond": []interface{}{
 					bson.M{"$or": []interface{}{
-					bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "presential", "internal"}}},
-					bson.M{"$eq": []interface{}{"$partial_payment_paid", true}},
-				}},
-				bson.M{"$cond": []interface{}{
-					bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "presential", "internal"}}},
-					"$price",
-					"$pending_amount",
-				}},
+						bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "presential", "internal"}}},
+						bson.M{"$eq": []interface{}{"$partial_payment_paid", true}},
+					}},
+					bson.M{"$cond": []interface{}{
+						bson.M{"$in": []interface{}{"$payment_method", []string{"venue", "presential", "internal"}}},
+						"$price",
+						"$pending_amount",
+					}},
 					0,
 				},
 			}},

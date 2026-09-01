@@ -261,8 +261,23 @@ func (uc *BookingUseCase) GetUserCancelledBookingsPaged(ctx context.Context, use
 	return uc.repo.FindByUserIDAndStatusPaged(ctx, userID, domain.BookingStatusCancelled, page, limit)
 }
 
-func (uc *BookingUseCase) DeleteSeries(ctx context.Context, seriesID string) error {
-	return uc.repo.DeleteBySeriesID(ctx, seriesID)
+func (uc *BookingUseCase) DeleteSeries(ctx context.Context, seriesID, userID, reason string) error {
+	centers, err := uc.centerRepo.FindByUserID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	centerIDs := make([]primitive.ObjectID, 0, len(centers))
+	for _, center := range centers {
+		centerIDs = append(centerIDs, center.ID)
+	}
+	if len(centerIDs) == 0 {
+		return fmt.Errorf("series not found")
+	}
+	if reason == "" {
+		reason = "Serie finalizada por el administrador"
+	}
+	_, err = uc.repo.FinishSeries(ctx, seriesID, centerIDs, userID, reason, time.Now())
+	return err
 }
 
 func (uc *BookingUseCase) GetRecurringSeries(ctx context.Context, userID string, sportCenterID string) ([]domain.RecurringSeries, error) {
@@ -2403,46 +2418,46 @@ func (uc *BookingUseCase) GetRecurringReservationsByCenter(ctx context.Context, 
 		return []domain.RecurringReservationResponse{}, nil
 	}
 
-	centerID := centers[0].ID
+	results := make([]domain.RecurringReservationResponse, 0)
+	for _, center := range centers {
+		reservations, err := uc.recurringReservationRepo.FindAdminByCenterID(ctx, center.ID)
+		if err != nil {
+			return nil, err
+		}
+		courts, err := uc.courtRepo.FindByCenterID(ctx, center.ID)
+		if err != nil {
+			return nil, err
+		}
+		courtMap := make(map[primitive.ObjectID]string)
+		for _, court := range courts {
+			courtMap[court.ID] = court.Name
+		}
 
-	reservations, err := uc.recurringReservationRepo.FindByCenterID(ctx, centerID)
-	if err != nil {
-		return nil, err
-	}
-
-	court, err := uc.courtRepo.FindByCenterID(ctx, centerID)
-	if err != nil {
-		return nil, err
-	}
-	courtMap := make(map[primitive.ObjectID]string)
-	for _, c := range court {
-		courtMap[c.ID] = c.Name
-	}
-
-	centerName := centers[0].Name
-
-	results := make([]domain.RecurringReservationResponse, 0, len(reservations))
-	for _, r := range reservations {
-		results = append(results, domain.RecurringReservationResponse{
-			ID:              r.ID,
-			SportCenterID:   r.SportCenterID,
-			SportCenterName: centerName,
-			CourtID:         r.CourtID,
-			CourtName:       courtMap[r.CourtID],
-			CustomerName:    r.CustomerName,
-			CustomerPhone:   r.CustomerPhone,
-			Hour:            r.Hour,
-			Minutes:         r.Minutes,
-			DayOfWeek:       r.DayOfWeek,
-			DayOfWeekName:   r.DayOfWeekName,
-			Price:           r.Price,
-			Notes:           r.Notes,
-			Status:          r.Status,
-			CancelledBy:     r.CancelledBy,
-			CancelReason:    r.CancelReason,
-			CreatedAt:       r.CreatedAt,
-			UpdatedAt:       r.UpdatedAt,
-		})
+		for _, r := range reservations {
+			results = append(results, domain.RecurringReservationResponse{
+				ID:              r.ID,
+				SportCenterID:   r.SportCenterID,
+				SportCenterName: center.Name,
+				CourtID:         r.CourtID,
+				CourtName:       courtMap[r.CourtID],
+				CustomerName:    r.CustomerName,
+				CustomerPhone:   r.CustomerPhone,
+				Hour:            r.Hour,
+				Minutes:         r.Minutes,
+				DayOfWeek:       r.DayOfWeek,
+				DayOfWeekName:   r.DayOfWeekName,
+				Price:           r.Price,
+				Notes:           r.Notes,
+				Status:          r.Status,
+				CancelledBy:     r.CancelledBy,
+				CancelReason:    r.CancelReason,
+				FinishedAt:      r.FinishedAt,
+				FinishedBy:      r.FinishedBy,
+				FinishReason:    r.FinishReason,
+				CreatedAt:       r.CreatedAt,
+				UpdatedAt:       r.UpdatedAt,
+			})
+		}
 	}
 
 	return results, nil
@@ -2499,17 +2514,36 @@ func (uc *BookingUseCase) GetRecurringReservationsByCourt(ctx context.Context, c
 	return results, nil
 }
 
-func (uc *BookingUseCase) CancelRecurringReservation(ctx context.Context, id primitive.ObjectID, cancelledBy string, reason string) error {
+func (uc *BookingUseCase) CancelRecurringReservation(ctx context.Context, id primitive.ObjectID, userID string, reason string) error {
 	reservation, err := uc.recurringReservationRepo.FindByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("recurring reservation not found: %w", err)
 	}
 
-	if reservation.Status == domain.RecurringReservationStatusCancelled {
-		return fmt.Errorf("recurring reservation is already cancelled")
+	if reservation.Status == domain.RecurringReservationStatusFinished {
+		return nil
 	}
-
-	return uc.recurringReservationRepo.Cancel(ctx, id, cancelledBy, reason)
+	if reservation.Status != domain.RecurringReservationStatusActive {
+		return fmt.Errorf("recurring reservation is not active")
+	}
+	centers, err := uc.centerRepo.FindByUserID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	authorized := false
+	for _, center := range centers {
+		if center.ID == reservation.SportCenterID {
+			authorized = true
+			break
+		}
+	}
+	if !authorized {
+		return fmt.Errorf("recurring reservation not found")
+	}
+	if reason == "" {
+		reason = "Reserva indefinida finalizada por el administrador"
+	}
+	return uc.recurringReservationRepo.Finish(ctx, id, userID, reason, time.Now())
 }
 
 func (uc *BookingUseCase) CancelRecurringDate(ctx context.Context, id primitive.ObjectID, date string) error {

@@ -64,6 +64,7 @@ type BookingRepository interface {
 	FindActiveSeriesByCourtHour(ctx context.Context, courtID primitive.ObjectID, hour int) ([]domain.Booking, error)
 	FindActiveSeriesByCourtHourAfter(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error)
 	DeleteBySeriesID(ctx context.Context, seriesID string) error
+	FinishSeries(ctx context.Context, seriesID string, centerIDs []primitive.ObjectID, finishedBy, reason string, now time.Time) (int64, error)
 	GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name string, code string, status string) (*domain.AdminDashboardData, error)
 	GetRecurringSeries(ctx context.Context, centerIDs []primitive.ObjectID, sportCenterID string) ([]domain.RecurringSeries, error)
 	UpdateLockExpiresAt(ctx context.Context, id primitive.ObjectID, expiresAt time.Time) error
@@ -81,10 +82,12 @@ type RecurringReservationRepository interface {
 	FindByCourtHourAndDay(ctx context.Context, courtID primitive.ObjectID, hour int, dayOfWeek int) (*domain.RecurringReservation, error)
 	FindActiveByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int) (*domain.RecurringReservation, error)
 	FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error)
+	FindAdminByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error)
 	FindByCenterIDAndDayOfWeek(ctx context.Context, centerID primitive.ObjectID, dayOfWeek int) ([]domain.RecurringReservation, error)
 	FindByCourtID(ctx context.Context, courtID primitive.ObjectID) ([]domain.RecurringReservation, error)
 	Update(ctx context.Context, reservation *domain.RecurringReservation) error
 	Cancel(ctx context.Context, id primitive.ObjectID, cancelledBy string, reason string) error
+	Finish(ctx context.Context, id primitive.ObjectID, finishedBy string, reason string, finishedAt time.Time) error
 	Delete(ctx context.Context, id primitive.ObjectID) error
 	AddCancelledDate(ctx context.Context, id primitive.ObjectID, date string) error
 }

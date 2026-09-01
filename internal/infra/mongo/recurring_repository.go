@@ -91,6 +91,26 @@ func (r *RecurringReservationRepository) FindByCenterID(ctx context.Context, cen
 	return reservations, nil
 }
 
+func (r *RecurringReservationRepository) FindAdminByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error) {
+	cursor, err := r.collection.Find(ctx, bson.M{
+		"sport_center_id": centerID,
+		"status": bson.M{"$in": []domain.RecurringReservationStatus{
+			domain.RecurringReservationStatusActive,
+			domain.RecurringReservationStatusFinished,
+		}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var reservations []domain.RecurringReservation
+	if err := cursor.All(ctx, &reservations); err != nil {
+		return nil, err
+	}
+	return reservations, nil
+}
+
 func (r *RecurringReservationRepository) FindByCourtID(ctx context.Context, courtID primitive.ObjectID) ([]domain.RecurringReservation, error) {
 	cursor, err := r.collection.Find(ctx, bson.M{
 		"court_id": courtID,
@@ -111,8 +131,8 @@ func (r *RecurringReservationRepository) FindByCourtID(ctx context.Context, cour
 func (r *RecurringReservationRepository) FindByCenterIDAndDayOfWeek(ctx context.Context, centerID primitive.ObjectID, dayOfWeek int) ([]domain.RecurringReservation, error) {
 	cursor, err := r.collection.Find(ctx, bson.M{
 		"sport_center_id": centerID,
-		"day_of_week":   dayOfWeek,
-		"status":        domain.RecurringReservationStatusActive,
+		"day_of_week":     dayOfWeek,
+		"status":          domain.RecurringReservationStatusActive,
 	})
 	if err != nil {
 		return nil, err
@@ -139,6 +159,22 @@ func (r *RecurringReservationRepository) Cancel(ctx context.Context, id primitiv
 		"status":        domain.RecurringReservationStatusCancelled,
 		"cancelled_by":  cancelledBy,
 		"cancel_reason": reason,
+		"updated_at":    time.Now(),
+	}}
+	_, err := r.collection.UpdateOne(ctx, filter, update)
+	return err
+}
+
+func (r *RecurringReservationRepository) Finish(ctx context.Context, id primitive.ObjectID, finishedBy string, reason string, finishedAt time.Time) error {
+	filter := bson.M{
+		"_id":    id,
+		"status": domain.RecurringReservationStatusActive,
+	}
+	update := bson.M{"$set": bson.M{
+		"status":        domain.RecurringReservationStatusFinished,
+		"finished_at":   finishedAt,
+		"finished_by":   finishedBy,
+		"finish_reason": reason,
 		"updated_at":    time.Now(),
 	}}
 	_, err := r.collection.UpdateOne(ctx, filter, update)
