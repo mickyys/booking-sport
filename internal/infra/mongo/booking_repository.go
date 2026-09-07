@@ -77,7 +77,11 @@ func (r *BookingRepository) FindByUserIDAndStatusPaged(ctx context.Context, user
 			"id":                   "$_id",
 			"sport_center_name":    1,
 			"date":                 1,
+			"local_date":           1,
+			"timezone":             1,
+			"scheduled_at":         1,
 			"hour":                 1,
+			"minutes":              1,
 			"court_name":           1,
 			"status":               1,
 			"price":                1,
@@ -106,6 +110,9 @@ func (r *BookingRepository) FindByUserIDAndStatusPaged(ctx context.Context, user
 }
 
 func (r *BookingRepository) Create(ctx context.Context, booking *domain.Booking) error {
+	if err := booking.NormalizeSchedule(); err != nil {
+		return err
+	}
 	booking.Version = 1
 	res, err := r.collection.InsertOne(ctx, booking)
 	if err != nil {
@@ -128,17 +135,23 @@ func (r *BookingRepository) Create(ctx context.Context, booking *domain.Booking)
 
 func (r *BookingRepository) expireStalePending(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) {
 	startDate, endDate := domain.SantiagoDayBounds(date)
+	localDate := domain.SantiagoCivilDate(date).Format("2006-01-02")
 
 	now := time.Now()
 	r.collection.UpdateOne(ctx,
 		bson.M{
 			"court_id": courtID,
-			"date":     bson.M{"$gte": startDate, "$lt": endDate},
 			"hour":     hour,
 			"status":   "pending",
-			"$or": []bson.M{
-				{"lock_expires_at": bson.M{"$lt": now}},
-				{"lock_expires_at": bson.M{"$exists": false}},
+			"$and": []bson.M{
+				{"$or": []bson.M{
+					{"local_date": localDate},
+					{"local_date": bson.M{"$exists": false}, "date": bson.M{"$gte": startDate, "$lt": endDate}},
+				}},
+				{"$or": []bson.M{
+					{"lock_expires_at": bson.M{"$lt": now}},
+					{"lock_expires_at": bson.M{"$exists": false}},
+				}},
 			},
 		},
 		bson.M{"$set": bson.M{
@@ -150,6 +163,9 @@ func (r *BookingRepository) expireStalePending(ctx context.Context, courtID prim
 }
 
 func (r *BookingRepository) Update(ctx context.Context, booking *domain.Booking) error {
+	if err := booking.NormalizeSchedule(); err != nil {
+		return err
+	}
 	filter := bson.M{"_id": booking.ID}
 	update := bson.M{"$set": booking}
 	_, err := r.collection.UpdateOne(ctx, filter, update)
@@ -303,12 +319,13 @@ func (r *BookingRepository) UpdateMPPaymentID(ctx context.Context, id primitive.
 func (r *BookingRepository) FindByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error) {
 	// Normalizar fecha al inicio del día en zona horaria de Chile
 	startDate, endDate := domain.SantiagoDayBounds(date)
+	localDate := domain.SantiagoCivilDate(date).Format("2006-01-02")
 
 	cursor, err := r.collection.Find(ctx, bson.M{
 		"court_id": courtID,
-		"date": bson.M{
-			"$gte": startDate,
-			"$lt":  endDate,
+		"$or": []bson.M{
+			{"local_date": localDate},
+			{"local_date": bson.M{"$exists": false}, "date": bson.M{"$gte": startDate, "$lt": endDate}},
 		},
 	})
 	if err != nil {
@@ -326,19 +343,17 @@ func (r *BookingRepository) FindByCourtAndDate(ctx context.Context, courtID prim
 func (r *BookingRepository) FindBySportCenterAndDate(ctx context.Context, centerID primitive.ObjectID, date time.Time) ([]domain.Booking, error) {
 	// Normalizar fecha al inicio y fin del día en zona horaria de Chile
 	startDate, endDate := domain.SantiagoDayBounds(date)
-	dayOfWeek := int(domain.SantiagoCivilDate(date).Weekday())
+	civilDate := domain.SantiagoCivilDate(date)
+	localDate := civilDate.Format("2006-01-02")
+	dayOfWeek := int(civilDate.Weekday())
 
 	log.Printf("🔍 FindBySportCenterAndDate: centerID=%s, date=%s, startDate=%s, endDate=%s, dayOfWeek=%d", centerID, date, startDate, endDate, dayOfWeek)
 
 	cursor, err := r.collection.Find(ctx, bson.M{
 		"sport_center_id": centerID,
 		"$or": []bson.M{
-			{
-				"date": bson.M{
-					"$gte": startDate,
-					"$lt":  endDate,
-				},
-			},
+			{"local_date": localDate},
+			{"local_date": bson.M{"$exists": false}, "date": bson.M{"$gte": startDate, "$lt": endDate}},
 			{
 				"day_of_week": dayOfWeek,
 			},
@@ -665,7 +680,6 @@ func (r *BookingRepository) GetRecurringSeries(ctx context.Context, centerIDs []
 func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name, code, status string) (*domain.AdminDashboardData, error) {
 	loc := domain.GetSantiagoLocation()
 	now := time.Now().In(loc)
-	todayStart, todayEnd := domain.SantiagoDayBounds(now)
 
 	// Parse date range for global filters
 	var dateFilter bson.M
@@ -675,15 +689,13 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 			startT, err1 := domain.ParseSantiagoDate(parts[0])
 			endT, err2 := domain.ParseSantiagoDate(parts[1])
 			if err1 == nil && err2 == nil {
-				start, _ := domain.SantiagoDayBounds(startT)
-				_, end := domain.SantiagoDayBounds(endT)
-				dateFilter = bson.M{"$gte": start, "$lt": end}
+				dateFilter = buildDateRangeFilter(startT, endT)
 			}
 		} else {
 			t, err := domain.ParseSantiagoDate(dateStr)
 			if err == nil {
-				start, end := domain.SantiagoDayBounds(t)
-				dateFilter = bson.M{"$gte": start, "$lt": end}
+				endT, _ := domain.ParseSantiagoDate(t.AddDate(0, 0, 1).Format("2006-01-02"))
+				dateFilter = buildDateRangeFilter(t, endT)
 			}
 		}
 	}
@@ -691,10 +703,11 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 	// Get stats
 
 	// 1. Today's Bookings Count
+	startT, _ := domain.ParseSantiagoDate(now.Format("2006-01-02"))
+	endT, _ := domain.ParseSantiagoDate(now.AddDate(0, 0, 1).Format("2006-01-02"))
 	todayFilter := bson.M{
 		"sport_center_id": bson.M{"$in": sportCenterIDs},
-		"date":            bson.M{"$gte": todayStart, "$lt": todayEnd},
-		"status":          domain.BookingStatusConfirmed,
+		"$and":            []bson.M{buildDateRangeFilter(startT, endT), {"status": domain.BookingStatusConfirmed}},
 	}
 	todayCount, _ := r.collection.CountDocuments(ctx, todayFilter)
 
@@ -764,12 +777,18 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 	todayRevenue, todayOnlineRevenue, todayVenueRevenue := getRevenueValues(todayRevenueResult, "total_revenue", "online_revenue", "venue_revenue")
 
 	// 3. Total Revenue (Confirmed)
-	totalRevenueMatch := bson.M{
-		"sport_center_id": bson.M{"$in": sportCenterIDs},
-		"status":          domain.BookingStatusConfirmed,
-	}
+	totalRevenueMatch := bson.M{}
 	if dateFilter != nil {
-		totalRevenueMatch["date"] = dateFilter
+		totalRevenueMatch = bson.M{"$and": []bson.M{
+			{"sport_center_id": bson.M{"$in": sportCenterIDs}},
+			{"status": domain.BookingStatusConfirmed},
+			dateFilter,
+		}}
+	} else {
+		totalRevenueMatch = bson.M{
+			"sport_center_id": bson.M{"$in": sportCenterIDs},
+			"status":          domain.BookingStatusConfirmed,
+		}
 	}
 
 	pipelineTotalRevenue := mongo.Pipeline{
@@ -990,13 +1009,14 @@ func (r *BookingRepository) UndoBalancePayment(ctx context.Context, id primitive
 
 func (r *BookingRepository) FindConfirmedBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 	startDate, endDate := domain.SantiagoDayBounds(date)
+	localDate := domain.SantiagoCivilDate(date).Format("2006-01-02")
 
 	var booking domain.Booking
 	err := r.collection.FindOne(ctx, bson.M{
 		"court_id": courtID,
-		"date": bson.M{
-			"$gte": startDate,
-			"$lt":  endDate,
+		"$or": []bson.M{
+			{"local_date": localDate},
+			{"local_date": bson.M{"$exists": false}, "date": bson.M{"$gte": startDate, "$lt": endDate}},
 		},
 		"hour":    hour,
 		"minutes": minutes,
@@ -1013,12 +1033,13 @@ func (r *BookingRepository) FindConfirmedBySlot(ctx context.Context, courtID pri
 
 func (r *BookingRepository) FindConfirmedByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error) {
 	startDate, endDate := domain.SantiagoDayBounds(date)
+	localDate := domain.SantiagoCivilDate(date).Format("2006-01-02")
 
 	cursor, err := r.collection.Find(ctx, bson.M{
 		"court_id": courtID,
-		"date": bson.M{
-			"$gte": startDate,
-			"$lt":  endDate,
+		"$or": []bson.M{
+			{"local_date": localDate},
+			{"local_date": bson.M{"$exists": false}, "date": bson.M{"$gte": startDate, "$lt": endDate}},
 		},
 		"status": domain.BookingStatusConfirmed,
 	})
@@ -1038,8 +1059,11 @@ func (r *BookingRepository) HasConfirmedBookingsAfter(ctx context.Context, court
 	filter := bson.M{
 		"court_id": courtID,
 		"hour":     hour,
-		"date":     bson.M{"$gte": since},
-		"status":   domain.BookingStatusConfirmed,
+		"$or": []bson.M{
+			{"scheduled_at": bson.M{"$gte": since}},
+			{"scheduled_at": bson.M{"$exists": false}, "date": bson.M{"$gte": domain.SantiagoDateStart(since)}},
+		},
+		"status": domain.BookingStatusConfirmed,
 	}
 	count, err := r.collection.CountDocuments(ctx, filter)
 	if err != nil {
@@ -1052,8 +1076,11 @@ func (r *BookingRepository) FindConfirmedBookingsAfter(ctx context.Context, cour
 	filter := bson.M{
 		"court_id": courtID,
 		"hour":     hour,
-		"date":     bson.M{"$gte": since},
-		"status":   domain.BookingStatusConfirmed,
+		"$or": []bson.M{
+			{"scheduled_at": bson.M{"$gte": since}},
+			{"scheduled_at": bson.M{"$exists": false}, "date": bson.M{"$gte": domain.SantiagoDateStart(since)}},
+		},
+		"status": domain.BookingStatusConfirmed,
 	}
 
 	cursor, err := r.collection.Find(ctx, filter)
@@ -1071,13 +1098,14 @@ func (r *BookingRepository) FindConfirmedBookingsAfter(ctx context.Context, cour
 
 func (r *BookingRepository) FindPendingBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 	startDate, endDate := domain.SantiagoDayBounds(date)
+	localDate := domain.SantiagoCivilDate(date).Format("2006-01-02")
 
 	var booking domain.Booking
 	err := r.collection.FindOne(ctx, bson.M{
 		"court_id": courtID,
-		"date": bson.M{
-			"$gte": startDate,
-			"$lt":  endDate,
+		"$or": []bson.M{
+			{"local_date": localDate},
+			{"local_date": bson.M{"$exists": false}, "date": bson.M{"$gte": startDate, "$lt": endDate}},
 		},
 		"hour":    hour,
 		"minutes": minutes,
@@ -1182,8 +1210,11 @@ func (r *BookingRepository) FindActiveSeriesByCourtHourAfter(ctx context.Context
 		"court_id": courtID,
 		"hour":     hour,
 		"status":   domain.BookingStatusConfirmed,
-		"date":     bson.M{"$gte": since},
 		"$and": []bson.M{
+			{"$or": []bson.M{
+				{"scheduled_at": bson.M{"$gte": since}},
+				{"scheduled_at": bson.M{"$exists": false}, "date": bson.M{"$gte": domain.SantiagoDateStart(since)}},
+			}},
 			{"series_id": bson.M{"$exists": true}},
 			{"series_id": bson.M{"$ne": ""}},
 		},

@@ -113,7 +113,11 @@ type BookingSummary struct {
 	CustomerEmail      string             `bson:"customer_email" json:"customer_email"`
 	BookingCode        string             `bson:"booking_code" json:"booking_code"`
 	Date               time.Time          `bson:"date" json:"date"`
+	LocalDate          string             `bson:"local_date,omitempty" json:"local_date,omitempty"`
+	Timezone           string             `bson:"timezone,omitempty" json:"timezone,omitempty"`
+	ScheduledAt        time.Time          `bson:"scheduled_at,omitempty" json:"scheduled_at,omitempty"`
 	Hour               int                `bson:"hour" json:"hour"`
+	Minutes            int                `bson:"minutes" json:"minutes"`
 	CourtName          string             `bson:"court_name" json:"court_name"`
 	Status             BookingStatus      `bson:"status" json:"status"`
 	Price              float64            `bson:"price" json:"price"`
@@ -188,6 +192,9 @@ type Booking struct {
 	GuestDeviceID         string                `bson:"guest_device_id,omitempty" json:"guest_device_id,omitempty"`
 	GuestDetails          *GuestDetails         `bson:"guest_details,omitempty" json:"guest_details,omitempty"`
 	Date                  time.Time             `bson:"date" json:"date"`
+	LocalDate             string                `bson:"local_date,omitempty" json:"local_date,omitempty"`
+	Timezone              string                `bson:"timezone,omitempty" json:"timezone,omitempty"`
+	ScheduledAt           time.Time             `bson:"scheduled_at,omitempty" json:"scheduled_at,omitempty"`
 	Hour                  int                   `bson:"hour" json:"hour"`
 	Minutes               int                   `bson:"minutes" json:"minutes"`
 	FinalPrice            float64               `bson:"final_price" json:"final_price"`
@@ -224,6 +231,18 @@ type Booking struct {
 	ExpiredAt             *time.Time            `bson:"expired_at,omitempty" json:"expired_at,omitempty"`
 	CreatedAt             time.Time             `bson:"created_at" json:"created_at"`
 	UpdatedAt             time.Time             `bson:"updated_at" json:"updated_at"`
+}
+
+func (b *Booking) NormalizeSchedule() error {
+	date, localDate, timezone, scheduledAt, err := NormalizeSchedule(b.Date, b.Hour, b.Minutes)
+	if err != nil {
+		return err
+	}
+	b.Date = date
+	b.LocalDate = localDate
+	b.Timezone = timezone
+	b.ScheduledAt = scheduledAt
+	return nil
 }
 
 type PaymentInfo struct {
@@ -322,13 +341,28 @@ type RecurringReservationResponse struct {
 }
 
 type SlotHold struct {
-	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
-	CourtID   primitive.ObjectID `bson:"court_id" json:"court_id"`
-	Date      time.Time          `bson:"date" json:"date"`
-	Hour      int                `bson:"hour" json:"hour"`
-	Minutes   int                `bson:"minutes" json:"minutes"`
-	UserID    string             `bson:"user_id" json:"user_id"`
-	BookingID primitive.ObjectID `bson:"booking_id" json:"booking_id"`
-	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
-	ExpiresAt time.Time          `bson:"expires_at" json:"expires_at"`
+	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	CourtID     primitive.ObjectID `bson:"court_id" json:"court_id"`
+	Date        time.Time          `bson:"date" json:"date"`
+	LocalDate   string             `bson:"local_date,omitempty" json:"local_date,omitempty"`
+	Timezone    string             `bson:"timezone,omitempty" json:"timezone,omitempty"`
+	ScheduledAt time.Time          `bson:"scheduled_at,omitempty" json:"scheduled_at,omitempty"`
+	Hour        int                `bson:"hour" json:"hour"`
+	Minutes     int                `bson:"minutes" json:"minutes"`
+	UserID      string             `bson:"user_id" json:"user_id"`
+	BookingID   primitive.ObjectID `bson:"booking_id" json:"booking_id"`
+	CreatedAt   time.Time          `bson:"created_at" json:"created_at"`
+	ExpiresAt   time.Time          `bson:"expires_at" json:"expires_at"`
+}
+
+func (h *SlotHold) NormalizeSchedule() error {
+	date, localDate, timezone, scheduledAt, err := NormalizeSchedule(h.Date, h.Hour, h.Minutes)
+	if err != nil {
+		return err
+	}
+	h.Date = date
+	h.LocalDate = localDate
+	h.Timezone = timezone
+	h.ScheduledAt = scheduledAt
+	return nil
 }
