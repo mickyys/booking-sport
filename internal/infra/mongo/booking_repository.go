@@ -1241,5 +1241,7 @@ func (r *BookingRepository) Collection() *mongo.Collection {
 }
 
 func buildDateRangeFilter(start, end time.Time) bson.M {
-	return bson.M{"$gte": start, "$lt": end}
+	startBound, _ := domain.SantiagoDayBounds(start)
+	_, endBound := domain.SantiagoDayBounds(end)
+	return bson.M{"$gte": startBound, "$lt": endBound}
 }
