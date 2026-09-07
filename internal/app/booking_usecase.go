@@ -329,6 +329,14 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 	loc := domain.GetSantiagoLocation()
 	normalizedDate := domain.SantiagoDateStart(date)
 
+	if uc.recurringReservationRepo != nil {
+		dayOfWeek := int(normalizedDate.Weekday())
+		existingRecurring, _ := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, courtID, hour, minutes, dayOfWeek)
+		if existingRecurring != nil && !existingRecurring.IsDateCancelled(normalizedDate) {
+			return nil, nil, domain.NewConflictError("no disponible: existe una reserva recurrente semanal para este horario")
+		}
+	}
+
 	now := time.Now().In(loc)
 	expiresAt := now.Add(15 * time.Minute)
 
