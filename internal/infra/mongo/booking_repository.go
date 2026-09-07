@@ -782,7 +782,7 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 		totalRevenueMatch = bson.M{"$and": []bson.M{
 			{"sport_center_id": bson.M{"$in": sportCenterIDs}},
 			{"status": domain.BookingStatusConfirmed},
-			dateFilter,
+			{"date": dateFilter},
 		}}
 	} else {
 		totalRevenueMatch = bson.M{
