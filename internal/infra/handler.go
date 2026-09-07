@@ -26,13 +26,13 @@ type Auth0User struct {
 }
 
 type SportCenterHandler struct {
-	useCase *app.SportCenterUseCase
+	useCase     *app.SportCenterUseCase
 	baseHandler *BaseHandler
 }
 
 func NewSportCenterHandler(uc *app.SportCenterUseCase) *SportCenterHandler {
 	return &SportCenterHandler{
-		useCase: uc,
+		useCase:     uc,
 		baseHandler: NewBaseHandler(),
 	}
 }
@@ -57,15 +57,12 @@ func (h *SportCenterHandler) List(c *gin.Context) {
 
 	var date *time.Time
 	if dateStr != "" {
-		loc, _ := time.LoadLocation("America/Santiago")
-		parsedDate, err := time.ParseInLocation("2006-01-02", dateStr, loc)
+		parsedDate, err := domain.ParseSantiagoDate(dateStr)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date format, expected YYYY-MM-DD"})
 			return
 		}
-		// Normalize to Santiago midnight
-		santiagoDate := time.Date(parsedDate.Year(), parsedDate.Month(), parsedDate.Day(), 0, 0, 0, 0, loc)
-		date = &santiagoDate
+		date = &parsedDate
 	}
 
 	var hour *int
@@ -84,10 +81,8 @@ func (h *SportCenterHandler) List(c *gin.Context) {
 
 	// If hour is provided but date is not, default to today in America/Santiago
 	if hour != nil && date == nil {
-		loc, _ := time.LoadLocation("America/Santiago")
-		now := time.Now().In(loc)
-		// We set the date to Santiago midnight for consistency with MongoDB storage
-		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+		now := time.Now().In(domain.GetSantiagoLocation())
+		today := domain.SantiagoCivilDate(now)
 		date = &today
 	}
 
@@ -515,13 +510,13 @@ func fetchAuth0UserByID(domain, userID string) *Auth0User {
 }
 
 type CourtHandler struct {
-	useCase *app.CourtUseCase
+	useCase     *app.CourtUseCase
 	baseHandler *BaseHandler
 }
 
 func NewCourtHandler(uc *app.CourtUseCase) *CourtHandler {
 	return &CourtHandler{
-		useCase: uc,
+		useCase:     uc,
 		baseHandler: NewBaseHandler(),
 	}
 }
@@ -673,11 +668,10 @@ func (h *CourtHandler) GetSchedule(c *gin.Context) {
 		return
 	}
 
-	loc, _ := time.LoadLocation("America/Santiago")
 	dateStr := c.Query("date")
-	date := time.Now().In(loc)
+	date := time.Now().In(domain.GetSantiagoLocation())
 	if dateStr != "" {
-		parsedDate, err := time.ParseInLocation("2006-01-02", dateStr, loc)
+		parsedDate, err := domain.ParseSantiagoDate(dateStr)
 		if err == nil {
 			date = parsedDate
 		}
@@ -849,11 +843,10 @@ func (h *SportCenterHandler) GetSchedules(c *gin.Context) {
 		centerID = center.ID
 	}
 
-	loc, _ := time.LoadLocation("America/Santiago")
 	dateStr := c.Query("date")
-	date := time.Now().In(loc)
+	date := time.Now().In(domain.GetSantiagoLocation())
 	if dateStr != "" {
-		parsedDate, err := time.ParseInLocation("2006-01-02", dateStr, loc)
+		parsedDate, err := domain.ParseSantiagoDate(dateStr)
 		if err == nil {
 			date = parsedDate
 		}
@@ -918,10 +911,9 @@ func (h *SportCenterHandler) GetSchedulesWithBookings(c *gin.Context) {
 	}
 
 	dateStr := c.Query("date")
-	loc, _ := time.LoadLocation("America/Santiago")
-	date := time.Now().In(loc)
+	date := time.Now().In(domain.GetSantiagoLocation())
 	if dateStr != "" {
-		parsedDate, err := time.ParseInLocation("2006-01-02", dateStr, loc)
+		parsedDate, err := domain.ParseSantiagoDate(dateStr)
 		if err == nil {
 			date = parsedDate
 		}
@@ -966,10 +958,9 @@ func (h *SportCenterHandler) GetAdminSchedulesWithBookings(c *gin.Context) {
 	// Parámetros de fecha, 'all' y 'centerId' opcional
 	centerIDParam := c.Query("centerId")
 	dateStr := c.Query("date")
-	loc, _ := time.LoadLocation("America/Santiago")
-	date := time.Now().In(loc)
+	date := time.Now().In(domain.GetSantiagoLocation())
 	if dateStr != "" {
-		parsedDate, err := time.ParseInLocation("2006-01-02", dateStr, loc)
+		parsedDate, err := domain.ParseSantiagoDate(dateStr)
 		if err == nil {
 			date = parsedDate
 		}
