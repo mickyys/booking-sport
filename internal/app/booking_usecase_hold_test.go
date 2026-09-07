@@ -16,8 +16,8 @@ import (
 // ---------- BookingRepository mock for ClaimOrRenewSlot ----------
 
 type mockBookingRepoForHold struct {
-	FindConfirmedBySlotFn        func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error)
-	FindPendingBySlotFn          func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error)
+	FindConfirmedBySlotFn        func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error)
+	FindPendingBySlotFn          func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error)
 	UpdateLockExpiresAtFn        func(ctx context.Context, id primitive.ObjectID, expiresAt time.Time) error
 	MarkExpiredFn                func(ctx context.Context, id primitive.ObjectID) error
 	FindByIDFn                   func(ctx context.Context, id primitive.ObjectID) (*domain.Booking, error)
@@ -35,12 +35,14 @@ type findConfirmedBySlotCall struct {
 	CourtID primitive.ObjectID
 	Date    time.Time
 	Hour    int
+	Minutes int
 }
 
 type findPendingBySlotCall struct {
 	CourtID primitive.ObjectID
 	Date    time.Time
 	Hour    int
+	Minutes int
 }
 
 func (m *mockBookingRepoForHold) FindActiveSeriesByCourtHour(ctx context.Context, courtID primitive.ObjectID, hour int) ([]domain.Booking, error) {
@@ -51,18 +53,18 @@ func (m *mockBookingRepoForHold) FindActiveSeriesByCourtHourAfter(ctx context.Co
 	return nil, nil
 }
 
-func (m *mockBookingRepoForHold) FindConfirmedBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
-	m.FindConfirmedBySlotCalls = append(m.FindConfirmedBySlotCalls, findConfirmedBySlotCall{courtID, date, hour})
+func (m *mockBookingRepoForHold) FindConfirmedBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
+	m.FindConfirmedBySlotCalls = append(m.FindConfirmedBySlotCalls, findConfirmedBySlotCall{courtID, date, hour, minutes})
 	if m.FindConfirmedBySlotFn != nil {
-		return m.FindConfirmedBySlotFn(ctx, courtID, date, hour)
+		return m.FindConfirmedBySlotFn(ctx, courtID, date, hour, minutes)
 	}
 	return nil, nil
 }
 
-func (m *mockBookingRepoForHold) FindPendingBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
-	m.FindPendingBySlotCalls = append(m.FindPendingBySlotCalls, findPendingBySlotCall{courtID, date, hour})
+func (m *mockBookingRepoForHold) FindPendingBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
+	m.FindPendingBySlotCalls = append(m.FindPendingBySlotCalls, findPendingBySlotCall{courtID, date, hour, minutes})
 	if m.FindPendingBySlotFn != nil {
-		return m.FindPendingBySlotFn(ctx, courtID, date, hour)
+		return m.FindPendingBySlotFn(ctx, courtID, date, hour, minutes)
 	}
 	return nil, nil
 }
@@ -205,8 +207,8 @@ type mockSlotHoldRepo struct {
 	RenewExpirationFn           func(ctx context.Context, holdID primitive.ObjectID, newExpiresAt time.Time) error
 	TryClaimSlotFn              func(ctx context.Context, hold *domain.SlotHold) (*domain.SlotHold, error)
 	DeleteFn                    func(ctx context.Context, holdID primitive.ObjectID) error
-	FindOneAndDeleteIfExpiredFn func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.SlotHold, error)
-	FindBySlotFn                func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.SlotHold, error)
+	FindOneAndDeleteIfExpiredFn func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.SlotHold, error)
+	FindBySlotFn                func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.SlotHold, error)
 
 	TryClaimSlotCalls              int
 	FindOneAndDeleteIfExpiredCalls int
@@ -219,10 +221,10 @@ func (m *mockSlotHoldRepo) Insert(ctx context.Context, hold *domain.SlotHold) er
 	return nil
 }
 
-func (m *mockSlotHoldRepo) FindBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.SlotHold, error) {
+func (m *mockSlotHoldRepo) FindBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.SlotHold, error) {
 	m.FindBySlotCalls++
 	if m.FindBySlotFn != nil {
-		return m.FindBySlotFn(ctx, courtID, date, hour)
+		return m.FindBySlotFn(ctx, courtID, date, hour, minutes)
 	}
 	return nil, nil
 }
@@ -266,10 +268,10 @@ func (m *mockSlotHoldRepo) TryClaimSlot(ctx context.Context, hold *domain.SlotHo
 	return hold, nil
 }
 
-func (m *mockSlotHoldRepo) FindOneAndDeleteIfExpired(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.SlotHold, error) {
+func (m *mockSlotHoldRepo) FindOneAndDeleteIfExpired(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.SlotHold, error) {
 	m.FindOneAndDeleteIfExpiredCalls++
 	if m.FindOneAndDeleteIfExpiredFn != nil {
-		return m.FindOneAndDeleteIfExpiredFn(ctx, courtID, date, hour)
+		return m.FindOneAndDeleteIfExpiredFn(ctx, courtID, date, hour, minutes)
 	}
 	return nil, nil
 }
@@ -313,7 +315,7 @@ func TestClaimOrRenewSlot_AlreadyConfirmed(t *testing.T) {
 	confirmedBooking := &domain.Booking{ID: newObjectID()}
 
 	bookingRepo := &mockBookingRepoForHold{
-		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 			return confirmedBooking, nil
 		},
 	}
@@ -321,7 +323,7 @@ func TestClaimOrRenewSlot_AlreadyConfirmed(t *testing.T) {
 
 	uc := &BookingUseCase{repo: bookingRepo, holdRepo: holdRepo}
 
-	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, "device:abc")
+	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, 0, "device:abc")
 
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -366,10 +368,10 @@ func TestClaimOrRenewSlot_SameUserRenewsLockWithHold(t *testing.T) {
 	}
 
 	bookingRepo := &mockBookingRepoForHold{
-		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 			return nil, nil
 		},
-		FindPendingBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+		FindPendingBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 			return pendingBooking, nil
 		},
 	}
@@ -381,7 +383,7 @@ func TestClaimOrRenewSlot_SameUserRenewsLockWithHold(t *testing.T) {
 
 	uc := &BookingUseCase{repo: bookingRepo, holdRepo: holdRepo}
 
-	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, userID)
+	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, 0, userID)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -420,10 +422,10 @@ func TestClaimOrRenewSlot_SameUserRenewsLockWithoutHold(t *testing.T) {
 	}
 
 	bookingRepo := &mockBookingRepoForHold{
-		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 			return nil, nil
 		},
-		FindPendingBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+		FindPendingBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 			return pendingBooking, nil
 		},
 	}
@@ -439,7 +441,7 @@ func TestClaimOrRenewSlot_SameUserRenewsLockWithoutHold(t *testing.T) {
 
 	uc := &BookingUseCase{repo: bookingRepo, holdRepo: holdRepo}
 
-	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, userID)
+	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, 0, userID)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -478,10 +480,10 @@ func TestClaimOrRenewSlot_OtherUserHasActiveLock(t *testing.T) {
 	}
 
 	bookingRepo := &mockBookingRepoForHold{
-		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 			return nil, nil
 		},
-		FindPendingBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+		FindPendingBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 			return otherBooking, nil
 		},
 	}
@@ -489,7 +491,7 @@ func TestClaimOrRenewSlot_OtherUserHasActiveLock(t *testing.T) {
 
 	uc := &BookingUseCase{repo: bookingRepo, holdRepo: holdRepo}
 
-	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, "device:abc")
+	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, 0, "device:abc")
 
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -527,10 +529,10 @@ func TestClaimOrRenewSlot_FreeSlot_ClaimSuccess(t *testing.T) {
 	}
 
 	bookingRepo := &mockBookingRepoForHold{
-		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 			return nil, nil
 		},
-		FindPendingBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+		FindPendingBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 			return nil, nil
 		},
 	}
@@ -543,7 +545,7 @@ func TestClaimOrRenewSlot_FreeSlot_ClaimSuccess(t *testing.T) {
 
 	uc := &BookingUseCase{repo: bookingRepo, holdRepo: holdRepo}
 
-	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, userID)
+	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, 0, userID)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -582,10 +584,10 @@ func TestClaimOrRenewSlot_DuplicateHold_SameUser(t *testing.T) {
 	}
 
 	bookingRepo := &mockBookingRepoForHold{
-		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 			return nil, nil
 		},
-		FindPendingBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+		FindPendingBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 			return nil, nil
 		},
 		FindByIDFn: func(ctx context.Context, id primitive.ObjectID) (*domain.Booking, error) {
@@ -596,14 +598,14 @@ func TestClaimOrRenewSlot_DuplicateHold_SameUser(t *testing.T) {
 		TryClaimSlotFn: func(ctx context.Context, hold *domain.SlotHold) (*domain.SlotHold, error) {
 			return nil, errors.New("duplicate hold")
 		},
-		FindBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.SlotHold, error) {
+		FindBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.SlotHold, error) {
 			return existingHold, nil
 		},
 	}
 
 	uc := &BookingUseCase{repo: bookingRepo, holdRepo: holdRepo}
 
-	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, userID)
+	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, 0, userID)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -640,10 +642,10 @@ func TestClaimOrRenewSlot_DuplicateHold_OtherUser(t *testing.T) {
 	}
 
 	bookingRepo := &mockBookingRepoForHold{
-		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 			return nil, nil
 		},
-		FindPendingBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+		FindPendingBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 			return nil, nil
 		},
 	}
@@ -651,14 +653,14 @@ func TestClaimOrRenewSlot_DuplicateHold_OtherUser(t *testing.T) {
 		TryClaimSlotFn: func(ctx context.Context, hold *domain.SlotHold) (*domain.SlotHold, error) {
 			return nil, errors.New("duplicate hold")
 		},
-		FindBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.SlotHold, error) {
+		FindBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.SlotHold, error) {
 			return existingHold, nil
 		},
 	}
 
 	uc := &BookingUseCase{repo: bookingRepo, holdRepo: holdRepo}
 
-	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, "device:abc")
+	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, 0, "device:abc")
 
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -701,10 +703,10 @@ func TestClaimOrRenewSlot_DuplicateHold_ExpiredCleanup(t *testing.T) {
 		TryClaimSlotFn: func(ctx context.Context, hold *domain.SlotHold) (*domain.SlotHold, error) {
 			return nil, fmt.Errorf("duplicate hold")
 		},
-		FindBySlotFn: func(ctx context.Context, cID primitive.ObjectID, d time.Time, h int) (*domain.SlotHold, error) {
+		FindBySlotFn: func(ctx context.Context, cID primitive.ObjectID, d time.Time, h int, m int) (*domain.SlotHold, error) {
 			return expiredHold, nil
 		},
-		FindOneAndDeleteIfExpiredFn: func(ctx context.Context, cID primitive.ObjectID, d time.Time, h int) (*domain.SlotHold, error) {
+		FindOneAndDeleteIfExpiredFn: func(ctx context.Context, cID primitive.ObjectID, d time.Time, h int, m int) (*domain.SlotHold, error) {
 			return expiredHold, nil
 		},
 	}
@@ -723,11 +725,11 @@ func TestClaimOrRenewSlot_DuplicateHold_ExpiredCleanup(t *testing.T) {
 	confirmedCalls := 0
 	pendingCalls := 0
 	bookingRepo := &mockBookingRepoForHold{
-		FindConfirmedBySlotFn: func(ctx context.Context, cID primitive.ObjectID, d time.Time, h int) (*domain.Booking, error) {
+		FindConfirmedBySlotFn: func(ctx context.Context, cID primitive.ObjectID, d time.Time, h int, m int) (*domain.Booking, error) {
 			confirmedCalls++
 			return nil, nil
 		},
-		FindPendingBySlotFn: func(ctx context.Context, cID primitive.ObjectID, d time.Time, h int) (*domain.Booking, error) {
+		FindPendingBySlotFn: func(ctx context.Context, cID primitive.ObjectID, d time.Time, h int, m int) (*domain.Booking, error) {
 			pendingCalls++
 			return nil, nil
 		},
@@ -735,7 +737,7 @@ func TestClaimOrRenewSlot_DuplicateHold_ExpiredCleanup(t *testing.T) {
 
 	uc := &BookingUseCase{repo: bookingRepo, holdRepo: holdRepo}
 
-	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, userID)
+	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, 0, userID)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -785,10 +787,10 @@ func TestClaimOrRenewSlot_PendingWithExpiredLock(t *testing.T) {
 	newHoldID := newObjectID()
 
 	bookingRepo := &mockBookingRepoForHold{
-		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 			return nil, nil
 		},
-		FindPendingBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+		FindPendingBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 			return expiredBooking, nil
 		},
 	}
@@ -801,7 +803,7 @@ func TestClaimOrRenewSlot_PendingWithExpiredLock(t *testing.T) {
 
 	uc := &BookingUseCase{repo: bookingRepo, holdRepo: holdRepo}
 
-	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, userID)
+	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, 0, userID)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

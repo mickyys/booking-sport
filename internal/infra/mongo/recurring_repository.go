@@ -43,11 +43,12 @@ func (r *RecurringReservationRepository) FindByID(ctx context.Context, id primit
 	return &reservation, nil
 }
 
-func (r *RecurringReservationRepository) FindByCourtHourAndDay(ctx context.Context, courtID primitive.ObjectID, hour int, dayOfWeek int) (*domain.RecurringReservation, error) {
+func (r *RecurringReservationRepository) FindByCourtHourAndDay(ctx context.Context, courtID primitive.ObjectID, hour int, minutes int, dayOfWeek int) (*domain.RecurringReservation, error) {
 	var reservation domain.RecurringReservation
 	err := r.collection.FindOne(ctx, bson.M{
 		"court_id":    courtID,
 		"hour":        hour,
+		"minutes":     minutes,
 		"day_of_week": dayOfWeek,
 		"status":      domain.RecurringReservationStatusActive,
 	}).Decode(&reservation)
@@ -57,11 +58,12 @@ func (r *RecurringReservationRepository) FindByCourtHourAndDay(ctx context.Conte
 	return &reservation, nil
 }
 
-func (r *RecurringReservationRepository) FindByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int) (*domain.RecurringReservation, error) {
+func (r *RecurringReservationRepository) FindByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int, minutes int) (*domain.RecurringReservation, error) {
 	var reservation domain.RecurringReservation
 	err := r.collection.FindOne(ctx, bson.M{
 		"court_id": courtID,
 		"hour":     hour,
+		"minutes":  minutes,
 		"status":   domain.RecurringReservationStatusActive,
 	}).Decode(&reservation)
 	if err != nil {
@@ -70,8 +72,8 @@ func (r *RecurringReservationRepository) FindByCourtAndHour(ctx context.Context,
 	return &reservation, nil
 }
 
-func (r *RecurringReservationRepository) FindActiveByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int) (*domain.RecurringReservation, error) {
-	return r.FindByCourtAndHour(ctx, courtID, hour)
+func (r *RecurringReservationRepository) FindActiveByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int, minutes int) (*domain.RecurringReservation, error) {
+	return r.FindByCourtAndHour(ctx, courtID, hour, minutes)
 }
 
 func (r *RecurringReservationRepository) FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error) {

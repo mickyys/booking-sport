@@ -204,7 +204,7 @@ func TestCreate_RejectsConfirmedConflict(t *testing.T) {
 
 	bookingRepo := &mockBookingRepoForCreate{
 		mockBookingRepoForHold: &mockBookingRepoForHold{
-			FindConfirmedBySlotFn: func(ctx context.Context, cID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+			FindConfirmedBySlotFn: func(ctx context.Context, cID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 				return &domain.Booking{ID: newObjectID(), CourtID: cID, Hour: hour}, nil
 			},
 		},
@@ -327,7 +327,7 @@ func TestCreateInternalBooking_RejectsConfirmedConflict(t *testing.T) {
 
 	bookingRepo := &mockBookingRepoForCreate{
 		mockBookingRepoForHold: &mockBookingRepoForHold{
-			FindConfirmedBySlotFn: func(ctx context.Context, cID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
+			FindConfirmedBySlotFn: func(ctx context.Context, cID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
 				return &domain.Booking{ID: newObjectID(), CourtID: cID, Hour: hour}, nil
 			},
 		},
