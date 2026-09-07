@@ -184,6 +184,45 @@ func ensureBookingIndexes(ctx context.Context, db *mongo.Database) error {
 		},
 		{
 			Keys: bson.D{
+				{Key: "sport_center_id", Value: 1},
+				{Key: "local_date", Value: 1},
+				{Key: "status", Value: 1},
+			},
+			Options: options.Index().SetName("idx_bookings_center_local_date_status"),
+		},
+		{
+			Keys: bson.D{
+				{Key: "court_id", Value: 1},
+				{Key: "scheduled_at", Value: 1},
+			},
+			Options: options.Index().SetName("idx_bookings_court_scheduled_at"),
+		},
+		{
+			Keys: bson.D{
+				{Key: "court_id", Value: 1},
+				{Key: "local_date", Value: 1},
+				{Key: "hour", Value: 1},
+				{Key: "minutes", Value: 1},
+			},
+			Options: options.Index().
+				SetUnique(true).
+				SetPartialFilterExpression(bson.M{"status": "confirmed", "local_date": bson.M{"$type": "string"}}).
+				SetName("idx_bookings_unique_confirmed_local_slot"),
+		},
+		{
+			Keys: bson.D{
+				{Key: "court_id", Value: 1},
+				{Key: "local_date", Value: 1},
+				{Key: "hour", Value: 1},
+				{Key: "minutes", Value: 1},
+			},
+			Options: options.Index().
+				SetUnique(true).
+				SetPartialFilterExpression(bson.M{"status": "pending", "local_date": bson.M{"$type": "string"}}).
+				SetName("idx_bookings_unique_pending_local_slot"),
+		},
+		{
+			Keys: bson.D{
 				{Key: "court_id", Value: 1},
 				{Key: "date", Value: 1},
 				{Key: "hour", Value: 1},
@@ -241,6 +280,25 @@ func ensureUserIndexes(ctx context.Context, db *mongo.Database) error {
 	collection := db.Collection("users")
 
 	indexes := []mongo.IndexModel{
+		{
+			Keys: bson.D{
+				{Key: "court_id", Value: 1},
+				{Key: "local_date", Value: 1},
+				{Key: "hour", Value: 1},
+				{Key: "minutes", Value: 1},
+			},
+			Options: options.Index().
+				SetUnique(true).
+				SetPartialFilterExpression(bson.M{"local_date": bson.M{"$type": "string"}}).
+				SetName("idx_slot_holds_unique_local_slot"),
+		},
+		{
+			Keys: bson.D{
+				{Key: "court_id", Value: 1},
+				{Key: "scheduled_at", Value: 1},
+			},
+			Options: options.Index().SetName("idx_slot_holds_court_scheduled_at"),
+		},
 		{
 			Keys:    bson.D{{Key: "username", Value: 1}},
 			Options: options.Index().SetUnique(true).SetName("idx_users_username"),
@@ -318,7 +376,7 @@ func ensureSlotHoldIndexes(ctx context.Context, db *mongo.Database) error {
 				SetName("idx_slot_holds_unique_slot_v2"),
 		},
 		{
-			Keys:    bson.D{{Key: "expires_at", Value: 1}},
+			Keys: bson.D{{Key: "expires_at", Value: 1}},
 			Options: options.Index().
 				SetExpireAfterSeconds(0).
 				SetName("idx_slot_holds_ttl"),

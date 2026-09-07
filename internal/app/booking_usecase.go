@@ -329,6 +329,14 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 	loc := domain.GetSantiagoLocation()
 	normalizedDate := domain.SantiagoDateStart(date)
 
+	if uc.recurringReservationRepo != nil {
+		dayOfWeek := int(normalizedDate.Weekday())
+		existingRecurring, _ := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, courtID, hour, minutes, dayOfWeek)
+		if existingRecurring != nil && !existingRecurring.IsDateCancelled(normalizedDate) {
+			return nil, nil, domain.NewConflictError("no disponible: existe una reserva recurrente semanal para este horario")
+		}
+	}
+
 	now := time.Now().In(loc)
 	expiresAt := now.Add(15 * time.Minute)
 
@@ -500,14 +508,15 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 // ==================== MercadoPago Payment Methods ====================
 
 func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking *domain.Booking, usePartialPayment bool) (string, error) {
+	if err := booking.NormalizeSchedule(); err != nil {
+		return "", err
+	}
 	court, err := uc.courtRepo.FindByID(ctx, booking.CourtID)
 	if err != nil {
 		return "", fmt.Errorf("court not found: %w", err)
 	}
 
 	loc := domain.GetSantiagoLocation()
-	booking.Date = domain.SantiagoDateStart(booking.Date)
-
 	price := 0.0
 	found := false
 	var selectedSlot *domain.CourtSchedule
@@ -1267,6 +1276,9 @@ func (uc *BookingUseCase) DeleteBooking(ctx context.Context, id primitive.Object
 }
 
 func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *domain.Booking, paymentMethod string) error {
+	if err := booking.NormalizeSchedule(); err != nil {
+		return err
+	}
 	court, err := uc.courtRepo.FindByID(ctx, booking.CourtID)
 	if err != nil {
 		return fmt.Errorf("court not found: %w", err)
@@ -1278,8 +1290,6 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 	}
 
 	loc := domain.GetSantiagoLocation()
-	booking.Date = domain.SantiagoDateStart(booking.Date)
-
 	// For internal bookings, we don't strict check availability if admin wants to force it,
 	// but let's check it for safety or just set it.
 	price := 0.0
@@ -1430,7 +1440,9 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 	validated := make([]validatedBooking, 0, len(bookings))
 
 	for _, b := range bookings {
-		b.Date = domain.SantiagoDateStart(b.Date)
+		if err := b.NormalizeSchedule(); err != nil {
+			return nil, err
+		}
 
 		price := 0.0
 		minutes := b.Minutes
@@ -1526,6 +1538,9 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 }
 
 func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) error {
+	if err := booking.NormalizeSchedule(); err != nil {
+		return err
+	}
 	court, err := uc.courtRepo.FindByID(ctx, booking.CourtID)
 	if err != nil {
 		return fmt.Errorf("court not found: %w", err)

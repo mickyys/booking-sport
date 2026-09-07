@@ -833,3 +833,132 @@ func TestClaimOrRenewSlot_PendingWithExpiredLock(t *testing.T) {
 		t.Errorf("expected 1 TryClaimSlot call, got %d", holdRepo.TryClaimSlotCalls)
 	}
 }
+
+func TestClaimOrRenewSlot_RejectsActiveRecurring(t *testing.T) {
+	courtID := newObjectID()
+	hour := 21
+	// Martes 21:00 en Santiago, enviado como instante (el flujo MP parte desde
+	// un booking ya normalizado en Santiago). 2026-09-08 es martes.
+	date := time.Date(2026, 9, 8, 3, 0, 0, 0, time.UTC)
+
+	recurringRepo := &mockRecurringReservationRepo{
+		FindByCourtHourAndDayFn: func(ctx context.Context, cID primitive.ObjectID, h int, m int, d int) (*domain.RecurringReservation, error) {
+			return &domain.RecurringReservation{
+				ID:            newObjectID(),
+				CourtID:       cID,
+				Hour:          h,
+				Minutes:       m,
+				DayOfWeek:     d,
+				Status:        domain.RecurringReservationStatusActive,
+				DayOfWeekName: "martes",
+			}, nil
+		},
+	}
+	bookingRepo := &mockBookingRepoForHold{}
+	holdRepo := &mockSlotHoldRepo{}
+
+	uc := &BookingUseCase{recurringReservationRepo: recurringRepo, repo: bookingRepo, holdRepo: holdRepo}
+
+	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, 0, "device:abc")
+
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if hold != nil {
+		t.Error("expected nil hold")
+	}
+	if booking != nil {
+		t.Error("expected nil booking")
+	}
+	appErr, ok := err.(*domain.AppError)
+	if !ok {
+		t.Fatalf("expected *domain.AppError, got %T", err)
+	}
+	if appErr.StatusCode != 409 {
+		t.Errorf("expected status 409, got %d", appErr.StatusCode)
+	}
+	expectedMsg := "no disponible: existe una reserva recurrente semanal para este horario"
+	if appErr.Message != expectedMsg {
+		t.Errorf("expected message %q, got %q", expectedMsg, appErr.Message)
+	}
+}
+
+func TestClaimOrRenewSlot_AllowsWhenRecurringDateCancelled(t *testing.T) {
+	courtID := newObjectID()
+	date := time.Date(2026, 9, 8, 3, 0, 0, 0, time.UTC)
+	hour := 21
+	userID := "device:abc"
+
+	recurringRepo := &mockRecurringReservationRepo{
+		FindByCourtHourAndDayFn: func(ctx context.Context, cID primitive.ObjectID, h int, m int, d int) (*domain.RecurringReservation, error) {
+			return &domain.RecurringReservation{
+				ID:             newObjectID(),
+				CourtID:        cID,
+				Hour:           h,
+				Minutes:        m,
+				DayOfWeek:      d,
+				Status:         domain.RecurringReservationStatusActive,
+				CancelledDates: []string{"2026-09-08"},
+			}, nil
+		},
+	}
+	bookingRepo := &mockBookingRepoForHold{
+		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
+			return nil, nil
+		},
+		FindPendingBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
+			return nil, nil
+		},
+	}
+	returnedHold := &domain.SlotHold{ID: newObjectID(), CourtID: courtID, Date: date, Hour: hour, UserID: userID}
+	holdRepo := &mockSlotHoldRepo{
+		TryClaimSlotFn: func(ctx context.Context, hold *domain.SlotHold) (*domain.SlotHold, error) {
+			return returnedHold, nil
+		},
+	}
+
+	uc := &BookingUseCase{recurringReservationRepo: recurringRepo, repo: bookingRepo, holdRepo: holdRepo}
+
+	hold, _, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, 0, userID)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if hold == nil {
+		t.Fatal("expected non-nil hold")
+	}
+}
+
+func TestClaimOrRenewSlot_AllowsWithoutRecurring(t *testing.T) {
+	courtID := newObjectID()
+	date := chileDate(2026, 5, 13)
+	hour := 10
+	userID := "device:abc"
+
+	recurringRepo := &mockRecurringReservationRepo{}
+	bookingRepo := &mockBookingRepoForHold{
+		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
+			return nil, nil
+		},
+		FindPendingBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
+			return nil, nil
+		},
+	}
+	returnedHold := &domain.SlotHold{ID: newObjectID(), CourtID: courtID, Date: date, Hour: hour, UserID: userID}
+	holdRepo := &mockSlotHoldRepo{
+		TryClaimSlotFn: func(ctx context.Context, hold *domain.SlotHold) (*domain.SlotHold, error) {
+			return returnedHold, nil
+		},
+	}
+
+	uc := &BookingUseCase{recurringReservationRepo: recurringRepo, repo: bookingRepo, holdRepo: holdRepo}
+
+	hold, _, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, 0, userID)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if hold == nil {
+		t.Fatal("expected non-nil hold")
+	}
+}
