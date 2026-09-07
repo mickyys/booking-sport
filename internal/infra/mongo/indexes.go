@@ -139,17 +139,19 @@ func ensureBookingIndexes(ctx context.Context, db *mongo.Database) error {
 				{Key: "sport_center_id", Value: 1},
 				{Key: "date", Value: 1},
 				{Key: "hour", Value: 1},
+				{Key: "minutes", Value: 1},
 				{Key: "status", Value: 1},
 			},
-			Options: options.Index().SetName("idx_bookings_center_date_hour_status"),
+			Options: options.Index().SetName("idx_bookings_center_date_hour_minute_status"),
 		},
 		{
 			Keys: bson.D{
 				{Key: "user_id", Value: 1},
 				{Key: "date", Value: 1},
 				{Key: "hour", Value: 1},
+				{Key: "minutes", Value: 1},
 			},
-			Options: options.Index().SetName("idx_bookings_user_date_hour"),
+			Options: options.Index().SetName("idx_bookings_user_date_hour_minute"),
 		},
 		{
 			Keys:    bson.D{{Key: "user_id", Value: 1}},
@@ -185,22 +187,24 @@ func ensureBookingIndexes(ctx context.Context, db *mongo.Database) error {
 				{Key: "court_id", Value: 1},
 				{Key: "date", Value: 1},
 				{Key: "hour", Value: 1},
+				{Key: "minutes", Value: 1},
 			},
 			Options: options.Index().
 				SetUnique(true).
 				SetPartialFilterExpression(bson.M{"status": "confirmed"}).
-				SetName("idx_bookings_unique_confirmed_slot"),
+				SetName("idx_bookings_unique_confirmed_slot_v2"),
 		},
 		{
 			Keys: bson.D{
 				{Key: "court_id", Value: 1},
 				{Key: "date", Value: 1},
 				{Key: "hour", Value: 1},
+				{Key: "minutes", Value: 1},
 			},
 			Options: options.Index().
 				SetUnique(true).
 				SetPartialFilterExpression(bson.M{"status": "pending"}).
-				SetName("idx_bookings_unique_pending_slot"),
+				SetName("idx_bookings_unique_pending_slot_v2"),
 		},
 		{
 			Keys:    bson.D{{Key: "hold_id", Value: 1}},
@@ -211,6 +215,16 @@ func ensureBookingIndexes(ctx context.Context, db *mongo.Database) error {
 	_, err := collection.Indexes().DropOne(ctx, "idx_bookings_ttl_pending")
 	if err != nil {
 		log.Printf("[MONGODB] DropOne idx_bookings_ttl_pending (ignorable if not exists): %v", err)
+	}
+
+	_, err = collection.Indexes().DropOne(ctx, "idx_bookings_unique_confirmed_slot")
+	if err != nil {
+		log.Printf("[MONGODB] DropOne idx_bookings_unique_confirmed_slot (ignorable if not exists): %v", err)
+	}
+
+	_, err = collection.Indexes().DropOne(ctx, "idx_bookings_unique_pending_slot")
+	if err != nil {
+		log.Printf("[MONGODB] DropOne idx_bookings_unique_pending_slot (ignorable if not exists): %v", err)
 	}
 
 	_, err = collection.Indexes().CreateMany(ctx, indexes)
@@ -267,9 +281,10 @@ func ensureRecurringReservationIndexes(ctx context.Context, db *mongo.Database) 
 			Keys: bson.D{
 				{Key: "court_id", Value: 1},
 				{Key: "hour", Value: 1},
+				{Key: "minutes", Value: 1},
 				{Key: "status", Value: 1},
 			},
-			Options: options.Index().SetName("idx_recurring_court_hour_status"),
+			Options: options.Index().SetName("idx_recurring_court_hour_minute_status"),
 		},
 		{
 			Keys:    bson.D{{Key: "status", Value: 1}},
@@ -296,10 +311,11 @@ func ensureSlotHoldIndexes(ctx context.Context, db *mongo.Database) error {
 				{Key: "court_id", Value: 1},
 				{Key: "date", Value: 1},
 				{Key: "hour", Value: 1},
+				{Key: "minutes", Value: 1},
 			},
 			Options: options.Index().
 				SetUnique(true).
-				SetName("idx_slot_holds_unique_slot"),
+				SetName("idx_slot_holds_unique_slot_v2"),
 		},
 		{
 			Keys:    bson.D{{Key: "expires_at", Value: 1}},
@@ -309,7 +325,12 @@ func ensureSlotHoldIndexes(ctx context.Context, db *mongo.Database) error {
 		},
 	}
 
-	_, err := collection.Indexes().CreateMany(ctx, indexes)
+	_, err := collection.Indexes().DropOne(ctx, "idx_slot_holds_unique_slot")
+	if err != nil {
+		log.Printf("[MONGODB] DropOne idx_slot_holds_unique_slot (ignorable if not exists): %v", err)
+	}
+
+	_, err = collection.Indexes().CreateMany(ctx, indexes)
 	if err != nil {
 		log.Printf("[MONGODB] Error creating slot_holds indexes: %v", err)
 		return err

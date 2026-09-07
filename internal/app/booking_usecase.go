@@ -92,7 +92,7 @@ func (uc *BookingUseCase) RegisterDevice(ctx context.Context, userID, token, pla
 }
 
 func (uc *BookingUseCase) notifyAdmins(ctx context.Context, booking *domain.Booking, title, body string, notificationType string) {
-	loc, _ := time.LoadLocation("America/Santiago")
+	loc := domain.GetSantiagoLocation()
 
 	if uc.notifier == nil {
 		logger.FromContext(ctx).Warnw("push_notifier_not_configured",
@@ -212,7 +212,7 @@ func (uc *BookingUseCase) notifyAdmins(ctx context.Context, booking *domain.Book
 		"booking_code":      booking.BookingCode,
 		"court_name":        booking.CourtName,
 		"center_name":       booking.SportCenterName,
-		"date":              booking.Date.Format("2006-01-02"),
+		"date":              booking.Date.In(loc).Format("2006-01-02"),
 		"hour":              fmt.Sprintf("%d", booking.Hour),
 		"time":              fmt.Sprintf("%02d:%02d", booking.Hour, booking.Minutes),
 		"status":            string(booking.Status),
@@ -325,8 +325,8 @@ func resolveEffectiveUserID(booking *domain.Booking) string {
 	return "device:" + generateDeviceID()
 }
 
-func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, userID string) (*domain.SlotHold, *domain.Booking, error) {
-	loc, _ := time.LoadLocation("America/Santiago")
+func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int, userID string) (*domain.SlotHold, *domain.Booking, error) {
+	loc := domain.GetSantiagoLocation()
 	dateCL := date.In(loc)
 	normalizedDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
 
@@ -335,17 +335,18 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 
 	log := logger.FromContext(ctx)
 
-	confirmed, _ := uc.repo.FindConfirmedBySlot(ctx, courtID, normalizedDate, hour)
+	confirmed, _ := uc.repo.FindConfirmedBySlot(ctx, courtID, normalizedDate, hour, minutes)
 	if confirmed != nil {
 		log.Infow("claim_renew_confirmed_found",
 			"court_id", courtID.Hex(),
 			"date", normalizedDate.Format("02/01/2006"),
 			"hour", hour,
+			"minutes", minutes,
 		)
 		return nil, nil, domain.NewConflictError("este horario ya esta reservado")
 	}
 
-	pending, _ := uc.repo.FindPendingBySlot(ctx, courtID, normalizedDate, hour)
+	pending, _ := uc.repo.FindPendingBySlot(ctx, courtID, normalizedDate, hour, minutes)
 	if pending != nil {
 		log.Infow("claim_renew_pending_found",
 			"booking_id", pending.ID.Hex(),
@@ -373,15 +374,16 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 				if hold != nil {
 					uc.holdRepo.RenewExpiration(ctx, hold.ID, expiresAt)
 				} else {
-					newHold := &domain.SlotHold{
-						CourtID:   courtID,
-						Date:      normalizedDate,
-						Hour:      hour,
-						UserID:    userID,
-						BookingID: pending.ID,
-						ExpiresAt: expiresAt,
-						CreatedAt: now,
-					}
+newHold := &domain.SlotHold{
+					CourtID:   courtID,
+					Date:      normalizedDate,
+					Hour:      hour,
+					Minutes:   minutes,
+					UserID:    userID,
+					BookingID: pending.ID,
+					ExpiresAt: expiresAt,
+					CreatedAt: now,
+				}
 					hold, _ = uc.holdRepo.TryClaimSlot(ctx, newHold)
 				}
 				return hold, pending, nil
@@ -408,6 +410,7 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 		CourtID:   courtID,
 		Date:      normalizedDate,
 		Hour:      hour,
+		Minutes:   minutes,
 		UserID:    userID,
 		ExpiresAt: expiresAt,
 		CreatedAt: now,
@@ -430,7 +433,7 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 		return nil, nil, err
 	}
 
-	existingHold, err := uc.holdRepo.FindBySlot(ctx, courtID, normalizedDate, hour)
+	existingHold, err := uc.holdRepo.FindBySlot(ctx, courtID, normalizedDate, hour, minutes)
 	if err != nil || existingHold == nil {
 		log.Infow("claim_renew_hold_not_found",
 			"error", err,
@@ -472,7 +475,7 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 		log.Infow("claim_renew_hold_expired_deleting",
 			"hold_id", existingHold.ID.Hex(),
 		)
-		deletedHold, _ := uc.holdRepo.FindOneAndDeleteIfExpired(ctx, courtID, normalizedDate, hour)
+		deletedHold, _ := uc.holdRepo.FindOneAndDeleteIfExpired(ctx, courtID, normalizedDate, hour, minutes)
 		if deletedHold != nil {
 			log.Infow("claim_renew_hold_deleted",
 				"hold_id", deletedHold.ID.Hex(),
@@ -481,7 +484,7 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 			if !deletedHold.BookingID.IsZero() {
 				uc.repo.MarkExpired(ctx, deletedHold.BookingID)
 			}
-			return uc.ClaimOrRenewSlot(ctx, courtID, date, hour, userID)
+			return uc.ClaimOrRenewSlot(ctx, courtID, date, hour, minutes, userID)
 		}
 		log.Infow("claim_renew_find_and_delete_returned_nil",
 			"hold_id", existingHold.ID.Hex(),
@@ -503,7 +506,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		return "", fmt.Errorf("court not found: %w", err)
 	}
 
-	loc, _ := time.LoadLocation("America/Santiago")
+	loc := domain.GetSantiagoLocation()
 	booking.Date = time.Date(booking.Date.In(loc).Year(), booking.Date.In(loc).Month(), booking.Date.In(loc).Day(), 0, 0, 0, 0, loc)
 
 	price := 0.0
@@ -595,7 +598,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		booking.GuestDeviceID = effectiveUserID
 	}
 
-	hold, existingBooking, err := uc.ClaimOrRenewSlot(ctx, booking.CourtID, booking.Date, booking.Hour, effectiveUserID)
+	hold, existingBooking, err := uc.ClaimOrRenewSlot(ctx, booking.CourtID, booking.Date, booking.Hour, booking.Minutes, effectiveUserID)
 	if err != nil {
 		return "", err
 	}
@@ -630,9 +633,9 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		failureURL := fmt.Sprintf("%s/booking/failure", urlFrontend)
 		pendingURL := fmt.Sprintf("%s?code=%s", urlPaymentCallback, existingBooking.BookingCode)
 
-		title := fmt.Sprintf("Reserva %s - %s - %s %02d:00 hrs", court.Name, center.Name, existingBooking.Date.Format("02/01/2006"), existingBooking.Hour)
+		title := fmt.Sprintf("Reserva %s - %s - %s %02d:%02d hrs", court.Name, center.Name, existingBooking.Date.In(domain.GetSantiagoLocation()).Format("02/01/2006"), existingBooking.Hour, existingBooking.Minutes)
 		if isPartial {
-			title = fmt.Sprintf("Abono Reserva %s - %s - %s %02d:00 hrs", court.Name, center.Name, existingBooking.Date.Format("02/01/2006"), existingBooking.Hour)
+			title = fmt.Sprintf("Abono Reserva %s - %s - %s %02d:%02d hrs", court.Name, center.Name, existingBooking.Date.In(domain.GetSantiagoLocation()).Format("02/01/2006"), existingBooking.Hour, existingBooking.Minutes)
 		}
 		externalRef := existingBooking.BookingCode
 		payerName, payerSurname := splitFullName(existingBooking.CustomerName)
@@ -668,9 +671,9 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	failureURL := fmt.Sprintf("%s/booking/failure", urlFrontend)
 	pendingURL := fmt.Sprintf("%s?code=%s", urlPaymentCallback, booking.BookingCode)
 
-	title := fmt.Sprintf("Reserva %s - %s - %s %02d:00 hrs", court.Name, center.Name, booking.Date.Format("02/01/2006"), booking.Hour)
+	title := fmt.Sprintf("Reserva %s - %s - %s %02d:%02d hrs", court.Name, center.Name, booking.Date.In(domain.GetSantiagoLocation()).Format("02/01/2006"), booking.Hour, booking.Minutes)
 	if isPartial {
-		title = fmt.Sprintf("Abono Reserva %s - %s - %s %02d:00 hrs", court.Name, center.Name, booking.Date.Format("02/01/2006"), booking.Hour)
+		title = fmt.Sprintf("Abono Reserva %s - %s - %s %02d:%02d hrs", court.Name, center.Name, booking.Date.In(domain.GetSantiagoLocation()).Format("02/01/2006"), booking.Hour, booking.Minutes)
 	}
 	externalRef := booking.BookingCode
 	payerName, payerSurname := splitFullName(booking.CustomerName)
@@ -882,15 +885,15 @@ func (uc *BookingUseCase) HandleMercadoPagoWebhook(ctx context.Context, paymentI
 	if newStatus == domain.BookingStatusConfirmed {
 		log := logger.FromContext(ctx)
 		log.Infow("mp_webhook_reservation_confirmed",
-			"msg", fmt.Sprintf("Reserva confirmada via MercadoPago: %s en %s para el %s a las %02d:00 hrs",
-				booking.BookingCode, booking.SportCenterName, booking.Date.Format("02/01/2006"), booking.Hour),
+			"msg", fmt.Sprintf("Reserva confirmada via MercadoPago: %s en %s para el %s a las %02d:%02d hrs",
+				booking.BookingCode, booking.SportCenterName, booking.Date.In(domain.GetSantiagoLocation()).Format("02/01/2006"), booking.Hour, booking.Minutes),
 			"booking_code", booking.BookingCode,
 			"center_id", booking.SportCenterID.Hex(),
 			"center_name", booking.SportCenterName,
 		)
 		title := "Pago Confirmado - MercadoPago"
-		body := fmt.Sprintf("Nueva reserva en %s para el %s a las %02d:00 hrs.",
-			booking.SportCenterName, booking.Date.Format("02/01/2006"), booking.Hour)
+		body := fmt.Sprintf("Nueva reserva en %s para el %s a las %02d:%02d hrs.",
+			booking.SportCenterName, booking.Date.In(domain.GetSantiagoLocation()).Format("02/01/2006"), booking.Hour, booking.Minutes)
 
 		log.Infow("mp_webhook_sending_notification",
 			"msg", fmt.Sprintf("Enviando notificación push de confirmación para booking %s en centro %s",
@@ -1068,7 +1071,7 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 	}
 
 	// Calcular horas restantes (negativo si ya pasó) en horario de Santiago
-	loc, _ := time.LoadLocation("America/Santiago")
+	loc := domain.GetSantiagoLocation()
 	bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, loc)
 	hoursUntilMatch := time.Until(bookingDateTime.In(loc)).Hours()
 
@@ -1234,8 +1237,8 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 	)
 
 	title := "Reserva Cancelada"
-	body := fmt.Sprintf("La reserva en %s para el %s a las %02d:00 hrs fue cancelada.",
-		booking.SportCenterName, booking.Date.Format("02/01/2006"), booking.Hour)
+	body := fmt.Sprintf("La reserva en %s para el %s a las %02d:%02d hrs fue cancelada.",
+		booking.SportCenterName, booking.Date.In(domain.GetSantiagoLocation()).Format("02/01/2006"), booking.Hour, booking.Minutes)
 
 	log.Infow("booking_cancel_sending_notification",
 		"msg", fmt.Sprintf("Enviando notificación push de cancelación para booking %s en centro %s",
@@ -1275,7 +1278,7 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 		return fmt.Errorf("sport center not found: %w", err)
 	}
 
-	loc, _ := time.LoadLocation("America/Santiago")
+	loc := domain.GetSantiagoLocation()
 	booking.Date = time.Date(booking.Date.In(loc).Year(), booking.Date.In(loc).Month(), booking.Date.In(loc).Day(), 0, 0, 0, 0, loc)
 
 	// For internal bookings, we don't strict check availability if admin wants to force it,
@@ -1317,7 +1320,7 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 		}
 	}
 
-	conflicting, err := uc.repo.FindConfirmedBySlot(ctx, booking.CourtID, booking.Date, booking.Hour)
+	conflicting, err := uc.repo.FindConfirmedBySlot(ctx, booking.CourtID, booking.Date, booking.Hour, booking.Minutes)
 	if err != nil {
 		return fmt.Errorf("error checking availability: %w", err)
 	}
@@ -1327,18 +1330,18 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 
 	if uc.recurringReservationRepo != nil {
 		dayOfWeek := int(booking.Date.Weekday())
-		existingRecurring, _ := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, booking.CourtID, booking.Hour, dayOfWeek)
+		existingRecurring, _ := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, booking.CourtID, booking.Hour, booking.Minutes, dayOfWeek)
 		if existingRecurring != nil && !existingRecurring.IsDateCancelled(booking.Date) {
 			return domain.NewConflictError("no disponible: existe una reserva recurrente semanal para este horario")
 		}
 	}
 
-	activeHold, _ := uc.holdRepo.FindBySlot(ctx, booking.CourtID, booking.Date, booking.Hour)
+	activeHold, _ := uc.holdRepo.FindBySlot(ctx, booking.CourtID, booking.Date, booking.Hour, booking.Minutes)
 	if activeHold != nil && time.Now().Before(activeHold.ExpiresAt) {
 		return domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
 	}
 
-	pending, _ := uc.repo.FindPendingBySlot(ctx, booking.CourtID, booking.Date, booking.Hour)
+	pending, _ := uc.repo.FindPendingBySlot(ctx, booking.CourtID, booking.Date, booking.Hour, booking.Minutes)
 	if pending != nil {
 		if pending.LockExpiresAt == nil || time.Now().After(*pending.LockExpiresAt) {
 			if pending.HoldID != nil {
@@ -1356,9 +1359,9 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 
 	log := logger.FromContext(ctx)
 	log.Infow("internal_booking_created",
-		"msg", fmt.Sprintf("Booking interno creado: %s en %s (%s) para el %s a las %02d:00 hrs — código %s",
+		"msg", fmt.Sprintf("Booking interno creado: %s en %s (%s) para el %s a las %02d:%02d hrs — código %s",
 			booking.CustomerName, booking.SportCenterName, booking.CourtName,
-			booking.Date.Format("02/01/2006"), booking.Hour, booking.BookingCode),
+			booking.Date.In(domain.GetSantiagoLocation()).Format("02/01/2006"), booking.Hour, booking.Minutes, booking.BookingCode),
 		"booking_id", booking.ID.Hex(),
 		"booking_code", booking.BookingCode,
 		"center_id", booking.SportCenterID.Hex(),
@@ -1366,8 +1369,8 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 	)
 
 	title := "Nueva Reserva"
-	body := fmt.Sprintf("Nueva reserva en %s para el %s a las %02d:00 hrs.",
-		booking.SportCenterName, booking.Date.Format("02/01/2006"), booking.Hour)
+	body := fmt.Sprintf("Nueva reserva en %s para el %s a las %02d:%02d hrs.",
+		booking.SportCenterName, booking.Date.In(domain.GetSantiagoLocation()).Format("02/01/2006"), booking.Hour, booking.Minutes)
 
 	log.Infow("internal_booking_sending_notification",
 		"msg", fmt.Sprintf("Enviando notificación push para booking interno %s en %s",
@@ -1418,7 +1421,7 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 		return nil, fmt.Errorf("sport center not found: %w", err)
 	}
 
-	loc, _ := time.LoadLocation("America/Santiago")
+	loc := domain.GetSantiagoLocation()
 
 	type validatedBooking struct {
 		booking domain.Booking
@@ -1445,7 +1448,7 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 
 		dateStr := b.Date.Format("02/01/2006")
 
-		conflicting, err := uc.repo.FindConfirmedBySlot(ctx, b.CourtID, b.Date, b.Hour)
+		conflicting, err := uc.repo.FindConfirmedBySlot(ctx, b.CourtID, b.Date, b.Hour, b.Minutes)
 		if err != nil {
 			return nil, fmt.Errorf("error checking availability: %w", err)
 		}
@@ -1455,18 +1458,18 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 
 		if uc.recurringReservationRepo != nil {
 			dayOfWeek := int(b.Date.Weekday())
-			existingRecurring, _ := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, b.CourtID, b.Hour, dayOfWeek)
+			existingRecurring, _ := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, b.CourtID, b.Hour, b.Minutes, dayOfWeek)
 			if existingRecurring != nil && !existingRecurring.IsDateCancelled(b.Date) {
 				return nil, fmt.Errorf("No disponible: %s - existe una reserva recurrente semanal para este horario", dateStr)
 			}
 		}
 
-		activeHold, _ := uc.holdRepo.FindBySlot(ctx, b.CourtID, b.Date, b.Hour)
+		activeHold, _ := uc.holdRepo.FindBySlot(ctx, b.CourtID, b.Date, b.Hour, b.Minutes)
 		if activeHold != nil && time.Now().Before(activeHold.ExpiresAt) {
 			return nil, fmt.Errorf("No disponible: %s - otro usuario está en proceso de pago", dateStr)
 		}
 
-		pending, _ := uc.repo.FindPendingBySlot(ctx, b.CourtID, b.Date, b.Hour)
+		pending, _ := uc.repo.FindPendingBySlot(ctx, b.CourtID, b.Date, b.Hour, b.Minutes)
 		if pending != nil {
 			if pending.LockExpiresAt == nil || time.Now().After(*pending.LockExpiresAt) {
 				if pending.HoldID != nil {
@@ -1580,7 +1583,7 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 		"center_name", booking.SportCenterName,
 	)
 
-	conflicting, err := uc.repo.FindConfirmedBySlot(ctx, booking.CourtID, booking.Date, booking.Hour)
+	conflicting, err := uc.repo.FindConfirmedBySlot(ctx, booking.CourtID, booking.Date, booking.Hour, booking.Minutes)
 	if err != nil {
 		return fmt.Errorf("error checking availability: %w", err)
 	}
@@ -1588,12 +1591,12 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 		return domain.NewConflictError("ya existe una reserva confirmada para este horario")
 	}
 
-	activeHold, _ := uc.holdRepo.FindBySlot(ctx, booking.CourtID, booking.Date, booking.Hour)
+	activeHold, _ := uc.holdRepo.FindBySlot(ctx, booking.CourtID, booking.Date, booking.Hour, booking.Minutes)
 	if activeHold != nil && time.Now().Before(activeHold.ExpiresAt) {
 		return domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
 	}
 
-	pendingBooking, _ := uc.repo.FindPendingBySlot(ctx, booking.CourtID, booking.Date, booking.Hour)
+	pendingBooking, _ := uc.repo.FindPendingBySlot(ctx, booking.CourtID, booking.Date, booking.Hour, booking.Minutes)
 	if pendingBooking != nil {
 		if pendingBooking.LockExpiresAt == nil || time.Now().After(*pendingBooking.LockExpiresAt) {
 			if pendingBooking.HoldID != nil {
@@ -1610,9 +1613,9 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 	}
 
 	log.Infow("booking_created",
-		"msg", fmt.Sprintf("Booking creado exitosamente: %s en %s (%s) para el %s a las %02d:00 hrs — código %s",
+		"msg", fmt.Sprintf("Booking creado exitosamente: %s en %s (%s) para el %s a las %02d:%02d hrs — código %s",
 			booking.CustomerName, booking.SportCenterName, booking.CourtName,
-			booking.Date.Format("02/01/2006"), booking.Hour, booking.BookingCode),
+			booking.Date.In(domain.GetSantiagoLocation()).Format("02/01/2006"), booking.Hour, booking.Minutes, booking.BookingCode),
 		"booking_id", booking.ID.Hex(),
 		"booking_code", booking.BookingCode,
 		"center_id", booking.SportCenterID.Hex(),
@@ -1620,8 +1623,8 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 	)
 
 	title := "Nueva Reserva Confirmada"
-	body := fmt.Sprintf("Nueva reserva en %s para el %s a las %02d:00 hrs.",
-		booking.SportCenterName, booking.Date.Format("02/01/2006"), booking.Hour)
+	body := fmt.Sprintf("Nueva reserva en %s para el %s a las %02d:%02d hrs.",
+		booking.SportCenterName, booking.Date.In(domain.GetSantiagoLocation()).Format("02/01/2006"), booking.Hour, booking.Minutes)
 
 	log.Infow("booking_sending_notification",
 		"msg", fmt.Sprintf("Enviando notificación push para booking %s en %s",
@@ -1810,7 +1813,7 @@ func (uc *BookingUseCase) CreateRecurringReservation(ctx context.Context, reserv
 		"day_of_week_name", reservation.DayOfWeekName,
 		"customer_name", reservation.CustomerName,
 	)
-	existing, err := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, reservation.CourtID, reservation.Hour, dayOfWeek)
+	existing, err := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, reservation.CourtID, reservation.Hour, reservation.Minutes, dayOfWeek)
 	if err == nil && existing != nil {
 		log.Infow("create_recurring_reservation_existing_found",
 			"msg", "Se encontró una recurrencia activa para cancha, hora y día",
@@ -2142,9 +2145,9 @@ func (uc *BookingUseCase) CancelRecurringDate(ctx context.Context, id primitive.
 	return uc.recurringReservationRepo.AddCancelledDate(ctx, id, date)
 }
 
-func (uc *BookingUseCase) IsSlotAvailableForRecurring(ctx context.Context, courtID primitive.ObjectID, hour int) (bool, error) {
+func (uc *BookingUseCase) IsSlotAvailableForRecurring(ctx context.Context, courtID primitive.ObjectID, hour int, minutes int) (bool, error) {
 	// Check if there's already an active recurring reservation
-	existing, err := uc.recurringReservationRepo.FindActiveByCourtAndHour(ctx, courtID, hour)
+	existing, err := uc.recurringReservationRepo.FindActiveByCourtAndHour(ctx, courtID, hour, minutes)
 	if err == nil && existing != nil {
 		return false, nil
 	}
@@ -2286,16 +2289,16 @@ func (uc *BookingUseCase) SyncConfirmedPayment(ctx context.Context, bookingCode 
 
 	log := logger.FromContext(ctx)
 	log.Infow("sync_confirmed_payment",
-		"msg", fmt.Sprintf("Reserva sincronizada desde batch: %s confirmada en %s para el %s a las %02d:00 hrs",
-			booking.BookingCode, booking.SportCenterName, booking.Date.Format("02/01/2006"), booking.Hour),
+		"msg", fmt.Sprintf("Reserva sincronizada desde batch: %s confirmada en %s para el %s a las %02d:%02d hrs",
+			booking.BookingCode, booking.SportCenterName, booking.Date.In(domain.GetSantiagoLocation()).Format("02/01/2006"), booking.Hour, booking.Minutes),
 		"booking_code", booking.BookingCode,
 		"center_id", booking.SportCenterID.Hex(),
 		"mp_payment_id", mpPaymentID,
 	)
 
 	title := "Pago Confirmado - Sincronizacion Batch"
-	body := fmt.Sprintf("Nueva reserva en %s para el %s a las %02d:00 hrs.",
-		booking.SportCenterName, booking.Date.Format("02/01/2006"), booking.Hour)
+	body := fmt.Sprintf("Nueva reserva en %s para el %s a las %02d:%02d hrs.",
+		booking.SportCenterName, booking.Date.In(domain.GetSantiagoLocation()).Format("02/01/2006"), booking.Hour, booking.Minutes)
 	uc.notifyAdmins(ctx, booking, title, body, "confirmation")
 
 	if uc.mailer != nil {

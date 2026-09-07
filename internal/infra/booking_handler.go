@@ -253,7 +253,7 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 		return
 	}
 	// Combina fecha y hora de la reserva
-	hoursUntilMatch := time.Until(booking.Date.Add(time.Hour * time.Duration(booking.Hour))).Hours()
+	hoursUntilMatch := time.Until(domain.MatchInstant(booking.Date, booking.Hour, booking.Minutes)).Hours()
 
 	configCancellationHours := center.CancellationHours
 	if configCancellationHours == 0 {
@@ -400,7 +400,7 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 		return
 	}
 
-	hoursUntilMatch := time.Until(booking.Date.Add(time.Hour * time.Duration(booking.Hour))).Hours()
+	hoursUntilMatch := time.Until(domain.MatchInstant(booking.Date, booking.Hour, booking.Minutes)).Hours()
 
 	configCancellationHours := center.CancellationHours
 	if configCancellationHours == 0 {
@@ -890,8 +890,8 @@ func (h *BookingHandler) CreateRecurringReservation(c *gin.Context) {
 		"customer_name", input.CustomerName,
 	)
 
-	// Parsear la fecha
-	date, err := time.Parse("2006-01-02", input.Date)
+	// Parsear la fecha en zona horaria de Chile
+	date, err := time.ParseInLocation("2006-01-02", input.Date, domain.GetSantiagoLocation())
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date format, expected YYYY-MM-DD"})
 		return

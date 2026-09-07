@@ -14,9 +14,9 @@ import (
 type mockRecurringReservationRepo struct {
 	CreateFn                     func(ctx context.Context, reservation *domain.RecurringReservation) error
 	FindByIDFn                   func(ctx context.Context, id primitive.ObjectID) (*domain.RecurringReservation, error)
-	FindByCourtHourAndDayFn      func(ctx context.Context, courtID primitive.ObjectID, hour int, dayOfWeek int) (*domain.RecurringReservation, error)
-	FindByCourtAndHourFn         func(ctx context.Context, courtID primitive.ObjectID, hour int) (*domain.RecurringReservation, error)
-	FindActiveByCourtAndHourFn   func(ctx context.Context, courtID primitive.ObjectID, hour int) (*domain.RecurringReservation, error)
+	FindByCourtHourAndDayFn      func(ctx context.Context, courtID primitive.ObjectID, hour int, minutes int, dayOfWeek int) (*domain.RecurringReservation, error)
+	FindByCourtAndHourFn         func(ctx context.Context, courtID primitive.ObjectID, hour int, minutes int) (*domain.RecurringReservation, error)
+	FindActiveByCourtAndHourFn   func(ctx context.Context, courtID primitive.ObjectID, hour int, minutes int) (*domain.RecurringReservation, error)
 	FindByCenterIDFn             func(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error)
 	FindAdminByCenterIDFn        func(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error)
 	FindByCenterIDAndDayOfWeekFn func(ctx context.Context, centerID primitive.ObjectID, dayOfWeek int) ([]domain.RecurringReservation, error)
@@ -45,23 +45,23 @@ func (m *mockRecurringReservationRepo) FindByID(ctx context.Context, id primitiv
 	return nil, nil
 }
 
-func (m *mockRecurringReservationRepo) FindByCourtHourAndDay(ctx context.Context, courtID primitive.ObjectID, hour int, dayOfWeek int) (*domain.RecurringReservation, error) {
+func (m *mockRecurringReservationRepo) FindByCourtHourAndDay(ctx context.Context, courtID primitive.ObjectID, hour int, minutes int, dayOfWeek int) (*domain.RecurringReservation, error) {
 	if m.FindByCourtHourAndDayFn != nil {
-		return m.FindByCourtHourAndDayFn(ctx, courtID, hour, dayOfWeek)
+		return m.FindByCourtHourAndDayFn(ctx, courtID, hour, minutes, dayOfWeek)
 	}
 	return nil, nil
 }
 
-func (m *mockRecurringReservationRepo) FindByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int) (*domain.RecurringReservation, error) {
+func (m *mockRecurringReservationRepo) FindByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int, minutes int) (*domain.RecurringReservation, error) {
 	if m.FindByCourtAndHourFn != nil {
-		return m.FindByCourtAndHourFn(ctx, courtID, hour)
+		return m.FindByCourtAndHourFn(ctx, courtID, hour, minutes)
 	}
 	return nil, nil
 }
 
-func (m *mockRecurringReservationRepo) FindActiveByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int) (*domain.RecurringReservation, error) {
+func (m *mockRecurringReservationRepo) FindActiveByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int, minutes int) (*domain.RecurringReservation, error) {
 	if m.FindActiveByCourtAndHourFn != nil {
-		return m.FindActiveByCourtAndHourFn(ctx, courtID, hour)
+		return m.FindActiveByCourtAndHourFn(ctx, courtID, hour, minutes)
 	}
 	return nil, nil
 }
@@ -360,7 +360,7 @@ func TestCreateRecurringReservation_Conflict_ActiveWithCancelledDates(t *testing
 	}
 
 	recurringRepo := &mockRecurringReservationRepo{
-		FindByCourtHourAndDayFn: func(ctx context.Context, cID primitive.ObjectID, h int, d int) (*domain.RecurringReservation, error) {
+		FindByCourtHourAndDayFn: func(ctx context.Context, cID primitive.ObjectID, h int, m int, d int) (*domain.RecurringReservation, error) {
 			return existing, nil
 		},
 	}
@@ -417,7 +417,7 @@ func TestCreateRecurringReservation_Conflict_ActiveWithoutCancelledDates(t *test
 	}
 
 	recurringRepo := &mockRecurringReservationRepo{
-		FindByCourtHourAndDayFn: func(ctx context.Context, cID primitive.ObjectID, h int, d int) (*domain.RecurringReservation, error) {
+		FindByCourtHourAndDayFn: func(ctx context.Context, cID primitive.ObjectID, h int, m int, d int) (*domain.RecurringReservation, error) {
 			return existing, nil
 		},
 	}
@@ -457,7 +457,7 @@ func TestCreateRecurringReservation_NoConflict_CancelledRecurring(t *testing.T) 
 	hour := 10
 
 	recurringRepo := &mockRecurringReservationRepo{
-		FindByCourtHourAndDayFn: func(ctx context.Context, cID primitive.ObjectID, h int, d int) (*domain.RecurringReservation, error) {
+		FindByCourtHourAndDayFn: func(ctx context.Context, cID primitive.ObjectID, h int, m int, d int) (*domain.RecurringReservation, error) {
 			// Simula que la recurrencia cancelada no se encuentra porque filtra por status=active
 			return nil, nil
 		},
@@ -497,7 +497,7 @@ func TestCreateRecurringReservation_NoConflict_NoExisting(t *testing.T) {
 	hour := 10
 
 	recurringRepo := &mockRecurringReservationRepo{
-		FindByCourtHourAndDayFn: func(ctx context.Context, cID primitive.ObjectID, h int, d int) (*domain.RecurringReservation, error) {
+		FindByCourtHourAndDayFn: func(ctx context.Context, cID primitive.ObjectID, h int, m int, d int) (*domain.RecurringReservation, error) {
 			return nil, nil
 		},
 		CreateFn: func(ctx context.Context, r *domain.RecurringReservation) error {
@@ -536,7 +536,7 @@ func TestCreateRecurringReservation_NoConflict_DifferentDay(t *testing.T) {
 	hour := 10
 
 	recurringRepo := &mockRecurringReservationRepo{
-		FindByCourtHourAndDayFn: func(ctx context.Context, cID primitive.ObjectID, h int, d int) (*domain.RecurringReservation, error) {
+		FindByCourtHourAndDayFn: func(ctx context.Context, cID primitive.ObjectID, h int, m int, d int) (*domain.RecurringReservation, error) {
 			return nil, nil
 		},
 		CreateFn: func(ctx context.Context, r *domain.RecurringReservation) error {
@@ -575,7 +575,7 @@ func TestCreateRecurringReservation_NoConflict_DifferentHour(t *testing.T) {
 	courtID := newObjectID()
 
 	recurringRepo := &mockRecurringReservationRepo{
-		FindByCourtHourAndDayFn: func(ctx context.Context, cID primitive.ObjectID, h int, d int) (*domain.RecurringReservation, error) {
+		FindByCourtHourAndDayFn: func(ctx context.Context, cID primitive.ObjectID, h int, m int, d int) (*domain.RecurringReservation, error) {
 			return nil, nil
 		},
 		CreateFn: func(ctx context.Context, r *domain.RecurringReservation) error {
