@@ -707,7 +707,7 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 	endT, _ := domain.ParseSantiagoDate(now.AddDate(0, 0, 1).Format("2006-01-02"))
 	todayFilter := bson.M{
 		"sport_center_id": bson.M{"$in": sportCenterIDs},
-		"$and":            []bson.M{buildDateRangeFilter(startT, endT), {"status": domain.BookingStatusConfirmed}},
+		"$and":            []bson.M{{"date": buildDateRangeFilter(startT, endT)}, {"status": domain.BookingStatusConfirmed}},
 	}
 	todayCount, _ := r.collection.CountDocuments(ctx, todayFilter)
 
@@ -1238,4 +1238,8 @@ func (r *BookingRepository) GetDB() *mongo.Database {
 
 func (r *BookingRepository) Collection() *mongo.Collection {
 	return r.collection
+}
+
+func buildDateRangeFilter(start, end time.Time) bson.M {
+	return bson.M{"$gte": start, "$lt": end}
 }
