@@ -127,10 +127,7 @@ func (r *BookingRepository) Create(ctx context.Context, booking *domain.Booking)
 }
 
 func (r *BookingRepository) expireStalePending(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) {
-	loc := domain.GetSantiagoLocation()
-	dateCL := date.In(loc)
-	startDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
-	endDate := startDate.AddDate(0, 0, 1)
+	startDate, endDate := domain.SantiagoDayBounds(date)
 
 	now := time.Now()
 	r.collection.UpdateOne(ctx,
@@ -305,10 +302,7 @@ func (r *BookingRepository) UpdateMPPaymentID(ctx context.Context, id primitive.
 
 func (r *BookingRepository) FindByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error) {
 	// Normalizar fecha al inicio del día en zona horaria de Chile
-	loc := domain.GetSantiagoLocation()
-	dateCL := date.In(loc)
-	startDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
-	endDate := startDate.AddDate(0, 0, 1)
+	startDate, endDate := domain.SantiagoDayBounds(date)
 
 	cursor, err := r.collection.Find(ctx, bson.M{
 		"court_id": courtID,
@@ -331,11 +325,8 @@ func (r *BookingRepository) FindByCourtAndDate(ctx context.Context, courtID prim
 
 func (r *BookingRepository) FindBySportCenterAndDate(ctx context.Context, centerID primitive.ObjectID, date time.Time) ([]domain.Booking, error) {
 	// Normalizar fecha al inicio y fin del día en zona horaria de Chile
-	loc := domain.GetSantiagoLocation()
-	dateCL := date.In(loc)
-	startDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
-	endDate := startDate.AddDate(0, 0, 1)
-	dayOfWeek := int(date.Weekday())
+	startDate, endDate := domain.SantiagoDayBounds(date)
+	dayOfWeek := int(domain.SantiagoCivilDate(date).Weekday())
 
 	log.Printf("🔍 FindBySportCenterAndDate: centerID=%s, date=%s, startDate=%s, endDate=%s, dayOfWeek=%d", centerID, date, startDate, endDate, dayOfWeek)
 
@@ -674,26 +665,24 @@ func (r *BookingRepository) GetRecurringSeries(ctx context.Context, centerIDs []
 func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name, code, status string) (*domain.AdminDashboardData, error) {
 	loc := domain.GetSantiagoLocation()
 	now := time.Now().In(loc)
-	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-	todayEnd := todayStart.AddDate(0, 0, 1)
+	todayStart, todayEnd := domain.SantiagoDayBounds(now)
 
 	// Parse date range for global filters
 	var dateFilter bson.M
 	if dateStr != "" {
 		if strings.Contains(dateStr, "|") {
 			parts := strings.SplitN(dateStr, "|", 2)
-			startT, err1 := time.ParseInLocation("2006-01-02", parts[0], loc)
-			endT, err2 := time.ParseInLocation("2006-01-02", parts[1], loc)
+			startT, err1 := domain.ParseSantiagoDate(parts[0])
+			endT, err2 := domain.ParseSantiagoDate(parts[1])
 			if err1 == nil && err2 == nil {
-				start := time.Date(startT.Year(), startT.Month(), startT.Day(), 0, 0, 0, 0, loc)
-				end := time.Date(endT.Year(), endT.Month(), endT.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, 1)
+				start, _ := domain.SantiagoDayBounds(startT)
+				_, end := domain.SantiagoDayBounds(endT)
 				dateFilter = bson.M{"$gte": start, "$lt": end}
 			}
 		} else {
-			t, err := time.ParseInLocation("2006-01-02", dateStr, loc)
+			t, err := domain.ParseSantiagoDate(dateStr)
 			if err == nil {
-				start := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
-				end := start.AddDate(0, 0, 1)
+				start, end := domain.SantiagoDayBounds(t)
 				dateFilter = bson.M{"$gte": start, "$lt": end}
 			}
 		}
@@ -1000,10 +989,7 @@ func (r *BookingRepository) UndoBalancePayment(ctx context.Context, id primitive
 }
 
 func (r *BookingRepository) FindConfirmedBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
-	loc := domain.GetSantiagoLocation()
-	dateCL := date.In(loc)
-	startDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
-	endDate := startDate.AddDate(0, 0, 1)
+	startDate, endDate := domain.SantiagoDayBounds(date)
 
 	var booking domain.Booking
 	err := r.collection.FindOne(ctx, bson.M{
@@ -1026,10 +1012,7 @@ func (r *BookingRepository) FindConfirmedBySlot(ctx context.Context, courtID pri
 }
 
 func (r *BookingRepository) FindConfirmedByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error) {
-	loc := domain.GetSantiagoLocation()
-	dateCL := date.In(loc)
-	startDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
-	endDate := startDate.AddDate(0, 0, 1)
+	startDate, endDate := domain.SantiagoDayBounds(date)
 
 	cursor, err := r.collection.Find(ctx, bson.M{
 		"court_id": courtID,
@@ -1087,10 +1070,7 @@ func (r *BookingRepository) FindConfirmedBookingsAfter(ctx context.Context, cour
 }
 
 func (r *BookingRepository) FindPendingBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
-	loc := domain.GetSantiagoLocation()
-	dateCL := date.In(loc)
-	startDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
-	endDate := startDate.AddDate(0, 0, 1)
+	startDate, endDate := domain.SantiagoDayBounds(date)
 
 	var booking domain.Booking
 	err := r.collection.FindOne(ctx, bson.M{

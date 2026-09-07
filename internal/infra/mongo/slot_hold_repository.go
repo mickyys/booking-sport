@@ -35,10 +35,7 @@ func (r *SlotHoldRepository) Insert(ctx context.Context, hold *domain.SlotHold) 
 }
 
 func (r *SlotHoldRepository) FindBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.SlotHold, error) {
-	loc := domain.GetSantiagoLocation()
-	dateCL := date.In(loc)
-	startDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
-	endDate := startDate.AddDate(0, 0, 1)
+	startDate, endDate := domain.SantiagoDayBounds(date)
 
 	var hold domain.SlotHold
 	err := r.collection.FindOne(ctx, bson.M{
@@ -72,10 +69,7 @@ func (r *SlotHoldRepository) FindByBookingID(ctx context.Context, bookingID prim
 }
 
 func (r *SlotHoldRepository) FindActiveByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.SlotHold, error) {
-	loc := domain.GetSantiagoLocation()
-	dateCL := date.In(loc)
-	startDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
-	endDate := startDate.AddDate(0, 0, 1)
+	startDate, endDate := domain.SantiagoDayBounds(date)
 
 	cursor, err := r.collection.Find(ctx, bson.M{
 		"court_id": courtID,
@@ -139,10 +133,7 @@ func (r *SlotHoldRepository) TryClaimSlot(ctx context.Context, hold *domain.Slot
 }
 
 func (r *SlotHoldRepository) FindOneAndDeleteIfExpired(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.SlotHold, error) {
-	loc := domain.GetSantiagoLocation()
-	dateCL := date.In(loc)
-	startDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
-	endDate := startDate.AddDate(0, 0, 1)
+	startDate, endDate := domain.SantiagoDayBounds(date)
 
 	now := time.Now()
 	var hold domain.SlotHold

@@ -327,8 +327,7 @@ func resolveEffectiveUserID(booking *domain.Booking) string {
 
 func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int, userID string) (*domain.SlotHold, *domain.Booking, error) {
 	loc := domain.GetSantiagoLocation()
-	dateCL := date.In(loc)
-	normalizedDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
+	normalizedDate := domain.SantiagoDateStart(date)
 
 	now := time.Now().In(loc)
 	expiresAt := now.Add(15 * time.Minute)
@@ -374,16 +373,16 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 				if hold != nil {
 					uc.holdRepo.RenewExpiration(ctx, hold.ID, expiresAt)
 				} else {
-newHold := &domain.SlotHold{
-					CourtID:   courtID,
-					Date:      normalizedDate,
-					Hour:      hour,
-					Minutes:   minutes,
-					UserID:    userID,
-					BookingID: pending.ID,
-					ExpiresAt: expiresAt,
-					CreatedAt: now,
-				}
+					newHold := &domain.SlotHold{
+						CourtID:   courtID,
+						Date:      normalizedDate,
+						Hour:      hour,
+						Minutes:   minutes,
+						UserID:    userID,
+						BookingID: pending.ID,
+						ExpiresAt: expiresAt,
+						CreatedAt: now,
+					}
 					hold, _ = uc.holdRepo.TryClaimSlot(ctx, newHold)
 				}
 				return hold, pending, nil
@@ -507,7 +506,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	}
 
 	loc := domain.GetSantiagoLocation()
-	booking.Date = time.Date(booking.Date.In(loc).Year(), booking.Date.In(loc).Month(), booking.Date.In(loc).Day(), 0, 0, 0, 0, loc)
+	booking.Date = domain.SantiagoDateStart(booking.Date)
 
 	price := 0.0
 	found := false
@@ -604,7 +603,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	}
 
 	if existingBooking != nil {
-		existingBooking.Date = time.Date(existingBooking.Date.In(loc).Year(), existingBooking.Date.In(loc).Month(), existingBooking.Date.In(loc).Day(), 0, 0, 0, 0, loc)
+		existingBooking.Date = domain.SantiagoDateStart(existingBooking.Date)
 		existingBooking.UserID = booking.UserID
 		existingBooking.GuestDetails = booking.GuestDetails
 		existingBooking.CustomerName = booking.CustomerName
@@ -1279,7 +1278,7 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 	}
 
 	loc := domain.GetSantiagoLocation()
-	booking.Date = time.Date(booking.Date.In(loc).Year(), booking.Date.In(loc).Month(), booking.Date.In(loc).Day(), 0, 0, 0, 0, loc)
+	booking.Date = domain.SantiagoDateStart(booking.Date)
 
 	// For internal bookings, we don't strict check availability if admin wants to force it,
 	// but let's check it for safety or just set it.
@@ -1431,7 +1430,7 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 	validated := make([]validatedBooking, 0, len(bookings))
 
 	for _, b := range bookings {
-		b.Date = time.Date(b.Date.In(loc).Year(), b.Date.In(loc).Month(), b.Date.In(loc).Day(), 0, 0, 0, 0, loc)
+		b.Date = domain.SantiagoDateStart(b.Date)
 
 		price := 0.0
 		minutes := b.Minutes
@@ -2122,12 +2121,7 @@ func (uc *BookingUseCase) CancelRecurringDate(ctx context.Context, id primitive.
 		return fmt.Errorf("recurring reservation is already cancelled")
 	}
 
-	loc, err := time.LoadLocation("America/Santiago")
-	if err != nil {
-		return fmt.Errorf("failed to load timezone: %w", err)
-	}
-
-	parsedDate, err := time.ParseInLocation("2006-01-02", date, loc)
+	parsedDate, err := domain.ParseSantiagoDate(date)
 	if err != nil {
 		return fmt.Errorf("invalid date format, expected YYYY-MM-DD")
 	}
@@ -2136,9 +2130,8 @@ func (uc *BookingUseCase) CancelRecurringDate(ctx context.Context, id primitive.
 		return fmt.Errorf("la fecha no corresponde al dia semanal de la recurrencia (%s)", reservation.DayOfWeekName)
 	}
 
-	today := time.Now().In(loc)
-	todayStart := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, loc)
-	if parsedDate.Before(todayStart) {
+	today := domain.SantiagoCivilDate(time.Now())
+	if parsedDate.Before(today) {
 		return fmt.Errorf("no se puede anular una fecha pasada")
 	}
 
