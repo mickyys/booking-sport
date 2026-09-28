@@ -201,6 +201,22 @@ func (m *mockCenterRepoForRecurring) FindBySlug(ctx context.Context, slug string
 	return nil, nil
 }
 
+func (m *mockCenterRepoForRecurring) FindBySubdomain(ctx context.Context, subdomain string) (*domain.SportCenter, error) {
+	return nil, nil
+}
+
+func (m *mockCenterRepoForRecurring) FindByNameAndRUT(ctx context.Context, name, rut string) (*domain.SportCenter, error) {
+	return nil, nil
+}
+
+func (m *mockCenterRepoForRecurring) FindByAdminEmail(ctx context.Context, email string) (*domain.SportCenter, error) {
+	return nil, nil
+}
+
+func (m *mockCenterRepoForRecurring) FindByHost(ctx context.Context, host string) (*domain.SportCenter, error) {
+	return nil, nil
+}
+
 func (m *mockCenterRepoForRecurring) FindByUserID(ctx context.Context, userID string) ([]domain.SportCenter, error) {
 	if m.FindByUserIDFn != nil {
 		return m.FindByUserIDFn(ctx, userID)
@@ -212,7 +228,7 @@ func (m *mockCenterRepoForRecurring) FindAll(ctx context.Context) ([]domain.Spor
 	return nil, nil
 }
 
-func (m *mockCenterRepoForRecurring) FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int) ([]domain.SportCenter, int64, error) {
+func (m *mockCenterRepoForRecurring) FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int, lat, lng *float64, priorityCity string) ([]domain.SportCenter, int64, error) {
 	return nil, 0, nil
 }
 
@@ -220,7 +236,7 @@ func (m *mockCenterRepoForRecurring) Update(ctx context.Context, center *domain.
 	return nil
 }
 
-func (m *mockCenterRepoForRecurring) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string) error {
+func (m *mockCenterRepoForRecurring) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates) error {
 	return nil
 }
 
@@ -230,6 +246,10 @@ func (m *mockCenterRepoForRecurring) Create(ctx context.Context, center *domain.
 
 func (m *mockCenterRepoForRecurring) GetCities(ctx context.Context) ([]string, error) {
 	return nil, nil
+}
+
+func (m *mockCenterRepoForRecurring) UpdateMercadoPagoConfig(ctx context.Context, id primitive.ObjectID, config *domain.MercadoPagoConfig) error {
+	return nil
 }
 
 var _ SportCenterRepository = (*mockCenterRepoForRecurring)(nil)

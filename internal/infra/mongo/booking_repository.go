@@ -200,10 +200,7 @@ func (r *BookingRepository) FinishSeries(ctx context.Context, seriesID string, c
 		return 0, nil
 	}
 
-	loc, err := time.LoadLocation("America/Santiago")
-	if err != nil {
-		return 0, err
-	}
+	loc := domain.GetSantiagoLocation()
 	nowCL := now.In(loc)
 	futureExpr := bson.M{"$gt": []interface{}{
 		bson.M{"$dateFromParts": bson.M{

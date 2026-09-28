@@ -24,6 +24,10 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 		return err
 	}
 
+	if err := ensureSpaceIndexes(ctx, db); err != nil {
+		return err
+	}
+
 	if err := ensureBookingIndexes(ctx, db); err != nil {
 		return err
 	}
@@ -40,6 +44,14 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 		return err
 	}
 
+	if err := ensureFacilityIndexes(ctx, db); err != nil {
+		return err
+	}
+
+	if err := ensureScheduleIndexes(ctx, db); err != nil {
+		return err
+	}
+
 	log.Println("[MONGODB] All indexes created successfully")
 	return nil
 }
@@ -53,12 +65,31 @@ func ensureSportCenterIndexes(ctx context.Context, db *mongo.Database) error {
 			Options: options.Index().SetUnique(true).SetName("idx_sport_centers_slug"),
 		},
 		{
+			Keys:    bson.D{{Key: "subdomain", Value: 1}},
+			Options: options.Index().SetUnique(true).SetSparse(true).SetName("idx_sport_centers_subdomain"),
+		},
+		{
+			Keys:    bson.D{{Key: "domains", Value: 1}},
+			Options: options.Index().SetUnique(true).SetSparse(true).SetName("idx_sport_centers_domains"),
+		},
+		{
 			Keys:    bson.D{{Key: "users", Value: 1}},
 			Options: options.Index().SetName("idx_sport_centers_users"),
 		},
 		{
+			Keys: bson.D{{Key: "admin_email", Value: 1}},
+			Options: options.Index().
+				SetUnique(true).
+				SetPartialFilterExpression(bson.M{"admin_email": bson.M{"$gt": ""}}).
+				SetName("idx_sport_centers_admin_email_unique"),
+		},
+		{
 			Keys:    bson.D{{Key: "city", Value: 1}},
 			Options: options.Index().SetName("idx_sport_centers_city"),
+		},
+		{
+			Keys:    bson.D{{Key: "location", Value: "2dsphere"}},
+			Options: options.Index().SetName("idx_sport_centers_location"),
 		},
 		{
 			Keys:    bson.D{{Key: "name", Value: 1}},
@@ -100,6 +131,44 @@ func ensureCourtIndexes(ctx context.Context, db *mongo.Database) error {
 	}
 
 	log.Println("[MONGODB] courts indexes created")
+	return nil
+}
+
+func ensureSpaceIndexes(ctx context.Context, db *mongo.Database) error {
+	collection := db.Collection("spaces")
+
+	indexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}},
+			Options: options.Index().SetName("idx_spaces_sport_center_id"),
+		},
+		{
+			Keys: bson.D{
+				{Key: "sport_center_id", Value: 1},
+				{Key: "category", Value: 1},
+			},
+			Options: options.Index().SetName("idx_spaces_center_category"),
+		},
+		{
+			Keys: bson.D{
+				{Key: "sport_center_id", Value: 1},
+				{Key: "enabled", Value: 1},
+			},
+			Options: options.Index().SetName("idx_spaces_center_enabled"),
+		},
+		{
+			Keys:    bson.D{{Key: "category", Value: 1}},
+			Options: options.Index().SetName("idx_spaces_category"),
+		},
+	}
+
+	_, err := collection.Indexes().CreateMany(ctx, indexes)
+	if err != nil {
+		log.Printf("[MONGODB] Error creating spaces indexes: %v", err)
+		return err
+	}
+
+	log.Println("[MONGODB] spaces indexes created")
 	return nil
 }
 
@@ -395,5 +464,99 @@ func ensureSlotHoldIndexes(ctx context.Context, db *mongo.Database) error {
 	}
 
 	log.Println("[MONGODB] slot_holds indexes created")
+	return nil
+}
+
+func ensureFacilityIndexes(ctx context.Context, db *mongo.Database) error {
+	collection := db.Collection("facilities")
+
+	indexes := []mongo.IndexModel{
+		{
+			Keys: bson.D{
+				{Key: "sport_center_id", Value: 1},
+				{Key: "enabled", Value: 1},
+			},
+			Options: options.Index().SetName("idx_facilities_center_enabled"),
+		},
+		{
+			Keys:    bson.D{{Key: "type", Value: 1}},
+			Options: options.Index().SetName("idx_facilities_type"),
+		},
+	}
+
+	_, err := collection.Indexes().CreateMany(ctx, indexes)
+	if err != nil {
+		log.Printf("[MONGODB] Error creating facilities indexes: %v", err)
+		return err
+	}
+
+	inquiries := db.Collection("facility_inquiries")
+	inqIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}},
+			Options: options.Index().SetName("idx_facility_inquiries_center"),
+		},
+		{
+			Keys:    bson.D{{Key: "facility_id", Value: 1}},
+			Options: options.Index().SetName("idx_facility_inquiries_facility"),
+		},
+	}
+	_, err = inquiries.Indexes().CreateMany(ctx, inqIndexes)
+	if err != nil {
+		log.Printf("[MONGODB] Error creating facility_inquiries indexes: %v", err)
+		return err
+	}
+
+	log.Println("[MONGODB] facilities indexes created")
+	return nil
+}
+
+func ensureScheduleIndexes(ctx context.Context, db *mongo.Database) error {
+	rules := db.Collection("schedule_rules")
+	ruleIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "space_id", Value: 1}},
+			Options: options.Index().SetName("idx_schedule_rules_space"),
+		},
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}},
+			Options: options.Index().SetName("idx_schedule_rules_center"),
+		},
+	}
+	if _, err := rules.Indexes().CreateMany(ctx, ruleIndexes); err != nil {
+		log.Printf("[MONGODB] Error creating schedule_rules indexes: %v", err)
+	}
+
+	exceptions := db.Collection("schedule_exceptions")
+	exceptionIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "space_id", Value: 1}, {Key: "date", Value: 1}},
+			Options: options.Index().SetName("idx_schedule_exceptions_space_date"),
+		},
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}},
+			Options: options.Index().SetName("idx_schedule_exceptions_center"),
+		},
+	}
+	if _, err := exceptions.Indexes().CreateMany(ctx, exceptionIndexes); err != nil {
+		log.Printf("[MONGODB] Error creating schedule_exceptions indexes: %v", err)
+	}
+
+	blocks := db.Collection("blocks")
+	blockIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "space_id", Value: 1}, {Key: "date", Value: 1}},
+			Options: options.Index().SetName("idx_blocks_space_date"),
+		},
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}},
+			Options: options.Index().SetName("idx_blocks_center"),
+		},
+	}
+	if _, err := blocks.Indexes().CreateMany(ctx, blockIndexes); err != nil {
+		log.Printf("[MONGODB] Error creating blocks indexes: %v", err)
+	}
+
+	log.Println("[MONGODB] schedule indexes created")
 	return nil
 }
