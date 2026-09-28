@@ -69,12 +69,12 @@ type SportCenterBranding struct {
 }
 
 type SportCenter struct {
-	ID                    primitive.ObjectID   `bson:"_id,omitempty" json:"id,omitempty"`
-	Slug                  string               `bson:"slug" json:"slug"`
-	Name                  string               `bson:"name" json:"name"`
-	City                  string               `bson:"city" json:"city"`
-	Address               string               `bson:"address" json:"address"`
-	Coordinates           Coordinates          `bson:"coordinates" json:"coordinates"`
+	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	Slug        string             `bson:"slug" json:"slug"`
+	Name        string             `bson:"name" json:"name"`
+	City        string             `bson:"city" json:"city"`
+	Address     string             `bson:"address" json:"address"`
+	Coordinates Coordinates        `bson:"coordinates" json:"coordinates"`
 	// Location es la representación GeoJSON de Coordinates, usada solo para el
 	// índice 2dsphere y $geoNear. No se expone en la API pública.
 	Location              *GeoJSONPoint        `bson:"location,omitempty" json:"-"`
@@ -99,10 +99,47 @@ type SportCenter struct {
 	CreatedAt             time.Time            `bson:"created_at" json:"created_at"`
 	UpdatedAt             time.Time            `bson:"updated_at" json:"updated_at"`
 	Rut                   string               `bson:"rut" json:"rut"`
-	TiposEspacio          []string             `bson:"tipos_espacios" json:"tipos_espacios"`
 	// AdminEmail es el correo del administrador dueño del centro (1 email = 1 centro).
 	// Se normaliza (trim + minúsculas) antes de guardar y consultar.
 	AdminEmail string `bson:"admin_email" json:"admin_email"`
+	// OnboardingStatus indica si el wizard post-login está pendiente o fue
+	// completado. Los centros creados vía onboard parten en "pending"; los
+	// centros existentes (campo vacío) no se consideran pendientes.
+	OnboardingStatus string `bson:"onboarding_status" json:"onboarding_status"`
+	// OnboardingStep es la última etapa completada del wizard (1..5), para
+	// retomar donde quedó el usuario al reingresar. 0 = ninguna completada.
+	OnboardingStep int `bson:"onboarding_step" json:"onboarding_step"`
+	// PaymentMode es la modalidad comercial elegida en el wizard (RES-25):
+	// "pay_at_center" (solo reservas) o "pay_online" (pago anticipado).
+	PaymentMode string `bson:"payment_mode" json:"payment_mode"`
+	// FirstMonthFree activa la oferta "primer mes gratis" para nuevos clientes
+	// (RES-26).
+	FirstMonthFree bool `bson:"first_month_free" json:"first_month_free"`
+	// SpaceTemplates es un borrador transitorio de la configuración de
+	// espacios definida en la etapa "Espacios" del wizard (RES-24). Se persiste
+	// para retomar el wizard tras una recarga y se materializa en la colección
+	// `spaces` (y `schedule_rules` para canchas) al finalizar el onboarding,
+	// momento en el que se limpia. No es la fuente de verdad de los espacios
+	// del centro: esos viven en la colección `spaces`.
+	SpaceTemplates []SpaceTemplate `bson:"space_templates,omitempty" json:"space_templates,omitempty"`
+}
+
+// SpaceTemplate es la plantilla de configuración de un tipo de espacio
+// definida en el wizard de onboarding (RES-24). Contiene la cantidad y, según
+// el tipo, las reglas semanales (canchas: franjas con precio) o los valores de
+// arriendo (quincho/sede/piscina). Al finalizar el onboarding se materializa en
+// documentos de la colección `spaces` (y `schedule_rules` para canchas).
+type SpaceTemplate struct {
+	Tipo       string `bson:"tipo" json:"tipo"`
+	Cantidad   int    `bson:"cantidad" json:"cantidad"`
+	Cancha     bool   `bson:"cancha" json:"cancha"`
+	// Rules son las reglas semanales para canchas (sin space_id asignado aún).
+	Rules []ScheduleRule `bson:"rules,omitempty" json:"rules,omitempty"`
+	// Valores de arriendo para facilities (quincho/sede/piscina).
+	PriceAllDay   float64 `bson:"price_all_day,omitempty" json:"price_all_day,omitempty"`
+	PriceHalfDay  float64 `bson:"price_half_day,omitempty" json:"price_half_day,omitempty"`
+	PricePerDay   float64 `bson:"price_per_day,omitempty" json:"price_per_day,omitempty"`
+	PricePerMonth float64 `bson:"price_per_month,omitempty" json:"price_per_month,omitempty"`
 }
 
 // TipoEspacio es el tipo de espacio de un centro deportivo.
@@ -110,10 +147,10 @@ type TipoEspacio string
 
 // Valid values for TipoEspacio of a sport center.
 const (
-	TipoEspacioCancha    TipoEspacio = "cancha"
-	TipoEspacioQuincho   TipoEspacio = "quincho"
-	TipoEspacioSede      TipoEspacio = "sede"
-	TipoEspacioPiscina   TipoEspacio = "piscina"
+	TipoEspacioCancha  TipoEspacio = "cancha"
+	TipoEspacioQuincho TipoEspacio = "quincho"
+	TipoEspacioSede    TipoEspacio = "sede"
+	TipoEspacioPiscina TipoEspacio = "piscina"
 )
 
 // TipoEspacioIsValid reports whether the given value is a valid TipoEspacio.
@@ -122,25 +159,6 @@ func (t TipoEspacio) IsValid() bool {
 		t == TipoEspacioQuincho ||
 		t == TipoEspacioSede ||
 		t == TipoEspacioPiscina
-}
-
-// TipoEspaciosValidos deduplica vals preservando el orden y valida cada
-// elemento con TipoEspacio.IsValid. Si algún elemento es inválido retorna
-// (nil, false); si todos son válidos retorna la lista deduplicada y true.
-func TipoEspaciosValidos(vals []string) ([]string, bool) {
-	out := make([]string, 0, len(vals))
-	seen := make(map[string]struct{}, len(vals))
-	for _, v := range vals {
-		if !TipoEspacio(v).IsValid() {
-			return nil, false
-		}
-		if _, dup := seen[v]; dup {
-			continue
-		}
-		seen[v] = struct{}{}
-		out = append(out, v)
-	}
-	return out, true
 }
 
 // TenantInfo es la vista pública de un tenant (mapping de hosts/dominios a un centro).
@@ -530,17 +548,17 @@ const (
 )
 
 type Booking struct {
-	ID                 primitive.ObjectID  `bson:"_id,omitempty" json:"id,omitempty"`
-	CourtID            primitive.ObjectID  `bson:"court_id" json:"court_id"`
-	SportCenterID      primitive.ObjectID  `bson:"sport_center_id" json:"sport_center_id"`
-	CourtName          string              `bson:"court_name,omitempty" json:"court_name,omitempty"`
-	SportCenterName    string              `bson:"sport_center_name,omitempty" json:"sport_center_name,omitempty"`
-	UserID             string              `bson:"user_id,omitempty" json:"user_id,omitempty"`
-	GuestDeviceID      string              `bson:"guest_device_id,omitempty" json:"guest_device_id,omitempty"`
-	GuestDetails       *GuestDetails       `bson:"guest_details,omitempty" json:"guest_details,omitempty"`
-	Date               time.Time           `bson:"date" json:"date"`
-	Hour               int                 `bson:"hour" json:"hour"`
-	Minutes            int                 `bson:"minutes" json:"minutes"`
+	ID              primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	CourtID         primitive.ObjectID `bson:"court_id" json:"court_id"`
+	SportCenterID   primitive.ObjectID `bson:"sport_center_id" json:"sport_center_id"`
+	CourtName       string             `bson:"court_name,omitempty" json:"court_name,omitempty"`
+	SportCenterName string             `bson:"sport_center_name,omitempty" json:"sport_center_name,omitempty"`
+	UserID          string             `bson:"user_id,omitempty" json:"user_id,omitempty"`
+	GuestDeviceID   string             `bson:"guest_device_id,omitempty" json:"guest_device_id,omitempty"`
+	GuestDetails    *GuestDetails      `bson:"guest_details,omitempty" json:"guest_details,omitempty"`
+	Date            time.Time          `bson:"date" json:"date"`
+	Hour            int                `bson:"hour" json:"hour"`
+	Minutes         int                `bson:"minutes" json:"minutes"`
 	// DurationMinutes es la duración de la reserva en minutos. 0 o 60 implica 1 hora.
 	DurationMinutes    int                 `bson:"duration_minutes,omitempty" json:"duration_minutes,omitempty"`
 	FinalPrice         float64             `bson:"final_price" json:"final_price"`
@@ -610,25 +628,25 @@ const (
 )
 
 type RecurringReservation struct {
-	ID             primitive.ObjectID         `bson:"_id,omitempty" json:"id,omitempty"`
-	SportCenterID  primitive.ObjectID         `bson:"sport_center_id" json:"sport_center_id"`
-	CourtID        primitive.ObjectID         `bson:"court_id" json:"court_id"`
-	CustomerName   string                     `bson:"customer_name" json:"customer_name"`
-	CustomerPhone  string                     `bson:"customer_phone" json:"customer_phone"`
-	Hour           int                        `bson:"hour" json:"hour"`
-	Minutes        int                        `bson:"minutes" json:"minutes"`
+	ID            primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	SportCenterID primitive.ObjectID `bson:"sport_center_id" json:"sport_center_id"`
+	CourtID       primitive.ObjectID `bson:"court_id" json:"court_id"`
+	CustomerName  string             `bson:"customer_name" json:"customer_name"`
+	CustomerPhone string             `bson:"customer_phone" json:"customer_phone"`
+	Hour          int                `bson:"hour" json:"hour"`
+	Minutes       int                `bson:"minutes" json:"minutes"`
 	// DurationMinutes es la duración de cada reserva de la recurrencia en minutos.
-	DurationMinutes int                       `bson:"duration_minutes,omitempty" json:"duration_minutes,omitempty"`
-	Price          float64                    `bson:"price" json:"price"`
-	DayOfWeek      int                        `bson:"day_of_week" json:"day_of_week"`           // 0=domingo, 1=lunes, ..., 6=sábado
-	DayOfWeekName  string                     `bson:"day_of_week_name" json:"day_of_week_name"` // "lunes", "martes", etc.
-	Notes          string                     `bson:"notes,omitempty" json:"notes,omitempty"`
-	Status         RecurringReservationStatus `bson:"status" json:"status"`
-	CancelledBy    string                     `bson:"cancelled_by,omitempty" json:"cancelled_by,omitempty"`
-	CancelReason   string                     `bson:"cancel_reason,omitempty" json:"cancel_reason,omitempty"`
-	CancelledDates []string                   `bson:"cancelled_dates,omitempty" json:"cancelled_dates,omitempty"`
-	CreatedAt      time.Time                  `bson:"created_at" json:"created_at"`
-	UpdatedAt      time.Time                  `bson:"updated_at" json:"updated_at"`
+	DurationMinutes int                        `bson:"duration_minutes,omitempty" json:"duration_minutes,omitempty"`
+	Price           float64                    `bson:"price" json:"price"`
+	DayOfWeek       int                        `bson:"day_of_week" json:"day_of_week"`           // 0=domingo, 1=lunes, ..., 6=sábado
+	DayOfWeekName   string                     `bson:"day_of_week_name" json:"day_of_week_name"` // "lunes", "martes", etc.
+	Notes           string                     `bson:"notes,omitempty" json:"notes,omitempty"`
+	Status          RecurringReservationStatus `bson:"status" json:"status"`
+	CancelledBy     string                     `bson:"cancelled_by,omitempty" json:"cancelled_by,omitempty"`
+	CancelReason    string                     `bson:"cancel_reason,omitempty" json:"cancel_reason,omitempty"`
+	CancelledDates  []string                   `bson:"cancelled_dates,omitempty" json:"cancelled_dates,omitempty"`
+	CreatedAt       time.Time                  `bson:"created_at" json:"created_at"`
+	UpdatedAt       time.Time                  `bson:"updated_at" json:"updated_at"`
 }
 
 func (r *RecurringReservation) IsDateCancelled(date time.Time) bool {

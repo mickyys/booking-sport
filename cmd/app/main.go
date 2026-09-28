@@ -99,7 +99,7 @@ func main() {
 
 	log.Infow("repositories_initialized")
 
-	sportCenterUC := app.NewSportCenterUseCase(sportCenterRepo, courtRepo, userRepo, bookingRepo, holdRepo, recurringReservationRepo)
+	sportCenterUC := app.NewSportCenterUseCase(sportCenterRepo, courtRepo, userRepo, bookingRepo, holdRepo, recurringReservationRepo, spaceRepo, scheduleRuleRepo)
 	courtUC := app.NewCourtUseCase(courtRepo, sportCenterRepo, bookingRepo)
 	facilityUC := app.NewFacilityUseCase(facilityRepo, sportCenterRepo)
 	spaceUC := app.NewSpaceUseCase(spaceRepo, sportCenterRepo)
@@ -266,6 +266,7 @@ func main() {
 		api.GET("/sport-centers/:id/schedules/bookings", sportCenterHandler.GetSchedulesWithBookings)
 		// Endpoint para administradores: obtener agenda automáticamente sin pasar id
 		api.GET("/admin/my-sport-center", sportCenterHandler.GetMySportCenter)
+		api.PUT("/admin/my-sport-center/onboarding", sportCenterHandler.UpdateMySportCenterOnboarding)
 		api.GET("/admin/sport-centers/schedules/bookings", sportCenterHandler.GetAdminSchedulesWithBookings)
 		api.GET("/bookings/:id", bookingHandler.GetBookingDetail)
 		api.GET("/bookings/my-bookings", bookingHandler.GetUserBookings)

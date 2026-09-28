@@ -4,7 +4,6 @@ package infra
 //
 //	POST /api/sport-centers/onboard
 //	  RUT inválido            -> 400
-//	  tipo_espacios inválido  -> 400 (binding oneof / array vacío)
 //	  cuenta inexistente      -> 422 (Auth0: aún no creó su cuenta)
 //	  email sin verificar     -> permitido (no bloquea el registro)
 //	  slug duplicado          -> 409
@@ -38,6 +37,8 @@ type mockCenterRepoForOnboardHandler struct {
 	existingByAdminEmail *domain.SportCenter
 	createCalls          int
 	lastCreated          *domain.SportCenter
+	centersByUser        []domain.SportCenter
+	lastUpdated          *domain.SportCenter
 }
 
 func (m *mockCenterRepoForOnboardHandler) Create(ctx context.Context, center *domain.SportCenter) error {
@@ -46,6 +47,7 @@ func (m *mockCenterRepoForOnboardHandler) Create(ctx context.Context, center *do
 	return nil
 }
 func (m *mockCenterRepoForOnboardHandler) Update(ctx context.Context, center *domain.SportCenter) error {
+	m.lastUpdated = center
 	return nil
 }
 func (m *mockCenterRepoForOnboardHandler) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates) error {
@@ -85,7 +87,7 @@ func (m *mockCenterRepoForOnboardHandler) FindPaged(ctx context.Context, page, l
 	return nil, 0, nil
 }
 func (m *mockCenterRepoForOnboardHandler) FindByUserID(ctx context.Context, userID string) ([]domain.SportCenter, error) {
-	return nil, nil
+	return m.centersByUser, nil
 }
 func (m *mockCenterRepoForOnboardHandler) GetCities(ctx context.Context) ([]string, error) {
 	return nil, nil
@@ -185,7 +187,7 @@ func newOnboardRouter(t *testing.T, repo *mockCenterRepoForOnboardHandler, auth0
 	t.Helper()
 
 	gin.SetMode(gin.TestMode)
-	uc := app.NewSportCenterUseCase(repo, nil, nil, nil, nil, nil)
+	uc := app.NewSportCenterUseCase(repo, nil, nil, nil, nil, nil, nil, nil)
 	var mailer app.Mailer
 	if len(mailers) > 0 {
 		mailer = mailers[0]
@@ -224,7 +226,7 @@ func verifiedAuth0Client() *mockAuth0Client {
 	}
 }
 
-const validPayload = `{"nombre":"Club Andino Ñuñoa","rut":"12.345.678-5","direccion":"Av. Ossa 123","tipo_espacios":["cancha"],"email":"admin@club.cl"}`
+const validPayload = `{"nombre":"Club Andino Ñuñoa","rut":"12.345.678-5","direccion":"Av. Ossa 123","email":"admin@club.cl"}`
 
 // ---------- POST /onboard: validaciones de binding ----------
 
@@ -232,7 +234,7 @@ func TestOnboardHandler_NombreMayorA100_Retorna400(t *testing.T) {
 	r := newOnboardRouter(t, &mockCenterRepoForOnboardHandler{}, verifiedAuth0Client())
 
 	longName := strings.Repeat("a", 101)
-	payload := `{"nombre":"` + longName + `","rut":"12.345.678-5","direccion":"Dir","tipo_espacios":["cancha"],"email":"admin@club.cl"}`
+	payload := `{"nombre":"` + longName + `","rut":"12.345.678-5","direccion":"Dir","email":"admin@club.cl"}`
 
 	w := doRequest(t, r, http.MethodPost, "/api/sport-centers/onboard", payload)
 	if w.Code != http.StatusBadRequest {
@@ -241,31 +243,10 @@ func TestOnboardHandler_NombreMayorA100_Retorna400(t *testing.T) {
 	}
 }
 
-func TestOnboardHandler_TiposEspacioVacio_Retorna400(t *testing.T) {
-	r := newOnboardRouter(t, &mockCenterRepoForOnboardHandler{}, verifiedAuth0Client())
-
-	payload := `{"nombre":"Club V","rut":"12.345.678-5","direccion":"Dir","tipo_espacios":[],"email":"admin@club.cl"}`
-	w := doRequest(t, r, http.MethodPost, "/api/sport-centers/onboard", payload)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("array vacío: status = %d, want %d (binding min=1). body=%s",
-			w.Code, http.StatusBadRequest, w.Body.String())
-	}
-}
-
-func TestOnboardHandler_TipoEspacioInvalido_Retorna400(t *testing.T) {
-	r := newOnboardRouter(t, &mockCenterRepoForOnboardHandler{}, verifiedAuth0Client())
-
-	payload := `{"nombre":"Club Y","rut":"12.345.678-5","direccion":"Dir","tipo_espacios":["gimnasio"],"email":"admin@club.cl"}`
-	w := doRequest(t, r, http.MethodPost, "/api/sport-centers/onboard", payload)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("tipo inválido: status = %d, want %d. body=%s", w.Code, http.StatusBadRequest, w.Body.String())
-	}
-}
-
 func TestOnboardHandler_EmailRequerido_Retorna400(t *testing.T) {
 	r := newOnboardRouter(t, &mockCenterRepoForOnboardHandler{}, verifiedAuth0Client())
 
-	payload := `{"nombre":"Club E","rut":"12.345.678-5","direccion":"Dir","tipo_espacios":["cancha"]}`
+	payload := `{"nombre":"Club E","rut":"12.345.678-5","direccion":"Dir"}`
 	w := doRequest(t, r, http.MethodPost, "/api/sport-centers/onboard", payload)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("email ausente: status = %d, want %d (binding required). body=%s",
@@ -339,7 +320,7 @@ func TestOnboardHandler_CuentaNuevaConClaveDebil_Retorna400(t *testing.T) {
 			repo := &mockCenterRepoForOnboardHandler{}
 			r := newOnboardRouter(t, repo, auth0Mock)
 
-			payload := `{"nombre":"Club K","rut":"12.345.678-5","direccion":"Dir","tipo_espacios":["cancha"],"email":"admin@club.cl","clave":"` + tc.clave + `"}`
+			payload := `{"nombre":"Club K","rut":"12.345.678-5","direccion":"Dir","email":"admin@club.cl","clave":"` + tc.clave + `"}`
 			w := doRequest(t, r, http.MethodPost, "/api/sport-centers/onboard", payload)
 			if w.Code != http.StatusBadRequest {
 				t.Errorf("%s: status = %d, want %d. body=%s", tc.name, w.Code, http.StatusBadRequest, w.Body.String())
@@ -360,7 +341,7 @@ func TestOnboardHandler_CuentaNuevaConClaveValida_CreaCuentaCentroRolYEnviaBienv
 	r := newOnboardRouter(t, repo, auth0Mock, mailerMock)
 
 	w := doRequest(t, r, http.MethodPost, "/api/sport-centers/onboard",
-		`{"nombre":"Club Nuevo","rut":"12.345.678-5","direccion":"Av. Ossa 123","tipo_espacios":["cancha"],"email":"Admin@Club.CL","clave":"ClaveSegura123"}`)
+		`{"nombre":"Club Nuevo","rut":"12.345.678-5","direccion":"Av. Ossa 123","email":"Admin@Club.CL","clave":"ClaveSegura123"}`)
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d. body=%s", w.Code, http.StatusCreated, w.Body.String())
@@ -416,7 +397,7 @@ func TestOnboardHandler_FalloTicketSetup_IgualEnviaBienvenidaSinEnlace(t *testin
 	r := newOnboardRouter(t, repo, auth0Mock, mailerMock)
 
 	w := doRequest(t, r, http.MethodPost, "/api/sport-centers/onboard",
-		`{"nombre":"Club T","rut":"12.345.678-5","direccion":"Dir","tipo_espacios":["cancha"],"email":"admin@club.cl","clave":"ClaveSegura123"}`)
+		`{"nombre":"Club T","rut":"12.345.678-5","direccion":"Dir","email":"admin@club.cl","clave":"ClaveSegura123"}`)
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("fallo del ticket debe ser best-effort: status = %d, want %d. body=%s",
@@ -466,7 +447,7 @@ func TestOnboardHandler_EmailVerificado_CreaCentroConOwnershipYEmailNormalizado(
 	repo := &mockCenterRepoForOnboardHandler{}
 	r := newOnboardRouter(t, repo, auth0Mock)
 
-	payload := `{"nombre":"Club Andino Ñuñoa","rut":"12.345.678-5","direccion":"Av. Ossa 123","tipo_espacios":["cancha"],"email":"Admin@CLUB.CL"}`
+	payload := `{"nombre":"Club Andino Ñuñoa","rut":"12.345.678-5","direccion":"Av. Ossa 123","email":"Admin@CLUB.CL"}`
 	w := doRequest(t, r, http.MethodPost, "/api/sport-centers/onboard", payload)
 
 	if w.Code != http.StatusCreated {
@@ -482,29 +463,9 @@ func TestOnboardHandler_EmailVerificado_CreaCentroConOwnershipYEmailNormalizado(
 	if len(center.Users) != 1 || center.Users[0] != verifiedAuth0ID {
 		t.Errorf("users = %v, want [%s]", center.Users, verifiedAuth0ID)
 	}
-	if len(center.TiposEspacio) != 1 || center.TiposEspacio[0] != "cancha" {
-		t.Errorf("tipos_espacios = %v, want [cancha]", center.TiposEspacio)
-	}
 	if auth0Mock.assignRoleCalls != 1 || auth0Mock.lastAssignedUser != verifiedAuth0ID {
 		t.Errorf("AssignRole calls=%d user=%q, want 1 llamada para %s",
 			auth0Mock.assignRoleCalls, auth0Mock.lastAssignedUser, verifiedAuth0ID)
-	}
-}
-
-func TestOnboardHandler_TiposMultiplesConDuplicados_PersisteDedupeado(t *testing.T) {
-	auth0Mock := verifiedAuth0Client()
-	repo := &mockCenterRepoForOnboardHandler{}
-	r := newOnboardRouter(t, repo, auth0Mock)
-
-	payload := `{"nombre":"Club D","rut":"12.345.678-5","direccion":"Dir","tipo_espacios":["cancha","cancha","quincho"],"email":"admin@club.cl"}`
-	w := doRequest(t, r, http.MethodPost, "/api/sport-centers/onboard", payload)
-
-	if w.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want %d. body=%s", w.Code, http.StatusCreated, w.Body.String())
-	}
-	got := repo.lastCreated.TiposEspacio
-	if len(got) != 2 || got[0] != "cancha" || got[1] != "quincho" {
-		t.Errorf("tipos_espacios persistidos = %v, want [cancha quincho]", got)
 	}
 }
 
@@ -513,11 +474,11 @@ func TestOnboardHandler_TiposMultiplesValidos_Retorna201(t *testing.T) {
 	repo := &mockCenterRepoForOnboardHandler{}
 	r := newOnboardRouter(t, repo, auth0Mock)
 
-	payload := `{"nombre":"Club M","rut":"12.345.678-5","direccion":"Dir","tipo_espacios":["cancha","quincho","piscina"],"email":"admin@club.cl"}`
+	payload := `{"nombre":"Club M","rut":"12.345.678-5","direccion":"Dir","email":"admin@club.cl"}`
 	w := doRequest(t, r, http.MethodPost, "/api/sport-centers/onboard", payload)
 
 	if w.Code != http.StatusCreated {
-		t.Errorf("múltiples válidos: status = %d, want %d. body=%s", w.Code, http.StatusCreated, w.Body.String())
+		t.Errorf("camino feliz: status = %d, want %d. body=%s", w.Code, http.StatusCreated, w.Body.String())
 	}
 }
 
@@ -527,7 +488,7 @@ func TestOnboardHandler_ConCiudadYCoordenadas_PersisteUbicacion(t *testing.T) {
 	repo := &mockCenterRepoForOnboardHandler{}
 	r := newOnboardRouter(t, repo, verifiedAuth0Client())
 
-	payload := `{"nombre":"Club Geo","rut":"12.345.678-5","direccion":"Av. Ossa 123","tipo_espacios":["cancha"],"email":"admin@club.cl","ciudad":"La Reina","latitud":-33.4383,"longitud":-70.7511}`
+	payload := `{"nombre":"Club Geo","rut":"12.345.678-5","direccion":"Av. Ossa 123","email":"admin@club.cl","ciudad":"La Reina","latitud":-33.4383,"longitud":-70.7511}`
 	w := doRequest(t, r, http.MethodPost, "/api/sport-centers/onboard", payload)
 
 	if w.Code != http.StatusCreated {
@@ -565,7 +526,7 @@ func TestOnboardHandler_LatitudSinLongitud_Retorna400(t *testing.T) {
 	repo := &mockCenterRepoForOnboardHandler{}
 	r := newOnboardRouter(t, repo, verifiedAuth0Client())
 
-	payload := `{"nombre":"Club Parcial","rut":"12.345.678-5","direccion":"Dir","tipo_espacios":["cancha"],"email":"admin@club.cl","ciudad":"Santiago","latitud":-33.45}`
+	payload := `{"nombre":"Club Parcial","rut":"12.345.678-5","direccion":"Dir","email":"admin@club.cl","ciudad":"Santiago","latitud":-33.45}`
 	w := doRequest(t, r, http.MethodPost, "/api/sport-centers/onboard", payload)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("latitud sin longitud: status = %d, want %d. body=%s",
@@ -589,7 +550,7 @@ func TestOnboardHandler_CoordenadasFueraDeRango_Retorna400(t *testing.T) {
 			repo := &mockCenterRepoForOnboardHandler{}
 			r := newOnboardRouter(t, repo, verifiedAuth0Client())
 
-			payload := `{"nombre":"Club Rango","rut":"12.345.678-5","direccion":"Dir","tipo_espacios":["cancha"],"email":"admin@club.cl",` + tc.json + `}`
+			payload := `{"nombre":"Club Rango","rut":"12.345.678-5","direccion":"Dir","email":"admin@club.cl",` + tc.json + `}`
 			w := doRequest(t, r, http.MethodPost, "/api/sport-centers/onboard", payload)
 			if w.Code != http.StatusBadRequest {
 				t.Errorf("%s: status = %d, want %d. body=%s", tc.name, w.Code, http.StatusBadRequest, w.Body.String())
@@ -700,7 +661,7 @@ func TestOnboardHandler_UsuarioExistenteSinCentro_IgnoraClaveYUsaCuentaExistente
 func TestOnboardHandler_RUTInvalido_Retorna400(t *testing.T) {
 	r := newOnboardRouter(t, &mockCenterRepoForOnboardHandler{}, verifiedAuth0Client())
 
-	payload := `{"nombre":"Club X","rut":"12.345.678-9","direccion":"Dir","tipo_espacios":["cancha"],"email":"admin@club.cl"}`
+	payload := `{"nombre":"Club X","rut":"12.345.678-9","direccion":"Dir","email":"admin@club.cl"}`
 	w := doRequest(t, r, http.MethodPost, "/api/sport-centers/onboard", payload)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("RUT inválido: status = %d, want %d. body=%s", w.Code, http.StatusBadRequest, w.Body.String())
@@ -800,3 +761,234 @@ func TestVerificationStatus_SinQueryParam_Retorna400(t *testing.T) {
 		t.Errorf("sin query email: status = %d, want %d", w.Code, http.StatusBadRequest)
 	}
 }
+
+// ---------- PUT /admin/my-sport-center/onboarding (wizard) ----------
+
+func wizardCenter() domain.SportCenter {
+	return domain.SportCenter{
+		ID:              primitive.NewObjectID(),
+		Name:            "Club Wizard",
+		AdminEmail:      "admin@club.cl",
+		Users:           []string{"auth0|wizard-admin"},
+		OnboardingStatus: "pending",
+	}
+}
+
+// mockWizardSpaceRepo captura los espacios materializados por el wizard.
+type mockWizardSpaceRepo struct {
+	created []*domain.Space
+}
+
+func (m *mockWizardSpaceRepo) Create(ctx context.Context, space *domain.Space) error {
+	if space.ID.IsZero() {
+		space.ID = primitive.NewObjectID()
+	}
+	m.created = append(m.created, space)
+	return nil
+}
+func (m *mockWizardSpaceRepo) FindByID(ctx context.Context, id primitive.ObjectID) (*domain.Space, error) { return nil, nil }
+func (m *mockWizardSpaceRepo) FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.Space, error) {
+	return nil, nil
+}
+func (m *mockWizardSpaceRepo) FindByCenterAndCategory(ctx context.Context, centerID primitive.ObjectID, category domain.SpaceCategory) ([]domain.Space, error) {
+	return nil, nil
+}
+func (m *mockWizardSpaceRepo) Update(ctx context.Context, space *domain.Space) error { return nil }
+func (m *mockWizardSpaceRepo) Delete(ctx context.Context, id primitive.ObjectID) error { return nil }
+func (m *mockWizardSpaceRepo) UpdateScheduleSlot(ctx context.Context, id primitive.ObjectID, slot domain.CourtSchedule) error {
+	return nil
+}
+func (m *mockWizardSpaceRepo) SyncPartialPaymentSlots(ctx context.Context, centerID primitive.ObjectID, partialPaymentEnabled bool) (int64, error) {
+	return 0, nil
+}
+
+// mockWizardRuleRepo captura las reglas de horario materializadas por el wizard.
+type mockWizardRuleRepo struct {
+	created []*domain.ScheduleRule
+}
+
+func (m *mockWizardRuleRepo) Create(ctx context.Context, rule *domain.ScheduleRule) error {
+	if rule.ID.IsZero() {
+		rule.ID = primitive.NewObjectID()
+	}
+	m.created = append(m.created, rule)
+	return nil
+}
+func (m *mockWizardRuleRepo) Update(ctx context.Context, rule *domain.ScheduleRule) error { return nil }
+func (m *mockWizardRuleRepo) FindByID(ctx context.Context, id primitive.ObjectID) (*domain.ScheduleRule, error) {
+	return nil, nil
+}
+func (m *mockWizardRuleRepo) FindBySpaceID(ctx context.Context, spaceID primitive.ObjectID) ([]domain.ScheduleRule, error) {
+	return nil, nil
+}
+func (m *mockWizardRuleRepo) FindBySportCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.ScheduleRule, error) {
+	return nil, nil
+}
+func (m *mockWizardRuleRepo) Delete(ctx context.Context, id primitive.ObjectID) error { return nil }
+func (m *mockWizardRuleRepo) DeleteBySpaceID(ctx context.Context, spaceID primitive.ObjectID) error { return nil }
+
+func newOnboardingWizardRouter(t *testing.T, repo *mockCenterRepoForOnboardHandler) *gin.Engine {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	uc := app.NewSportCenterUseCase(repo, nil, nil, nil, nil, nil, &mockWizardSpaceRepo{}, &mockWizardRuleRepo{})
+	h := NewSportCenterHandler(uc, &mockAuth0Client{}, &mockMailer{})
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("user_id", "auth0|wizard-admin") })
+	r.PUT("/api/admin/my-sport-center/onboarding", h.UpdateMySportCenterOnboarding)
+	return r
+}
+
+func TestOnboardingWizard_SinCentro_Retorna404(t *testing.T) {
+	repo := &mockCenterRepoForOnboardHandler{}
+	r := newOnboardingWizardRouter(t, repo)
+
+	w := doRequest(t, r, http.MethodPut, "/api/admin/my-sport-center/onboarding", `{"step":1,"telefono":"+56 9 1234 5678"}`)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d. body=%s", w.Code, http.StatusNotFound, w.Body.String())
+	}
+}
+
+func TestOnboardingWizard_EtapaContacto_GuardaTelefonoYAvanza(t *testing.T) {
+	repo := &mockCenterRepoForOnboardHandler{centersByUser: []domain.SportCenter{wizardCenter()}}
+	r := newOnboardingWizardRouter(t, repo)
+
+	w := doRequest(t, r, http.MethodPut, "/api/admin/my-sport-center/onboarding", `{"step":1,"telefono":"+56 9 1234 5678"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d. body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if repo.lastUpdated == nil {
+		t.Fatal("Update no fue llamado")
+	}
+	if repo.lastUpdated.Contact.Phone != "+56 9 1234 5678" {
+		t.Errorf("contact.phone = %q, want +56 9 1234 5678", repo.lastUpdated.Contact.Phone)
+	}
+	if repo.lastUpdated.Contact.Email != "admin@club.cl" {
+		t.Errorf("contact.email = %q, want admin@club.cl", repo.lastUpdated.Contact.Email)
+	}
+	if repo.lastUpdated.OnboardingStep != 1 {
+		t.Errorf("onboarding_step = %d, want 1", repo.lastUpdated.OnboardingStep)
+	}
+}
+
+func TestOnboardingWizard_EtapaContacto_TelefonoInvalido_Retorna400(t *testing.T) {
+	repo := &mockCenterRepoForOnboardHandler{centersByUser: []domain.SportCenter{wizardCenter()}}
+	r := newOnboardingWizardRouter(t, repo)
+
+	w := doRequest(t, r, http.MethodPut, "/api/admin/my-sport-center/onboarding", `{"step":1,"telefono":"123"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d. body=%s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if repo.lastUpdated != nil {
+		t.Error("Update no debe llamarse con teléfono inválido")
+	}
+}
+
+func TestOnboardingWizard_EtapaEspacios_ValidaYAvanza(t *testing.T) {
+	repo := &mockCenterRepoForOnboardHandler{centersByUser: []domain.SportCenter{wizardCenter()}}
+	r := newOnboardingWizardRouter(t, repo)
+
+	payload := `{"step":2,"templates":[{"tipo":"cancha","cantidad":2,"cancha":true},{"tipo":"piscina","cantidad":1}]}`
+	w := doRequest(t, r, http.MethodPut, "/api/admin/my-sport-center/onboarding", payload)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d. body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if repo.lastUpdated == nil {
+		t.Fatal("Update no fue llamado")
+	}
+	if repo.lastUpdated.OnboardingStep != 2 {
+		t.Errorf("onboarding_step = %d, want 2", repo.lastUpdated.OnboardingStep)
+	}
+}
+
+func TestOnboardingWizard_EtapaEspacios_SinEspacios_Retorna400(t *testing.T) {
+	repo := &mockCenterRepoForOnboardHandler{centersByUser: []domain.SportCenter{wizardCenter()}}
+	r := newOnboardingWizardRouter(t, repo)
+
+	w := doRequest(t, r, http.MethodPut, "/api/admin/my-sport-center/onboarding", `{"step":2,"templates":[{"tipo":"cancha","cantidad":0,"cancha":true}]}`)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d. body=%s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+}
+
+func TestOnboardingWizard_EtapaCobro_GuardaModalidad(t *testing.T) {
+	repo := &mockCenterRepoForOnboardHandler{centersByUser: []domain.SportCenter{wizardCenter()}}
+	r := newOnboardingWizardRouter(t, repo)
+
+	w := doRequest(t, r, http.MethodPut, "/api/admin/my-sport-center/onboarding", `{"step":3,"payment_mode":"pay_online"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d. body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if repo.lastUpdated.PaymentMode != "pay_online" {
+		t.Errorf("payment_mode = %q, want pay_online", repo.lastUpdated.PaymentMode)
+	}
+	if repo.lastUpdated.OnboardingStep != 3 {
+		t.Errorf("onboarding_step = %d, want 3", repo.lastUpdated.OnboardingStep)
+	}
+}
+
+func TestOnboardingWizard_EtapaCobro_ModalidadInvalida_Retorna400(t *testing.T) {
+	repo := &mockCenterRepoForOnboardHandler{centersByUser: []domain.SportCenter{wizardCenter()}}
+	r := newOnboardingWizardRouter(t, repo)
+
+	w := doRequest(t, r, http.MethodPut, "/api/admin/my-sport-center/onboarding", `{"step":3,"payment_mode":"gratis"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d. body=%s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+}
+
+func TestOnboardingWizard_EtapaImagenYOferta_Guarda(t *testing.T) {
+	repo := &mockCenterRepoForOnboardHandler{centersByUser: []domain.SportCenter{wizardCenter()}}
+	r := newOnboardingWizardRouter(t, repo)
+
+	payload := `{"step":4,"image_url":"https://img.test/foto.jpg","first_month_free":true}`
+	w := doRequest(t, r, http.MethodPut, "/api/admin/my-sport-center/onboarding", payload)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d. body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if repo.lastUpdated.ImageURL != "https://img.test/foto.jpg" {
+		t.Errorf("image_url = %q, want https://img.test/foto.jpg", repo.lastUpdated.ImageURL)
+	}
+	if !repo.lastUpdated.FirstMonthFree {
+		t.Error("first_month_free = false, want true")
+	}
+	if repo.lastUpdated.OnboardingStep != 4 {
+		t.Errorf("onboarding_step = %d, want 4", repo.lastUpdated.OnboardingStep)
+	}
+}
+
+func TestOnboardingWizard_Finalizar_Incompleto_Retorna400(t *testing.T) {
+	center := wizardCenter() // sin teléfono ni modalidad
+	repo := &mockCenterRepoForOnboardHandler{centersByUser: []domain.SportCenter{center}}
+	r := newOnboardingWizardRouter(t, repo)
+
+	w := doRequest(t, r, http.MethodPut, "/api/admin/my-sport-center/onboarding", `{"step":5,"finalize":true}`)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d. body=%s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if repo.lastUpdated != nil || w.Code != http.StatusBadRequest {
+		// lastUpdated puede no setearse; solo validamos el 400
+	}
+}
+
+func TestOnboardingWizard_Finalizar_Completo_MarcaCompleted(t *testing.T) {
+	center := wizardCenter()
+	center.Contact.Phone = "+56 9 1234 5678"
+	center.PaymentMode = "pay_at_center"
+	repo := &mockCenterRepoForOnboardHandler{centersByUser: []domain.SportCenter{center}}
+	r := newOnboardingWizardRouter(t, repo)
+
+	w := doRequest(t, r, http.MethodPut, "/api/admin/my-sport-center/onboarding", `{"step":5,"finalize":true,"templates":[{"tipo":"cancha","cantidad":1,"cancha":true}]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d. body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if repo.lastUpdated == nil {
+		t.Fatal("Update no fue llamado")
+	}
+	if repo.lastUpdated.OnboardingStatus != "completed" {
+		t.Errorf("onboarding_status = %q, want completed", repo.lastUpdated.OnboardingStatus)
+	}
+	if repo.lastUpdated.OnboardingStep != 5 {
+		t.Errorf("onboarding_step = %d, want 5", repo.lastUpdated.OnboardingStep)
+	}
+}
+

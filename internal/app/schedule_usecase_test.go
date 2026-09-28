@@ -82,6 +82,40 @@ func TestValidateSlotList(t *testing.T) {
 	}
 }
 
+func TestNormalizeRuleSet(t *testing.T) {
+	rules := []domain.ScheduleRule{
+		{DaysOfWeek: []int{0, 1, 2, 3, 4, 5, 6}, Slots: []domain.ScheduleRuleSlot{slot("09:00", "16:00", 100)}},
+		{DaysOfWeek: []int{3}, Slots: []domain.ScheduleRuleSlot{slot("16:00", "17:30", 200)}},
+	}
+	out := normalizeRuleSet(rules)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(out))
+	}
+	if containsDay(out[0].DaysOfWeek, 3) {
+		t.Errorf("day 3 should be removed from the general rule, got %v", out[0].DaysOfWeek)
+	}
+	if !containsDay(out[1].DaysOfWeek, 3) {
+		t.Errorf("day 3 should remain in the specific rule, got %v", out[1].DaysOfWeek)
+	}
+}
+
+func TestNormalizeRuleSetDropsEmptyRules(t *testing.T) {
+	rules := []domain.ScheduleRule{
+		{DaysOfWeek: []int{1, 2}, Slots: []domain.ScheduleRuleSlot{slot("09:00", "17:00", 100)}},
+		{DaysOfWeek: []int{1}, Slots: []domain.ScheduleRuleSlot{slot("09:00", "10:00", 200)}},
+		{DaysOfWeek: []int{2}, Slots: []domain.ScheduleRuleSlot{slot("09:00", "10:00", 200)}},
+	}
+	out := normalizeRuleSet(rules)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 rules (general rule emptied and dropped), got %d", len(out))
+	}
+	for _, r := range out {
+		if len(r.DaysOfWeek) == 0 {
+			t.Errorf("rule with empty days should be dropped, got %v", r.DaysOfWeek)
+		}
+	}
+}
+
 func TestValidateRuleSet(t *testing.T) {
 	// OK: regla lunes-viernes y regla sábado sin solape
 	rules := []domain.ScheduleRule{

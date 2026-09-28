@@ -139,6 +139,8 @@ type SportCenterUseCase struct {
 	bookingRepo              BookingRepository
 	holdRepo                 SlotHoldRepository
 	recurringReservationRepo RecurringReservationRepository
+	spaceRepo                SpaceRepository
+	ruleRepo                 ScheduleRuleRepository
 	scheduleResolver         *ScheduleResolver
 }
 
@@ -763,7 +765,7 @@ func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, c
 	return result, nil
 }
 
-func NewSportCenterUseCase(repo SportCenterRepository, courtRepo CourtRepository, userRepo UserRepository, bookingRepo BookingRepository, holdRepo SlotHoldRepository, recurringRepo RecurringReservationRepository) *SportCenterUseCase {
+func NewSportCenterUseCase(repo SportCenterRepository, courtRepo CourtRepository, userRepo UserRepository, bookingRepo BookingRepository, holdRepo SlotHoldRepository, recurringRepo RecurringReservationRepository, spaceRepo SpaceRepository, ruleRepo ScheduleRuleRepository) *SportCenterUseCase {
 	return &SportCenterUseCase{
 		repo:                     repo,
 		courtRepo:                courtRepo,
@@ -771,6 +773,8 @@ func NewSportCenterUseCase(repo SportCenterRepository, courtRepo CourtRepository
 		bookingRepo:              bookingRepo,
 		holdRepo:                 holdRepo,
 		recurringReservationRepo: recurringRepo,
+		spaceRepo:                spaceRepo,
+		ruleRepo:                 ruleRepo,
 	}
 }
 
@@ -884,16 +888,10 @@ func (uc *SportCenterUseCase) CreateSportCenter(ctx context.Context, center *dom
 // La ciudad y las coordenadas las determina el frontend al seleccionar una
 // sugerencia de Mapbox y llegan ya resueltas; lat/lng en 0 significa que no
 // hay ubicación disponible y el centro se guarda sin coordenadas.
-func (uc *SportCenterUseCase) CreateSportCenterOnboard(ctx context.Context, name, rut, address string, tiposEspacios []string, slugInput, adminEmail, auth0UserID, city string, lat, lng float64) (*domain.SportCenter, error) {
+func (uc *SportCenterUseCase) CreateSportCenterOnboard(ctx context.Context, name, rut, address, slugInput, adminEmail, auth0UserID, city string, lat, lng float64) (*domain.SportCenter, error) {
 	// Validate RUT format and check digit
 	if !validateRUT(rut) {
 		return nil, fmt.Errorf("RUT inválido: %s", rut)
-	}
-
-	// Validate tipos_espacios (dedupe preservando orden)
-	validTipos, ok := domain.TipoEspaciosValidos(tiposEspacios)
-	if !ok || len(validTipos) == 0 {
-		return nil, fmt.Errorf("tipo_espacios inválido: %v", tiposEspacios)
 	}
 
 	// Validate and normalize admin email (1 email = 1 centro)
@@ -954,11 +952,11 @@ func (uc *SportCenterUseCase) CreateSportCenterOnboard(ctx context.Context, name
 		Address:           address,
 		City:              city,
 		Rut:               rut,
-		TiposEspacio:      validTipos,
 		AdminEmail:        adminEmail,
 		Users:             users,
 		CancellationHours: 24, // default value
 		RetentionPercent:  10, // default value
+		OnboardingStatus:  "pending",
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
@@ -1327,7 +1325,7 @@ func (uc *CourtUseCase) ConfigureSchedule(ctx context.Context, courtID primitive
 		return fmt.Errorf("user is not authorized to configure schedule for this court")
 	}
 
-	court.Schedule = schedule
+	court.Schedule = applyPaymentModeToCourtSchedule(center.PaymentMode, schedule)
 	court.UpdatedAt = time.Now()
 	return uc.repo.Update(ctx, court)
 }
@@ -1354,6 +1352,8 @@ func (uc *CourtUseCase) UpdateScheduleSlot(ctx context.Context, courtID primitiv
 	if !isOwner {
 		return fmt.Errorf("user is not authorized to configure schedule for this court")
 	}
+
+	slot = applyPaymentModeToCourtSchedule(center.PaymentMode, []domain.CourtSchedule{slot})[0]
 
 	return uc.repo.UpdateScheduleSlot(ctx, courtID, slot)
 }

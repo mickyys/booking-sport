@@ -100,6 +100,7 @@ func (uc *ScheduleUseCase) SaveSchedule(ctx context.Context, spaceID primitive.O
 		return nil, err
 	}
 
+	rules = normalizeRuleSet(rules)
 	if err := validateRuleSet(rules); err != nil {
 		return nil, err
 	}
@@ -115,6 +116,11 @@ func (uc *ScheduleUseCase) SaveSchedule(ctx context.Context, spaceID primitive.O
 		rule.SpaceID = space.ID
 		rule.SportCenterID = center.ID
 		rule.Active = true
+		// El esquema de pago de las franjas de cancha está determinado por la
+		// modalidad comercial del centro (tipo de suscripción); no es editable.
+		if space.Category == domain.SpaceCategoryCancha {
+			rule.Slots = applyPaymentModeToSlots(center.PaymentMode, rule.Slots)
+		}
 		if err := uc.ruleRepo.Create(ctx, &rule); err != nil {
 			return nil, fmt.Errorf("error saving rule: %w", err)
 		}
@@ -146,6 +152,9 @@ func (uc *ScheduleUseCase) CreateException(ctx context.Context, spaceID primitiv
 	ex.SportCenterID = center.ID
 	ex.Date = normalizeDate(ex.Date)
 	ex.ID = primitive.NewObjectID()
+	if space.Category == domain.SpaceCategoryCancha {
+		ex.Slots = applyPaymentModeToSlots(center.PaymentMode, ex.Slots)
+	}
 	if err := uc.exceptionRepo.Create(ctx, ex); err != nil {
 		return nil, err
 	}
@@ -154,7 +163,8 @@ func (uc *ScheduleUseCase) CreateException(ctx context.Context, spaceID primitiv
 
 // UpdateException actualiza una excepción de horario.
 func (uc *ScheduleUseCase) UpdateException(ctx context.Context, spaceID primitive.ObjectID, exID primitive.ObjectID, userID string, updated *domain.ScheduleException) (*domain.ScheduleException, error) {
-	if _, _, err := uc.authorizeSpace(ctx, spaceID, userID); err != nil {
+	space, center, err := uc.authorizeSpace(ctx, spaceID, userID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -172,7 +182,11 @@ func (uc *ScheduleUseCase) UpdateException(ctx context.Context, spaceID primitiv
 
 	existing.Type = updated.Type
 	existing.Date = normalizeDate(updated.Date)
-	existing.Slots = updated.Slots
+	if space.Category == domain.SpaceCategoryCancha {
+		existing.Slots = applyPaymentModeToSlots(center.PaymentMode, updated.Slots)
+	} else {
+		existing.Slots = updated.Slots
+	}
 	existing.Note = updated.Note
 	if err := uc.exceptionRepo.Update(ctx, existing); err != nil {
 		return nil, err
@@ -395,6 +409,51 @@ func normalizeDays(days []int) ([]int, error) {
 	}
 	sort.Ints(out)
 	return out, nil
+}
+
+// normalizeRuleSet asegura que cada día de la semana pertenezca a una sola
+// regla. Si un día aparece en varias, se conserva en la regla más específica
+// (la de menos días; empate → la primera), replicando la prioridad de
+// mostSpecificRuleForDay. Retorna las reglas resultantes, descartando las que
+// quedan sin días.
+func normalizeRuleSet(rules []domain.ScheduleRule) []domain.ScheduleRule {
+	if len(rules) < 2 {
+		return rules
+	}
+	spec := make([]int, len(rules))
+	for i := range rules {
+		spec[i] = len(rules[i].DaysOfWeek)
+	}
+	for d := 0; d < 7; d++ {
+		owners := make([]int, 0)
+		for i := range rules {
+			if containsDay(rules[i].DaysOfWeek, d) {
+				owners = append(owners, i)
+			}
+		}
+		if len(owners) <= 1 {
+			continue
+		}
+		sort.SliceStable(owners, func(a, b int) bool {
+			return spec[owners[a]] < spec[owners[b]]
+		})
+		for _, i := range owners[1:] {
+			days := rules[i].DaysOfWeek[:0]
+			for _, x := range rules[i].DaysOfWeek {
+				if x != d {
+					days = append(days, x)
+				}
+			}
+			rules[i].DaysOfWeek = days
+		}
+	}
+	out := rules[:0]
+	for i := range rules {
+		if len(rules[i].DaysOfWeek) > 0 {
+			out = append(out, rules[i])
+		}
+	}
+	return out
 }
 
 // validateRuleSet valida un conjunto de reglas y que no generen doble

@@ -115,7 +115,7 @@ var _ SportCenterRepository = (*mockCenterRepoForOnboarding)(nil)
 // newOnboardTestUseCase construye el usecase con el mock.
 func newOnboardTestUseCase(t *testing.T, m *mockCenterRepoForOnboarding) *SportCenterUseCase {
 	t.Helper()
-	return NewSportCenterUseCase(m, nil, nil, nil, nil, nil)
+	return NewSportCenterUseCase(m, nil, nil, nil, nil, nil, nil, nil)
 }
 
 // ---------- validateRUT ----------
@@ -261,7 +261,7 @@ func TestCreateSportCenterOnboard_HappyPath_CreaCentroConSlugAutogenerado(t *tes
 	uc := newOnboardTestUseCase(t, m)
 
 	center, err := uc.CreateSportCenterOnboard(context.Background(),
-		"Club Andino Ñuñoa", "12.345.678-5", "Av. Ossa 123, La Reina", []string{"cancha"},
+		"Club Andino Ñuñoa", "12.345.678-5", "Av. Ossa 123, La Reina",
 		"", "admin@club.cl", "auth0|123",
 		"La Reina", -33.4383, -70.7511)
 
@@ -276,9 +276,6 @@ func TestCreateSportCenterOnboard_HappyPath_CreaCentroConSlugAutogenerado(t *tes
 	}
 	if center.Rut != "12.345.678-5" {
 		t.Errorf("rut = %q, want %q (passthrough)", center.Rut, "12.345.678-5")
-	}
-	if len(center.TiposEspacio) != 1 || center.TiposEspacio[0] != "cancha" {
-		t.Errorf("tipos_espacios = %v, want [cancha]", center.TiposEspacio)
 	}
 	if center.AdminEmail != "admin@club.cl" {
 		t.Errorf("admin_email = %q, want %q", center.AdminEmail, "admin@club.cl")
@@ -324,7 +321,7 @@ func TestCreateSportCenterOnboard_SinCoordenadas_GuardaSinUbicacion(t *testing.T
 	uc := newOnboardTestUseCase(t, m)
 
 	center, err := uc.CreateSportCenterOnboard(context.Background(),
-		"Club Sin Mapa", "12.345.678-5", "Dirección 1", []string{"cancha"},
+		"Club Sin Mapa", "12.345.678-5", "Dirección 1",
 		"", "admin@club.cl", "",
 		"Providencia", 0, 0)
 
@@ -352,7 +349,7 @@ func TestCreateSportCenterOnboard_SlugDuplicado_RetornaErrorSlugEnUso(t *testing
 	uc := newOnboardTestUseCase(t, m)
 
 	center, err := uc.CreateSportCenterOnboard(context.Background(),
-		"Otro Club", "12.345.678-5", "Dirección 1", []string{"quincho"},
+		"Otro Club", "12.345.678-5", "Dirección 1",
 		"", "otro@club.cl", "", "", 0, 0)
 
 	if err == nil {
@@ -379,7 +376,7 @@ func TestCreateSportCenterOnboard_NombreRUTDuplicado_RetornaErrorDuplicado(t *te
 	uc := newOnboardTestUseCase(t, m)
 
 	center, err := uc.CreateSportCenterOnboard(context.Background(),
-		"Club Andino Ñuñoa", "12.345.678-5", "Dirección 1", []string{"sede"},
+		"Club Andino Ñuñoa", "12.345.678-5", "Dirección 1",
 		"", "admin@club.cl", "", "", 0, 0)
 
 	if err == nil {
@@ -412,7 +409,7 @@ func TestCreateSportCenterOnboard_RUTInvalido_Rechazado(t *testing.T) {
 			uc := newOnboardTestUseCase(t, m)
 
 			center, err := uc.CreateSportCenterOnboard(context.Background(),
-				"Club X", tc.rut, "Dirección 1", []string{"cancha"},
+				"Club X", tc.rut, "Dirección 1",
 				"", "admin@club.cl", "", "", 0, 0)
 
 			if err == nil {
@@ -434,60 +431,6 @@ func TestCreateSportCenterOnboard_RUTInvalido_Rechazado(t *testing.T) {
 	}
 }
 
-func TestCreateSportCenterOnboard_TiposEspacioInvalidos_Rechazados(t *testing.T) {
-	cases := []struct {
-		name          string
-		tiposEspacios []string
-	}{
-		{"elemento desconocido", []string{"cancha", "gimnasio"}},
-		{"solo desconocido", []string{"gimnasio"}},
-		{"array vacío", []string{}},
-		{"array nil", nil},
-		{"mayusculas", []string{"CANCHA"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			m := &mockCenterRepoForOnboarding{}
-			uc := newOnboardTestUseCase(t, m)
-
-			center, err := uc.CreateSportCenterOnboard(context.Background(),
-				"Club Y", "12.345.678-5", "Dirección 1", tc.tiposEspacios,
-				"", "admin@club.cl", "", "", 0, 0)
-
-			if err == nil {
-				t.Fatalf("CreateSportCenterOnboard con tipo_espacios %v retornó nil, want error", tc.tiposEspacios)
-			}
-			if !strings.Contains(err.Error(), "tipo_espacios inválido") {
-				t.Errorf("error = %q, want mensaje 'tipo_espacios inválido'", err.Error())
-			}
-			if center != nil {
-				t.Errorf("centro retornado = %+v, want nil", center)
-			}
-			if m.createCalls != 0 {
-				t.Errorf("repo.Create llamado %d veces, want 0", m.createCalls)
-			}
-		})
-	}
-}
-
-func TestCreateSportCenterOnboard_MultiplesTiposValidos_DedupePreservaOrden(t *testing.T) {
-	m := &mockCenterRepoForOnboarding{}
-	uc := newOnboardTestUseCase(t, m)
-
-	center, err := uc.CreateSportCenterOnboard(context.Background(),
-		"Club Multi", "12.345.678-5", "Dirección 1", []string{"cancha", "cancha", "quincho"},
-		"", "admin@club.cl", "", "", 0, 0)
-
-	if err != nil {
-		t.Fatalf("CreateSportCenterOnboard retornó error = %v, want nil", err)
-	}
-	got := center.TiposEspacio
-	want := []string{"cancha", "quincho"}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Errorf("tipos_espacios persistidos = %v, want %v (dedupeado preservando orden)", got, want)
-	}
-}
-
 func TestCreateSportCenterOnboard_EmailNormalizadoYGuardado(t *testing.T) {
 	m := &mockCenterRepoForOnboarding{}
 	uc := newOnboardTestUseCase(t, m)
@@ -499,7 +442,7 @@ func TestCreateSportCenterOnboard_EmailNormalizadoYGuardado(t *testing.T) {
 	}
 
 	center, err := uc.CreateSportCenterOnboard(context.Background(),
-		"Club Email", "12.345.678-5", "Dirección 1", []string{"piscina"},
+		"Club Email", "12.345.678-5", "Dirección 1",
 		"", "  Admin@CLUB.CL ", "", "", 0, 0)
 
 	if err != nil {
@@ -523,7 +466,7 @@ func TestCreateSportCenterOnboard_EmailDuplicado_RetornaErrorCorreoYaRegistrado(
 	uc := newOnboardTestUseCase(t, m)
 
 	center, err := uc.CreateSportCenterOnboard(context.Background(),
-		"Otro Club", "11.111.111-1", "Dirección 2", []string{"cancha"},
+		"Otro Club", "11.111.111-1", "Dirección 2",
 		"", "admin@club.cl", "", "", 0, 0)
 
 	if err == nil {
@@ -555,7 +498,7 @@ func TestCreateSportCenterOnboard_EmailInvalido_Rechazado(t *testing.T) {
 			uc := newOnboardTestUseCase(t, m)
 
 			center, err := uc.CreateSportCenterOnboard(context.Background(),
-				"Club Mail", "12.345.678-5", "Dirección 1", []string{"cancha"},
+				"Club Mail", "12.345.678-5", "Dirección 1",
 				"", tc.email, "", "", 0, 0)
 
 			if err == nil {
@@ -579,7 +522,7 @@ func TestCreateSportCenterOnboard_SlugManual_SeRespeta(t *testing.T) {
 	uc := newOnboardTestUseCase(t, m)
 
 	center, err := uc.CreateSportCenterOnboard(context.Background(),
-		"Club Con Nombre Largo Para Slug", "12.345.678-5", "Dirección 1", []string{"piscina"},
+		"Club Con Nombre Largo Para Slug", "12.345.678-5", "Dirección 1",
 		"mi-club-custom", "admin@club.cl", "", "", 0, 0)
 
 	if err != nil {
@@ -604,7 +547,7 @@ func TestCreateSportCenterOnboard_ErroresDeRepositorio(t *testing.T) {
 		}
 		uc := newOnboardTestUseCase(t, m)
 		center, err := uc.CreateSportCenterOnboard(context.Background(),
-			"Club Z", "12.345.678-5", "Dir", []string{"cancha"},
+			"Club Z", "12.345.678-5", "Dir",
 			"", "admin@club.cl", "", "", 0, 0)
 		if err == nil || !strings.Contains(err.Error(), "error al verificar slug único") {
 			t.Errorf("error = %v, want contener 'error al verificar slug único'", err)
@@ -625,7 +568,7 @@ func TestCreateSportCenterOnboard_ErroresDeRepositorio(t *testing.T) {
 		}
 		uc := newOnboardTestUseCase(t, m)
 		center, err := uc.CreateSportCenterOnboard(context.Background(),
-			"Club Z", "12.345.678-5", "Dir", []string{"cancha"},
+			"Club Z", "12.345.678-5", "Dir",
 			"", "admin@club.cl", "", "", 0, 0)
 		if err == nil || !strings.Contains(err.Error(), "error al verificar nombre+RUT") {
 			t.Errorf("error = %v, want contener 'error al verificar nombre+RUT'", err)
@@ -643,7 +586,7 @@ func TestCreateSportCenterOnboard_ErroresDeRepositorio(t *testing.T) {
 		}
 		uc := newOnboardTestUseCase(t, m)
 		center, err := uc.CreateSportCenterOnboard(context.Background(),
-			"Club Z", "12.345.678-5", "Dir", []string{"cancha"},
+			"Club Z", "12.345.678-5", "Dir",
 			"", "admin@club.cl", "", "", 0, 0)
 		if err == nil || !strings.Contains(err.Error(), "error al verificar correo único") {
 			t.Errorf("error = %v, want contener 'error al verificar correo único'", err)
@@ -661,7 +604,7 @@ func TestCreateSportCenterOnboard_ErroresDeRepositorio(t *testing.T) {
 		}
 		uc := newOnboardTestUseCase(t, m)
 		center, err := uc.CreateSportCenterOnboard(context.Background(),
-			"Club Z", "12.345.678-5", "Dir", []string{"cancha"},
+			"Club Z", "12.345.678-5", "Dir",
 			"", "admin@club.cl", "", "", 0, 0)
 		if err == nil || !strings.Contains(err.Error(), "error al crear centro deportivo") {
 			t.Errorf("error = %v, want contener 'error al crear centro deportivo'", err)
@@ -690,7 +633,7 @@ func TestCreateSportCenterOnboard_ErrNoDocuments_SeTrataComoDisponible(t *testin
 	uc := newOnboardTestUseCase(t, m)
 
 	center, err := uc.CreateSportCenterOnboard(context.Background(),
-		"Club Nuevo", "12.345.678-5", "Dirección 1", []string{"cancha"},
+		"Club Nuevo", "12.345.678-5", "Dirección 1",
 		"", "nuevo@club.cl", "", "", 0, 0)
 
 	if err != nil {
@@ -701,40 +644,5 @@ func TestCreateSportCenterOnboard_ErrNoDocuments_SeTrataComoDisponible(t *testin
 	}
 	if m.createCalls != 1 {
 		t.Errorf("repo.Create llamado %d veces, want 1", m.createCalls)
-	}
-}
-
-// ---------- TipoEspaciosValidos ----------
-
-func TestTipoEspaciosValidos_Casos(t *testing.T) {
-	cases := []struct {
-		name      string
-		in        []string
-		want      []string
-		wantValid bool
-	}{
-		{"multiples validos", []string{"cancha", "quincho"}, []string{"cancha", "quincho"}, true},
-		{"duplicados preservan orden", []string{"quincho", "cancha", "quincho"}, []string{"quincho", "cancha"}, true},
-		{"un solo valor", []string{"sede"}, []string{"sede"}, true},
-		{"elemento invalido", []string{"cancha", "gimnasio"}, nil, false},
-		{"array vacio", []string{}, []string{}, true},
-		{"nil", nil, []string{}, true},
-		{"mayusculas invalidas", []string{"Piscina"}, nil, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := domain.TipoEspaciosValidos(tc.in)
-			if ok != tc.wantValid {
-				t.Fatalf("TipoEspaciosValidos(%v) ok = %v, want %v", tc.in, ok, tc.wantValid)
-			}
-			if len(got) != len(tc.want) {
-				t.Fatalf("TipoEspaciosValidos(%v) = %v, want %v", tc.in, got, tc.want)
-			}
-			for i := range got {
-				if got[i] != tc.want[i] {
-					t.Errorf("TipoEspaciosValidos(%v)[%d] = %q, want %q", tc.in, i, got[i], tc.want[i])
-				}
-			}
-		})
 	}
 }

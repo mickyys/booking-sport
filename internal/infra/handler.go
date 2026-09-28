@@ -218,21 +218,22 @@ func tenantSiteURL(slug string) string {
 
 func (h *SportCenterHandler) OnboardCreate(c *gin.Context) {
 	var body struct {
-		Nombre        string   `json:"nombre" binding:"required,min=1,max=100"`
-		Rut           string   `json:"rut" binding:"required"`
-		Direccion     string   `json:"direccion" binding:"required,min=1"`
-		TiposEspacios []string `json:"tipo_espacios" binding:"required,min=1,dive,oneof=cancha quincho sede piscina"`
-		Email         string   `json:"email" binding:"required,email"`
-		Slug          string   `json:"slug,omitempty"`
-		Ciudad        string   `json:"ciudad" binding:"max=100"`
-		Latitud       *float64 `json:"latitud"`
-		Longitud      *float64 `json:"longitud"`
-		Clave         string   `json:"clave,omitempty"`
+		Nombre    string `json:"nombre" binding:"required,min=1,max=100"`
+		Rut       string `json:"rut" binding:"required"`
+		Direccion string `json:"direccion" binding:"required,min=1"`
+		Email    string   `json:"email" binding:"required,email"`
+		Slug     string   `json:"slug,omitempty"`
+		Ciudad   string   `json:"ciudad" binding:"max=100"`
+		Latitud  *float64 `json:"latitud"`
+		Longitud *float64 `json:"longitud"`
+		Clave    string   `json:"clave,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	adminEmail := strings.ToLower(strings.TrimSpace(body.Email))
 
 	// Ciudad y coordenadas las determina el frontend al seleccionar una
 	// sugerencia de Mapbox. Si vienen, deben venir completas y en rango.
@@ -248,8 +249,6 @@ func (h *SportCenterHandler) OnboardCreate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "longitud debe estar entre -180 y 180"})
 		return
 	}
-
-	adminEmail := strings.ToLower(strings.TrimSpace(body.Email))
 
 	auth0User, err := h.auth0.FindByEmail(c.Request.Context(), adminEmail)
 	if err != nil {
@@ -298,7 +297,6 @@ func (h *SportCenterHandler) OnboardCreate(c *gin.Context) {
 		body.Nombre,
 		body.Rut,
 		body.Direccion,
-		body.TiposEspacios,
 		body.Slug,
 		adminEmail,
 		auth0User.ID,
@@ -310,8 +308,6 @@ func (h *SportCenterHandler) OnboardCreate(c *gin.Context) {
 		errMsg := err.Error()
 		switch {
 		case strings.Contains(errMsg, "RUT inválido"):
-			c.JSON(http.StatusBadRequest, gin.H{"error": errMsg})
-		case strings.Contains(errMsg, "tipo_espacios inválido"):
 			c.JSON(http.StatusBadRequest, gin.H{"error": errMsg})
 		case strings.Contains(errMsg, "correo inválido"):
 			c.JSON(http.StatusBadRequest, gin.H{"error": errMsg})
@@ -497,6 +493,71 @@ func (h *SportCenterHandler) GetMySportCenter(c *gin.Context) {
 
 	// Por ahora retornamos el primero asociado
 	c.JSON(http.StatusOK, gin.H{"center": centers[0]})
+}
+
+// UpdateMySportCenterOnboarding persiste una etapa del wizard post-login
+// (RES-23..27) para el centro del usuario autenticado. Cada "Guardar y
+// continuar" envía step + los datos de esa etapa; finalize marca el centro
+// como completado.
+func (h *SportCenterHandler) UpdateMySportCenterOnboarding(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in token"})
+		return
+	}
+	userIDStr := userID.(string)
+
+	var body struct {
+		Step           int                      `json:"step"`
+		Nombre         *string                  `json:"nombre,omitempty"`
+		Rut            *string                  `json:"rut,omitempty"`
+		Email          *string                  `json:"email,omitempty"`
+		Direccion      *string                  `json:"direccion,omitempty"`
+		Telefono       *string                  `json:"telefono,omitempty"`
+		Templates     []domain.SpaceTemplate `json:"templates,omitempty"`
+		PaymentMode    *string                  `json:"payment_mode,omitempty"`
+		ImageURL       *string                  `json:"image_url,omitempty"`
+		FirstMonthFree *bool                    `json:"first_month_free,omitempty"`
+		Finalize       bool                     `json:"finalize,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	input := app.UpdateOnboardingInput{
+		Step:           body.Step,
+		Nombre:         body.Nombre,
+		Rut:            body.Rut,
+		Email:          body.Email,
+		Direccion:      body.Direccion,
+		Telefono:       body.Telefono,
+		Templates:     body.Templates,
+		PaymentMode:    body.PaymentMode,
+		ImageURL:       body.ImageURL,
+		FirstMonthFree: body.FirstMonthFree,
+		Finalize:       body.Finalize,
+	}
+
+	if err := h.useCase.UpdateSportCenterOnboarding(c.Request.Context(), userIDStr, input); err != nil {
+		errMsg := err.Error()
+		switch {
+		case strings.Contains(errMsg, "no se encontró un centro"):
+			c.JSON(http.StatusNotFound, gin.H{"error": errMsg})
+		case strings.Contains(errMsg, "inválid"), strings.Contains(errMsg, "te falta"), strings.Contains(errMsg, "registrar al menos"), strings.Contains(errMsg, "cantidad de"), strings.Contains(errMsg, "horarios de"), strings.Contains(errMsg, "valores de"), strings.Contains(errMsg, "duplicado"):
+			c.JSON(http.StatusBadRequest, gin.H{"error": errMsg})
+		default:
+			log.Printf("[ONBOARD] error actualizando onboarding para %s: %v", userIDStr, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo guardar tu progreso, intenta nuevamente"})
+		}
+		return
+	}
+
+	message := "onboarding actualizado"
+	if body.Finalize {
+		message = "onboarding completado"
+	}
+	c.JSON(http.StatusOK, gin.H{"message": message})
 }
 
 func (h *SportCenterHandler) GetByID(c *gin.Context) {

@@ -1241,7 +1241,35 @@ func (uc *BookingUseCase) CreateRecurringReservation(ctx context.Context, reserv
 
 	court, err := uc.courtRepo.FindByID(ctx, reservation.CourtID)
 	if err != nil {
+		log.Errorw("create_recurring_reservation_failed",
+			"reason", "court_not_found",
+			"error", err,
+			"date", date.Format("2006-01-02"),
+			"day_of_week", int(date.Weekday()),
+			"hour", reservation.Hour,
+			"minutes", reservation.Minutes,
+			"court_id", reservation.CourtID.Hex(),
+			"court_name", "",
+			"customer_name", reservation.CustomerName,
+		)
 		return fmt.Errorf("court not found: %w", err)
+	}
+
+	// Centraliza el log de error del caso de uso con contexto de la reserva
+	logRecurringError := func(reason string, err error) error {
+		log.Errorw("create_recurring_reservation_failed",
+			"reason", reason,
+			"error", err,
+			"date", date.Format("2006-01-02"),
+			"day_of_week", reservation.DayOfWeek,
+			"day_of_week_name", reservation.DayOfWeekName,
+			"hour", reservation.Hour,
+			"minutes", reservation.Minutes,
+			"court_id", reservation.CourtID.Hex(),
+			"court_name", court.Name,
+			"customer_name", reservation.CustomerName,
+		)
+		return err
 	}
 
 	// Calcular el día de la semana (0=domingo, 1=lunes, ..., 6=sábado)
@@ -1254,7 +1282,7 @@ func (uc *BookingUseCase) CreateRecurringReservation(ctx context.Context, reserv
 	// Verificar si ya existe una reserva recurrente activa para esta cancha, hora y día de la semana
 	existing, err := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, reservation.CourtID, reservation.Hour, dayOfWeek)
 	if err == nil && existing != nil {
-		return fmt.Errorf("ya existe una reserva recurrente semanal para esta cancha, hora y día")
+		return logRecurringError("existing_recurring_reservation", fmt.Errorf("ya existe una reserva recurrente semanal para esta cancha, hora y día"))
 	}
 
 	// Verificar si ya existen reservas individuales activas en serie para esta cancha, hora y día de la semana
@@ -1268,7 +1296,7 @@ func (uc *BookingUseCase) CreateRecurringReservation(ctx context.Context, reserv
 				bDay := int(b.Date.Weekday())
 				log.Infow("active_series_booking", "booking_id", b.ID.Hex(), "series_id", b.SeriesID, "date", b.Date.Format("2006-01-02"), "weekday", bDay)
 				if bDay == dayOfWeek {
-					return fmt.Errorf("ya existe una reserva recurrente semanal para esta cancha, hora y día")
+					return logRecurringError("existing_series_booking", fmt.Errorf("ya existe una reserva recurrente semanal para esta cancha, hora y día"))
 				}
 			}
 		}
@@ -1291,7 +1319,7 @@ func (uc *BookingUseCase) CreateRecurringReservation(ctx context.Context, reserv
 	reservation.UpdatedAt = time.Now()
 
 	if err := uc.recurringReservationRepo.Create(ctx, reservation); err != nil {
-		return err
+		return logRecurringError("create_failed", err)
 	}
 
 	log.Infow("recurring_reservation_created",
