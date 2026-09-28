@@ -174,7 +174,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		booking.GuestDeviceID = effectiveUserID
 	}
 
-	hold, existingBooking, err := uc.ClaimOrRenewSlot(ctx, booking.CourtID, booking.Date, booking.Hour, effectiveUserID)
+	hold, existingBooking, err := uc.ClaimOrRenewSlot(ctx, booking.CourtID, booking.Date, booking.Hour, booking.Minutes, effectiveUserID)
 	if err != nil {
 		return "", err
 	}

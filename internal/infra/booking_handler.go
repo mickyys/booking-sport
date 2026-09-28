@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -125,8 +126,10 @@ func (h *BookingHandler) GetRecurringSeries(c *gin.Context) {
 			"hour":               s.Hour,
 			"start_date":         s.StartDate.Format("2006-01-02"),
 			"end_date":           s.EndDate.Format("2006-01-02"),
+			"finished_at":        s.FinishedAt,
 			"total_bookings":     s.BookingsCount,
-			"confirmed_bookings": s.BookingsCount,
+			"confirmed_bookings": s.ConfirmedBookings,
+			"status":             string(s.Status),
 			"price":              s.Price,
 			"created_at":         s.StartDate.Format(time.RFC3339),
 		}
@@ -187,13 +190,22 @@ func (h *BookingHandler) DeleteBookingSeries(c *gin.Context) {
 		return
 	}
 
-	err := h.useCase.DeleteSeries(c.Request.Context(), seriesID)
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "admin_id not found in token"})
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	err := h.useCase.DeleteSeries(c.Request.Context(), seriesID, userID.(string), body.Reason)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Series deleted successfully"})
+	c.JSON(http.StatusOK, gin.H{"status": "finished"})
 }
 
 func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
@@ -244,7 +256,7 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 		return
 	}
 	// Combina fecha y hora de la reserva
-	hoursUntilMatch := time.Until(booking.Date.Add(time.Hour * time.Duration(booking.Hour))).Hours()
+	hoursUntilMatch := time.Until(domain.MatchInstant(booking.Date, booking.Hour, booking.Minutes)).Hours()
 
 	configCancellationHours := center.CancellationHours
 	if configCancellationHours == 0 {
@@ -280,7 +292,11 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 			"sport_center_id":      court.SportCenterID,
 			"sport_center_name":    center.Name,
 			"date":                 booking.Date,
+			"local_date":           booking.LocalDate,
+			"timezone":             booking.Timezone,
+			"scheduled_at":         booking.ScheduledAt,
 			"hour":                 booking.Hour,
+			"minutes":              booking.Minutes,
 			"price":                booking.Price,
 			"status":               booking.Status,
 			"payment_method":       booking.PaymentMethod,
@@ -362,7 +378,7 @@ func (h *BookingHandler) CancelBooking(c *gin.Context) {
 		"user_id", userID.(string),
 	)
 
-	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
+	c.JSON(http.StatusOK, gin.H{"status": "finished"})
 }
 
 func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
@@ -391,7 +407,7 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 		return
 	}
 
-	hoursUntilMatch := time.Until(booking.Date.Add(time.Hour * time.Duration(booking.Hour))).Hours()
+	hoursUntilMatch := time.Until(domain.MatchInstant(booking.Date, booking.Hour, booking.Minutes)).Hours()
 
 	configCancellationHours := center.CancellationHours
 	if configCancellationHours == 0 {
@@ -426,7 +442,11 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 			"sport_center_id":      court.SportCenterID,
 			"sport_center_name":    center.Name,
 			"date":                 booking.Date,
+			"local_date":           booking.LocalDate,
+			"timezone":             booking.Timezone,
+			"scheduled_at":         booking.ScheduledAt,
 			"hour":                 booking.Hour,
+			"minutes":              booking.Minutes,
 			"price":                booking.Price,
 			"status":               booking.Status,
 			"payment_method":       booking.PaymentMethod,
@@ -832,10 +852,11 @@ func (h *BookingHandler) MockMercadoPagoConfirm(c *gin.Context) {
 
 func (h *BookingHandler) SyncConfirmedPayment(c *gin.Context) {
 	var req struct {
-		BookingCode   string  `json:"booking_code"`
-		MPPaymentID   string  `json:"mp_payment_id"`
-		PaidAmount    float64 `json:"paid_amount"`
-		PendingAmount float64 `json:"pending_amount"`
+		BookingCode     string  `json:"booking_code"`
+		MPPaymentID     string  `json:"mp_payment_id"`
+		FintocPaymentID string  `json:"fintoc_payment_id"`
+		PaidAmount      float64 `json:"paid_amount"`
+		PendingAmount   float64 `json:"pending_amount"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -968,7 +989,16 @@ func (h *BookingHandler) CreateRecurringReservation(c *gin.Context) {
 		"body", string(body),
 	)
 
+	// Restaurar el body para que ShouldBindJSON pueda leerlo nuevamente
+	// (GetRawData consume el stream del request body)
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
+
 	if err := c.ShouldBindJSON(&input); err != nil {
+		log.Warnw("create_recurring_reservation_bind_error",
+			"reason", "bind_failed",
+			"error", err,
+			"raw_body", string(body),
+		)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -980,8 +1010,8 @@ func (h *BookingHandler) CreateRecurringReservation(c *gin.Context) {
 		"customer_name", input.CustomerName,
 	)
 
-	// Parsear la fecha
-	date, err := time.Parse("2006-01-02", input.Date)
+	// Parsear la fecha en zona horaria de Chile
+	date, err := domain.ParseSantiagoDate(input.Date)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date format, expected YYYY-MM-DD"})
 		return
@@ -989,8 +1019,19 @@ func (h *BookingHandler) CreateRecurringReservation(c *gin.Context) {
 
 	err = h.useCase.CreateRecurringReservation(c.Request.Context(), &input.RecurringReservation, date)
 	if err != nil {
-		log.Errorw("create_recurring_reservation_error",
-			"error", err,
+		if errors.Is(err, app.ErrRecurringReservationExists) {
+			log.Warnw("create_recurring_reservation_conflict",
+				"reason", "existing_recurring_reservation",
+				"error", err,
+				"date", input.Date,
+				"hour", input.Hour,
+				"minutes", input.Minutes,
+				"court_id", input.CourtID.Hex(),
+			)
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		h.baseHandler.LogError(c, "create_recurring_reservation_error", err,
 			"date", input.Date,
 			"hour", input.Hour,
 			"minutes", input.Minutes,
@@ -1069,15 +1110,18 @@ func (h *BookingHandler) CancelRecurringReservation(c *gin.Context) {
 	}
 
 	var body struct {
-		CancelledBy string `json:"cancelled_by"`
-		Reason      string `json:"reason"`
+		Reason string `json:"reason"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		body.CancelledBy = "admin"
-		body.Reason = "Cancelled by admin"
+		body.Reason = ""
 	}
 
-	err = h.useCase.CancelRecurringReservation(c.Request.Context(), id, body.CancelledBy, body.Reason)
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "admin_id not found in token"})
+		return
+	}
+	err = h.useCase.CancelRecurringReservation(c.Request.Context(), id, userID.(string), body.Reason)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

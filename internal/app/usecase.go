@@ -54,16 +54,20 @@ type BookingRepository interface {
 	AddRefundByBookingID(ctx context.Context, bookingID primitive.ObjectID, refund domain.Refund) error
 	FindByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error)
 	FindBySportCenterAndDate(ctx context.Context, centerID primitive.ObjectID, date time.Time) ([]domain.Booking, error)
-	FindConfirmedBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error)
+	FindConfirmedBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error)
 	FindConfirmedByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error)
-	FindPendingBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error)
+	HasConfirmedBookingsAfter(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) (bool, error)
+	FindConfirmedBookingsAfter(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error)
+	FindPendingBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error)
 	FindByUserID(ctx context.Context, userID string) ([]domain.Booking, error)
 	FindByUserIDPaged(ctx context.Context, userID string, page, limit int, isOld bool) ([]domain.BookingSummary, int64, error)
 	CountConfirmedByUserID(ctx context.Context, userID string) (int64, error)
 	FindByUserIDAndStatusPaged(ctx context.Context, userID string, cancelled domain.BookingStatus, page int, limit int) ([]domain.BookingSummary, int64, error)
 	Delete(ctx context.Context, id primitive.ObjectID) error
 	FindActiveSeriesByCourtHour(ctx context.Context, courtID primitive.ObjectID, hour int) ([]domain.Booking, error)
+	FindActiveSeriesByCourtHourAfter(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error)
 	DeleteBySeriesID(ctx context.Context, seriesID string) error
+	FinishSeries(ctx context.Context, seriesID string, centerIDs []primitive.ObjectID, finishedBy, reason string, now time.Time) (int64, error)
 	GetDashboardData(ctx context.Context, sportCenterIDs []primitive.ObjectID, page, limit int, dateStr, name string, code string, status string) (*domain.AdminDashboardData, error)
 	GetRecurringSeries(ctx context.Context, centerIDs []primitive.ObjectID, sportCenterID string) ([]domain.RecurringSeries, error)
 	UpdateLockExpiresAt(ctx context.Context, id primitive.ObjectID, expiresAt time.Time) error
@@ -77,14 +81,16 @@ type BookingRepository interface {
 type RecurringReservationRepository interface {
 	Create(ctx context.Context, reservation *domain.RecurringReservation) error
 	FindByID(ctx context.Context, id primitive.ObjectID) (*domain.RecurringReservation, error)
-	FindByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int) (*domain.RecurringReservation, error)
-	FindByCourtHourAndDay(ctx context.Context, courtID primitive.ObjectID, hour int, dayOfWeek int) (*domain.RecurringReservation, error)
-	FindActiveByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int) (*domain.RecurringReservation, error)
+	FindByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int, minutes int) (*domain.RecurringReservation, error)
+	FindByCourtHourAndDay(ctx context.Context, courtID primitive.ObjectID, hour int, minutes int, dayOfWeek int) (*domain.RecurringReservation, error)
+	FindActiveByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int, minutes int) (*domain.RecurringReservation, error)
 	FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error)
+	FindAdminByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error)
 	FindByCenterIDAndDayOfWeek(ctx context.Context, centerID primitive.ObjectID, dayOfWeek int) ([]domain.RecurringReservation, error)
 	FindByCourtID(ctx context.Context, courtID primitive.ObjectID) ([]domain.RecurringReservation, error)
 	Update(ctx context.Context, reservation *domain.RecurringReservation) error
 	Cancel(ctx context.Context, id primitive.ObjectID, cancelledBy string, reason string) error
+	Finish(ctx context.Context, id primitive.ObjectID, finishedBy string, reason string, finishedAt time.Time) error
 	Delete(ctx context.Context, id primitive.ObjectID) error
 	AddCancelledDate(ctx context.Context, id primitive.ObjectID, date string) error
 }
@@ -123,14 +129,14 @@ type NotificationService interface {
 
 type SlotHoldRepository interface {
 	Insert(ctx context.Context, hold *domain.SlotHold) error
-	FindBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.SlotHold, error)
+	FindBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.SlotHold, error)
 	FindByBookingID(ctx context.Context, bookingID primitive.ObjectID) (*domain.SlotHold, error)
 	FindActiveByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.SlotHold, error)
 	RenewExpiration(ctx context.Context, holdID primitive.ObjectID, newExpiresAt time.Time) error
 	DeleteIfExpired(ctx context.Context, holdID primitive.ObjectID, expectedExpiresAt time.Time) (bool, error)
 	Delete(ctx context.Context, holdID primitive.ObjectID) error
 	TryClaimSlot(ctx context.Context, hold *domain.SlotHold) (*domain.SlotHold, error)
-	FindOneAndDeleteIfExpired(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.SlotHold, error)
+	FindOneAndDeleteIfExpired(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.SlotHold, error)
 }
 type SportCenterUseCase struct {
 	repo                     SportCenterRepository
@@ -215,10 +221,8 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 		return nil, err
 	}
 
-	loc, _ := time.LoadLocation("America/Santiago")
-	dateCL := date.In(loc)
-	// Normalizar la fecha al inicio del día (00:00:00)
-	searchDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
+	loc := domain.GetSantiagoLocation()
+	searchDate := domain.SantiagoCivilDate(date)
 
 	// Buscar TODOS los bookings confirmados para este centro y fecha específica en una sola consulta
 	allBookings, _ := uc.bookingRepo.FindBySportCenterAndDate(ctx, centerID, searchDate)
@@ -445,7 +449,7 @@ type CourtScheduleByDate struct {
 // con información del cliente para cada fecha dentro de [from, to]. El resultado
 // es un slice ordenado ascendentemente por fecha.
 func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetailsRange(ctx context.Context, centerID primitive.ObjectID, from, to time.Time, all bool) ([]CourtScheduleByDate, error) {
-	loc, _ := time.LoadLocation("America/Santiago")
+	loc := domain.GetSantiagoLocation()
 	start := time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, loc)
 	end := time.Date(to.Year(), to.Month(), to.Day(), 0, 0, 0, 0, loc)
 
@@ -499,10 +503,8 @@ func (uc *SportCenterUseCase) GetSportCenterSchedulesWithBookingDetailsRange(ctx
 // fecha específica. Solo incluye información de reservas confirmadas y de
 // reservas recurrentes semanales.
 func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, centerID primitive.ObjectID, date time.Time, all bool) ([]CourtScheduleResponse, error) {
-	loc, _ := time.LoadLocation("America/Santiago")
-	dateCL := date.In(loc)
-	// Normalizar la fecha al inicio del día (00:00:00)
-	searchDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
+	loc := domain.GetSantiagoLocation()
+	searchDate := domain.SantiagoCivilDate(date)
 	dayOfWeek := int(searchDate.Weekday())
 
 	var courts []domain.Court
@@ -1364,9 +1366,8 @@ func (uc *CourtUseCase) GetCourtSchedule(ctx context.Context, courtID primitive.
 		return nil, err
 	}
 
-	loc, _ := time.LoadLocation("America/Santiago")
-	dateCL := date.In(loc)
-	searchDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
+	loc := domain.GetSantiagoLocation()
+	searchDate := domain.SantiagoCivilDate(date)
 	bookings, _ := uc.bookingRepo.FindByCourtAndDate(ctx, courtID, searchDate)
 	bookedHours := make(map[int]bool)
 	for _, b := range bookings {

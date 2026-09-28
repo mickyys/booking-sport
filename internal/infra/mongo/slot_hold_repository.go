@@ -23,6 +23,9 @@ func NewSlotHoldRepository(db *mongo.Database) *SlotHoldRepository {
 }
 
 func (r *SlotHoldRepository) Insert(ctx context.Context, hold *domain.SlotHold) error {
+	if err := hold.NormalizeSchedule(); err != nil {
+		return err
+	}
 	hold.ID = primitive.NewObjectID()
 	_, err := r.collection.InsertOne(ctx, hold)
 	if err != nil {
@@ -34,20 +37,19 @@ func (r *SlotHoldRepository) Insert(ctx context.Context, hold *domain.SlotHold) 
 	return nil
 }
 
-func (r *SlotHoldRepository) FindBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.SlotHold, error) {
-	loc, _ := time.LoadLocation("America/Santiago")
-	dateCL := date.In(loc)
-	startDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
-	endDate := startDate.Add(24 * time.Hour)
+func (r *SlotHoldRepository) FindBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.SlotHold, error) {
+	startDate, endDate := domain.SantiagoDayBounds(date)
+	localDate := domain.SantiagoCivilDate(date).Format("2006-01-02")
 
 	var hold domain.SlotHold
 	err := r.collection.FindOne(ctx, bson.M{
 		"court_id": courtID,
-		"date": bson.M{
-			"$gte": startDate,
-			"$lt":  endDate,
+		"$or": []bson.M{
+			{"local_date": localDate},
+			{"local_date": bson.M{"$exists": false}, "date": bson.M{"$gte": startDate, "$lt": endDate}},
 		},
-		"hour": hour,
+		"hour":    hour,
+		"minutes": minutes,
 	}).Decode(&hold)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
@@ -71,16 +73,14 @@ func (r *SlotHoldRepository) FindByBookingID(ctx context.Context, bookingID prim
 }
 
 func (r *SlotHoldRepository) FindActiveByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.SlotHold, error) {
-	loc, _ := time.LoadLocation("America/Santiago")
-	dateCL := date.In(loc)
-	startDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
-	endDate := startDate.Add(24 * time.Hour)
+	startDate, endDate := domain.SantiagoDayBounds(date)
+	localDate := domain.SantiagoCivilDate(date).Format("2006-01-02")
 
 	cursor, err := r.collection.Find(ctx, bson.M{
 		"court_id": courtID,
-		"date": bson.M{
-			"$gte": startDate,
-			"$lt":  endDate,
+		"$or": []bson.M{
+			{"local_date": localDate},
+			{"local_date": bson.M{"$exists": false}, "date": bson.M{"$gte": startDate, "$lt": endDate}},
 		},
 	})
 	if err != nil {
@@ -120,6 +120,9 @@ func (r *SlotHoldRepository) Delete(ctx context.Context, holdID primitive.Object
 }
 
 func (r *SlotHoldRepository) TryClaimSlot(ctx context.Context, hold *domain.SlotHold) (*domain.SlotHold, error) {
+	if err := hold.NormalizeSchedule(); err != nil {
+		return nil, err
+	}
 	hold.ID = primitive.NewObjectID()
 	_, err := r.collection.InsertOne(ctx, hold)
 	if err != nil {
@@ -137,21 +140,20 @@ func (r *SlotHoldRepository) TryClaimSlot(ctx context.Context, hold *domain.Slot
 	return &inserted, nil
 }
 
-func (r *SlotHoldRepository) FindOneAndDeleteIfExpired(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.SlotHold, error) {
-	loc, _ := time.LoadLocation("America/Santiago")
-	dateCL := date.In(loc)
-	startDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
-	endDate := startDate.Add(24 * time.Hour)
+func (r *SlotHoldRepository) FindOneAndDeleteIfExpired(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.SlotHold, error) {
+	startDate, endDate := domain.SantiagoDayBounds(date)
+	localDate := domain.SantiagoCivilDate(date).Format("2006-01-02")
 
 	now := time.Now()
 	var hold domain.SlotHold
 	err := r.collection.FindOneAndDelete(ctx, bson.M{
 		"court_id": courtID,
-		"date": bson.M{
-			"$gte": startDate,
-			"$lt":  endDate,
+		"$or": []bson.M{
+			{"local_date": localDate},
+			{"local_date": bson.M{"$exists": false}, "date": bson.M{"$gte": startDate, "$lt": endDate}},
 		},
 		"hour":       hour,
+		"minutes":    minutes,
 		"expires_at": bson.M{"$lt": now},
 	}, options.FindOneAndDelete()).Decode(&hold)
 

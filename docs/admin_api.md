@@ -279,11 +279,11 @@ Elimina permanentemente el registro de la reserva de la base de datos.
   }
   ```
 
-### Eliminar una Serie Recurrente
-Elimina todas las reservas futuras asociadas a una serie.
+### Finalizar una Serie Recurrente
+Finaliza la serie y cancela únicamente reservas futuras confirmadas o pendientes, considerando fecha y hora en `America/Santiago`. Conserva el histórico y no elimina registros.
 - **URL:** `/admin/bookings/series/:series_id`
 - **Método:** `DELETE`
-- **Respuesta (JSON):** `{"message": "Series deleted successfully"}`
+- **Respuesta (JSON):** `{"status": "finished"}`
 
 ---
 
