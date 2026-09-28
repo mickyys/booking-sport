@@ -83,14 +83,7 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 	// Política de cancelación
 	policyMessage := fmt.Sprintf("Puedes cancelar hasta %d horas antes de la reserva para recibir reembolso completo. Si cancelas con menos de %d horas, se retendrá el %d%% del monto como cargo por cancelación.", cancellationHours, cancellationHours, retentionPercent)
 
-	loc, err := time.LoadLocation("America/Santiago")
-	if err != nil {
-		logger.GetLogger().Warnw("mailgun_timezone_load_error",
-			"msg", "Error al cargar zona horaria America/Santiago (confirmación), usando UTC",
-			"error", err,
-		)
-		loc = time.UTC
-	}
+	loc := domain.GetSantiagoLocation()
 
 	timeStr := fmt.Sprintf("%02d:00", booking.Hour)
 	timeWithSuffix := fmt.Sprintf("%s hrs", timeStr)
@@ -184,14 +177,7 @@ func (m *MailgunMailer) SendBookingCancellation(ctx context.Context, booking *do
 		return fmt.Errorf("no recipient email for booking %s", booking.BookingCode)
 	}
 
-	loc, err := time.LoadLocation("America/Santiago")
-	if err != nil {
-		logger.GetLogger().Warnw("mailgun_timezone_load_error",
-			"msg", "Error al cargar zona horaria America/Santiago (cancelación), usando UTC",
-			"error", err,
-		)
-		loc = time.UTC
-	}
+	loc := domain.GetSantiagoLocation()
 
 	timeStr := fmt.Sprintf("%02d:00", booking.Hour)
 	timeWithSuffix := fmt.Sprintf("%s hrs", timeStr)

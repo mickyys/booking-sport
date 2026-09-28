@@ -1323,7 +1323,7 @@ func (h *SportCenterHandler) GetAdminSchedulesWithBookings(c *gin.Context) {
 	fromStr := c.Query("from")
 	toStr := c.Query("to")
 	if fromStr != "" && toStr != "" {
-		loc, _ := time.LoadLocation("America/Santiago")
+		loc := domain.GetSantiagoLocation()
 		from, errFrom := time.ParseInLocation("2006-01-02", fromStr, loc)
 		to, errTo := time.ParseInLocation("2006-01-02", toStr, loc)
 		if errFrom != nil || errTo != nil {

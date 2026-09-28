@@ -292,7 +292,7 @@ func (h *ScheduleHandler) DeleteBlock(c *gin.Context) {
 
 // parseSantiagoDate convierte "YYYY-MM-DD" a medianoche de Chile.
 func parseSantiagoDate(date string) (time.Time, error) {
-	loc, _ := time.LoadLocation("America/Santiago")
+	loc := domain.GetSantiagoLocation()
 	parsed, err := time.ParseInLocation("2006-01-02", date, loc)
 	if err != nil {
 		return time.Time{}, err
@@ -309,7 +309,7 @@ func (h *ScheduleHandler) PublicAvailability(c *gin.Context) {
 		return
 	}
 
-	loc, _ := time.LoadLocation("America/Santiago")
+	loc := domain.GetSantiagoLocation()
 
 	// Rango de fechas: ?from=YYYY-MM-DD&to=YYYY-MM-DD
 	fromStr := c.Query("from")

@@ -145,7 +145,7 @@ func (r *ScheduleExceptionRepository) FindBySpaceID(ctx context.Context, spaceID
 // FindBySpaceIDAndDate retorna la excepción de un espacio para una fecha
 // normalizada (medianoche de Chile). Devuelve nil si no existe.
 func (r *ScheduleExceptionRepository) FindBySpaceIDAndDate(ctx context.Context, spaceID primitive.ObjectID, date time.Time) (*domain.ScheduleException, error) {
-	loc, _ := time.LoadLocation("America/Santiago")
+	loc := domain.GetSantiagoLocation()
 	dateCL := date.In(loc)
 	searchDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
 
@@ -230,7 +230,7 @@ func (r *BlockRepository) FindBySpaceID(ctx context.Context, spaceID primitive.O
 // FindBySpaceIDAndDate retorna los bloqueos de un espacio para una fecha
 // normalizada (medianoche de Chile).
 func (r *BlockRepository) FindBySpaceIDAndDate(ctx context.Context, spaceID primitive.ObjectID, date time.Time) ([]domain.Block, error) {
-	loc, _ := time.LoadLocation("America/Santiago")
+	loc := domain.GetSantiagoLocation()
 	dateCL := date.In(loc)
 	searchDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
 

@@ -296,7 +296,7 @@ func (uc *ScheduleUseCase) PublicAvailability(ctx context.Context, spaceID primi
 // PublicAvailabilityRange resuelve la disponibilidad pública de un espacio para
 // un rango de fechas. Retorna un mapa fecha ("YYYY-MM-DD") → disponibilidad.
 func (uc *ScheduleUseCase) PublicAvailabilityRange(ctx context.Context, spaceID primitive.ObjectID, from, to time.Time) (map[string]*SpaceAvailabilityResponse, error) {
-	loc, _ := time.LoadLocation("America/Santiago")
+	loc := domain.GetSantiagoLocation()
 	start := time.Date(from.In(loc).Year(), from.In(loc).Month(), from.In(loc).Day(), 0, 0, 0, 0, loc)
 	end := time.Date(to.In(loc).Year(), to.In(loc).Month(), to.In(loc).Day(), 0, 0, 0, 0, loc)
 	if end.Before(start) {
@@ -346,7 +346,7 @@ func timeToMinutes(t string) (int, error) {
 
 // normalizeDate lleva una fecha a la medianoche de Chile (igual que bookings).
 func normalizeDate(t time.Time) time.Time {
-	loc, _ := time.LoadLocation("America/Santiago")
+	loc := domain.GetSantiagoLocation()
 	return time.Date(t.In(loc).Year(), t.In(loc).Month(), t.In(loc).Day(), 0, 0, 0, 0, loc)
 }
 

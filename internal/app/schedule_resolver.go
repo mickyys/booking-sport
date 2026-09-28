@@ -49,7 +49,7 @@ func (r *ScheduleResolver) ResolveFranjasForDate(ctx context.Context, spaceID pr
 		return &ResolvedSchedule{HasRules: false}, nil
 	}
 
-	loc, _ := time.LoadLocation("America/Santiago")
+	loc := domain.GetSantiagoLocation()
 	dateCL := date.In(loc)
 	searchDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
 	weekday := int(searchDate.Weekday())
