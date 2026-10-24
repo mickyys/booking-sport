@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -33,6 +34,7 @@ type BookingUseCase struct {
 	mailer                   Mailer
 	notifier                 NotificationService
 	recurringReservationRepo RecurringReservationRepository
+	jobLockRepo              JobLockRepository
 	mongoClient              *mongo.Client
 	mpClient                 *mercadopago.Client
 	scheduleResolver         *ScheduleResolver
@@ -42,6 +44,12 @@ type BookingUseCase struct {
 // para resolver precios y validar intervalos al crear reservas.
 func (uc *BookingUseCase) SetScheduleResolver(resolver *ScheduleResolver) {
 	uc.scheduleResolver = resolver
+}
+
+// SetJobLockRepository inyecta el repositorio de locks distribuidos usado por
+// los jobs idempotentes (por ejemplo, la generación de recurrencias).
+func (uc *BookingUseCase) SetJobLockRepository(repo JobLockRepository) {
+	uc.jobLockRepo = repo
 }
 
 // NewBookingUseCase crea el use case de bookings. mpClient es el cliente de la
@@ -343,7 +351,7 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 	if uc.recurringReservationRepo != nil {
 		dayOfWeek := int(normalizedDate.Weekday())
 		existingRecurring, _ := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, courtID, hour, minutes, dayOfWeek)
-		if existingRecurring != nil && !existingRecurring.IsDateCancelled(normalizedDate) {
+		if existingRecurring != nil && existingRecurring.CoversDate(normalizedDate) && !existingRecurring.IsDateCancelled(normalizedDate) {
 			return nil, nil, domain.NewConflictError("no disponible: existe una reserva recurrente semanal para este horario")
 		}
 	}
@@ -706,7 +714,70 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 	return nil
 }
 func (uc *BookingUseCase) DeleteBooking(ctx context.Context, id primitive.ObjectID) error {
+	if uc.repo == nil {
+		return nil
+	}
+	booking, err := uc.repo.FindByID(ctx, id)
+	if err == nil && booking != nil && booking.RecurringID != "" {
+		// Eliminar una ocurrencia equivale a anular esa fecha: se registra en
+		// la recurrencia para que el generador no la vuelva a crear.
+		uc.markRecurringDateCancelled(ctx, booking.RecurringID, booking.Date)
+	}
 	return uc.repo.Delete(ctx, id)
+}
+
+// markRecurringDateCancelled agrega una fecha a cancelled_dates de la
+// recurrencia. Es best-effort: si falla, la reserva igual puede cancelarse o
+// eliminarse.
+func (uc *BookingUseCase) markRecurringDateCancelled(ctx context.Context, recurringID string, date time.Time) {
+	if uc == nil || uc.recurringReservationRepo == nil || recurringID == "" {
+		return
+	}
+	objectID, err := primitive.ObjectIDFromHex(recurringID)
+	if err != nil {
+		return
+	}
+	dateStr := domain.SantiagoCivilDate(date).Format("2006-01-02")
+	if err := uc.recurringReservationRepo.AddCancelledDate(ctx, objectID, dateStr); err != nil {
+		logger.FromContext(ctx).Warnw("recurring_cancelled_date_update_failed",
+			"msg", "no se pudo registrar la fecha anulada en la recurrencia",
+			"error", err,
+			"recurring_id", recurringID,
+			"date", dateStr,
+		)
+	}
+}
+
+// cancelRecurringOccurrenceBooking cancela la reserva generada para una fecha
+// concreta de la recurrencia (si existe y sigue vigente).
+func (uc *BookingUseCase) cancelRecurringOccurrenceBooking(ctx context.Context, recurringID primitive.ObjectID, date time.Time, cancelledBy, reason string) {
+	if uc == nil || uc.repo == nil {
+		return
+	}
+	booking, err := uc.repo.FindByRecurringIDAndDate(ctx, recurringID.Hex(), date)
+	if err != nil {
+		if !errors.Is(err, domain.ErrNotFound) {
+			logger.FromContext(ctx).Warnw("recurring_occurrence_lookup_failed",
+				"msg", "no se pudo buscar la ocurrencia a cancelar",
+				"error", err,
+				"recurring_id", recurringID.Hex(),
+				"date", date.Format("2006-01-02"),
+			)
+		}
+		return
+	}
+	if booking == nil || booking.Status == domain.BookingStatusCancelled {
+		return
+	}
+	if err := uc.repo.UpdateCancellation(ctx, booking.ID, domain.BookingStatusCancelled, cancelledBy, reason); err != nil {
+		logger.FromContext(ctx).Warnw("recurring_occurrence_cancel_failed",
+			"msg", "no se pudo cancelar la ocurrencia generada",
+			"error", err,
+			"booking_id", booking.ID.Hex(),
+			"recurring_id", recurringID.Hex(),
+			"date", date.Format("2006-01-02"),
+		)
+	}
 }
 
 // RescheduleBooking mueve una reserva confirmada a otra fecha y/u hora. Si se
@@ -717,6 +788,10 @@ func (uc *BookingUseCase) RescheduleBooking(ctx context.Context, id primitive.Ob
 	if err != nil {
 		return nil, domain.NewNotFoundError("reserva no encontrada")
 	}
+	originalDate := booking.Date
+	originalHour, originalMinutes := booking.Hour, booking.Minutes
+	originalCourtID := booking.CourtID
+	originalRecurringID := booking.RecurringID
 	if booking.Status != domain.BookingStatusConfirmed {
 		return nil, domain.NewBadRequestError("solo se pueden mover reservas confirmadas")
 	}
@@ -760,7 +835,7 @@ func (uc *BookingUseCase) RescheduleBooking(ctx context.Context, id primitive.Ob
 	if uc.recurringReservationRepo != nil {
 		dayOfWeek := int(booking.Date.Weekday())
 		existing, _ := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, booking.CourtID, booking.Hour, booking.Minutes, dayOfWeek)
-		if existing != nil && !existing.IsDateCancelled(booking.Date) {
+		if existing != nil && existing.CoversDate(booking.Date) && !existing.IsDateCancelled(booking.Date) {
 			return nil, domain.NewConflictError("no disponible: existe una reserva recurrente semanal para este horario")
 		}
 	}
@@ -788,8 +863,35 @@ func (uc *BookingUseCase) RescheduleBooking(ctx context.Context, id primitive.Ob
 	booking.ModifiedAt = &now
 	booking.UpdatedAt = now
 
+	detachedFromRecurring := false
+	if originalRecurringID != "" {
+		moved := booking.CourtID != originalCourtID ||
+			booking.Hour != originalHour ||
+			booking.Minutes != originalMinutes ||
+			!domain.SantiagoCivilDate(booking.Date).Equal(domain.SantiagoCivilDate(originalDate))
+		if moved {
+			// La ocurrencia movida pasa a ser una reserva individual para no
+			// ser cancelada junto con la serie, y su fecha original se anula
+			// para que el generador no la recree.
+			booking.RecurringID = ""
+			detachedFromRecurring = true
+		}
+	}
+
 	if err := uc.repo.Update(ctx, booking); err != nil {
 		return nil, err
+	}
+
+	if detachedFromRecurring {
+		uc.markRecurringDateCancelled(ctx, originalRecurringID, originalDate)
+		if err := uc.repo.ClearRecurringID(ctx, booking.ID); err != nil {
+			logger.FromContext(ctx).Warnw("booking_clear_recurring_id_failed",
+				"msg", "no se pudo desvincular la reserva movida de su recurrencia",
+				"error", err,
+				"booking_id", booking.ID.Hex(),
+				"recurring_id", originalRecurringID,
+			)
+		}
 	}
 
 	logger.FromContext(ctx).Infow("booking_rescheduled",
@@ -927,7 +1029,7 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 	if uc.recurringReservationRepo != nil {
 		dayOfWeek := int(booking.Date.Weekday())
 		existingRecurring, _ := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, booking.CourtID, booking.Hour, booking.Minutes, dayOfWeek)
-		if existingRecurring != nil && !existingRecurring.IsDateCancelled(booking.Date) {
+		if existingRecurring != nil && existingRecurring.CoversDate(booking.Date) && !existingRecurring.IsDateCancelled(booking.Date) {
 			return domain.NewConflictError("no disponible: existe una reserva recurrente semanal para este horario")
 		}
 	}
@@ -1060,7 +1162,7 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 		if uc.recurringReservationRepo != nil {
 			dayOfWeek := int(b.Date.Weekday())
 			existingRecurring, _ := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, b.CourtID, b.Hour, b.Minutes, dayOfWeek)
-			if existingRecurring != nil && !existingRecurring.IsDateCancelled(b.Date) {
+			if existingRecurring != nil && existingRecurring.CoversDate(b.Date) && !existingRecurring.IsDateCancelled(b.Date) {
 				return nil, fmt.Errorf("No disponible: %s - existe una reserva recurrente semanal para este horario", dateStr)
 			}
 		}
@@ -1469,6 +1571,13 @@ func (uc *BookingUseCase) CreateRecurringReservation(ctx context.Context, reserv
 			)
 		}
 		if !hasFuture {
+			// Una serie con start_date futura aún no tiene reservas generadas;
+			// no debe considerarse vencida ni cancelarse automáticamente.
+			existingStart := existing.EffectiveStartDate()
+			startsInFuture := !existingStart.IsZero() && existingStart.After(domain.SantiagoCivilDate(time.Now()))
+			if startsInFuture {
+				return logRecurringError("existing_recurring_reservation", ErrRecurringReservationExists)
+			}
 			log.Infow("recurring_reservation_expired_auto_cancel",
 				"msg", "La recurrencia existente ya no tiene reservas futuras confirmadas; se cancela automáticamente para permitir la nueva serie",
 				"recurring_id", existing.ID.Hex(),
@@ -1526,11 +1635,62 @@ func (uc *BookingUseCase) CreateRecurringReservation(ctx context.Context, reserv
 
 	reservation.SportCenterID = court.SportCenterID
 	reservation.Status = domain.RecurringReservationStatusActive
-	reservation.CreatedAt = time.Now()
-	reservation.UpdatedAt = time.Now()
+	// Limpia campos de estado que no deben venir del cliente.
+	reservation.CancelledBy = ""
+	reservation.CancelReason = ""
+	reservation.FinishedAt = nil
+	reservation.FinishedBy = ""
+	reservation.FinishReason = ""
+	reservation.CancelledDates = nil
+	reservation.LastGeneratedAt = nil
+	reservation.LastGenerationOK = false
+	reservation.LastGeneratedCount = 0
+	reservation.GenerationError = ""
+	reservation.GenerationIssues = nil
+	if reservation.DurationMinutes <= 0 {
+		reservation.DurationMinutes = 60
+	}
+	// La fecha elegida por el administrador es la primera fecha de la serie.
+	reservation.StartDate = domain.SantiagoCivilDate(date)
+	// El generador mantiene exactamente 4 ocurrencias futuras.
+	reservation.HorizonWeeks = defaultRecurringHorizonWeeks
+	// El ID se asigna antes del insert para poder vincular las ocurrencias
+	// generadas. Se ignora cualquier ID enviado por el cliente.
+	reservation.ID = primitive.NewObjectID()
+	now := time.Now()
+	reservation.CreatedAt = now
+	reservation.UpdatedAt = now
 
 	if err := uc.recurringReservationRepo.Create(ctx, reservation); err != nil {
 		return logRecurringError("create_failed", err)
+	}
+
+	// Genera de inmediato las primeras ocurrencias para que la serie aparezca
+	// en la agenda del centro desde el momento de su creación.
+	if uc.repo != nil {
+		result := uc.generateForRecurring(ctx, reservation, time.Now())
+		generatedAt := time.Now()
+		reservation.LastGeneratedAt = &generatedAt
+		reservation.LastGeneratedCount = result.Created
+		reservation.LastGenerationOK = result.Failed == 0
+		reservation.GenerationIssues = result.Issues
+		reservation.GenerationError = ""
+		if !reservation.LastGenerationOK {
+			reservation.GenerationError = result.errorSummary()
+		}
+		if err := uc.recurringReservationRepo.UpdateGenerationState(ctx, reservation.ID, generatedAt, reservation.LastGenerationOK, reservation.GenerationError, result.Created, result.Issues); err != nil {
+			log.Warnw("recurring_generation_state_update_failed",
+				"msg", "no se pudo guardar el estado de generación de la recurrencia",
+				"error", err,
+				"recurring_id", reservation.ID.Hex(),
+			)
+		}
+		if result.FirstTargetAttempted && !result.FirstTargetOK {
+			_, _ = uc.repo.DeleteByRecurringID(ctx, reservation.ID.Hex())
+			_ = uc.recurringReservationRepo.Delete(ctx, reservation.ID)
+			return logRecurringError("first_occurrence_failed",
+				domain.NewConflictError(fmt.Sprintf("no se pudo generar la primera reserva de la recurrencia: %s", result.FirstTargetReason)))
+		}
 	}
 
 	log.Infow("recurring_reservation_created",
@@ -1563,24 +1723,36 @@ func (uc *BookingUseCase) GetRecurringReservationByID(ctx context.Context, id pr
 	}
 
 	return &domain.RecurringReservationResponse{
-		ID:              reservation.ID,
-		SportCenterID:   reservation.SportCenterID,
-		SportCenterName: center.Name,
-		CourtID:         reservation.CourtID,
-		CourtName:       court.Name,
-		CustomerName:    reservation.CustomerName,
-		CustomerPhone:   reservation.CustomerPhone,
-		Hour:            reservation.Hour,
-		Minutes:         reservation.Minutes,
-		DayOfWeek:       reservation.DayOfWeek,
-		DayOfWeekName:   reservation.DayOfWeekName,
-		Price:           reservation.Price,
-		Notes:           reservation.Notes,
-		Status:          reservation.Status,
-		CancelledBy:     reservation.CancelledBy,
-		CancelReason:    reservation.CancelReason,
-		CreatedAt:       reservation.CreatedAt,
-		UpdatedAt:       reservation.UpdatedAt,
+		ID:                 reservation.ID,
+		SportCenterID:      reservation.SportCenterID,
+		SportCenterName:    center.Name,
+		CourtID:            reservation.CourtID,
+		CourtName:          court.Name,
+		CustomerName:       reservation.CustomerName,
+		CustomerPhone:      reservation.CustomerPhone,
+		Hour:               reservation.Hour,
+		Minutes:            reservation.Minutes,
+		DurationMinutes:    reservation.DurationMinutes,
+		DayOfWeek:          reservation.DayOfWeek,
+		DayOfWeekName:      reservation.DayOfWeekName,
+		Price:              reservation.Price,
+		Notes:              reservation.Notes,
+		Status:             reservation.Status,
+		CancelledBy:        reservation.CancelledBy,
+		CancelReason:       reservation.CancelReason,
+		FinishedAt:         reservation.FinishedAt,
+		FinishedBy:         reservation.FinishedBy,
+		FinishReason:       reservation.FinishReason,
+		CancelledDates:     reservation.CancelledDates,
+		StartDate:          reservation.StartDate,
+		HorizonWeeks:       reservation.HorizonWeeks,
+		LastGeneratedAt:    reservation.LastGeneratedAt,
+		LastGenerationOK:   reservation.LastGenerationOK,
+		LastGeneratedCount: reservation.LastGeneratedCount,
+		GenerationError:    reservation.GenerationError,
+		GenerationIssues:   reservation.GenerationIssues,
+		CreatedAt:          reservation.CreatedAt,
+		UpdatedAt:          reservation.UpdatedAt,
 	}, nil
 }
 
@@ -1611,27 +1783,36 @@ func (uc *BookingUseCase) GetRecurringReservationsByCenter(ctx context.Context, 
 
 		for _, r := range reservations {
 			results = append(results, domain.RecurringReservationResponse{
-				ID:              r.ID,
-				SportCenterID:   r.SportCenterID,
-				SportCenterName: center.Name,
-				CourtID:         r.CourtID,
-				CourtName:       courtMap[r.CourtID],
-				CustomerName:    r.CustomerName,
-				CustomerPhone:   r.CustomerPhone,
-				Hour:            r.Hour,
-				Minutes:         r.Minutes,
-				DayOfWeek:       r.DayOfWeek,
-				DayOfWeekName:   r.DayOfWeekName,
-				Price:           r.Price,
-				Notes:           r.Notes,
-				Status:          r.Status,
-				CancelledBy:     r.CancelledBy,
-				CancelReason:    r.CancelReason,
-				FinishedAt:      r.FinishedAt,
-				FinishedBy:      r.FinishedBy,
-				FinishReason:    r.FinishReason,
-				CreatedAt:       r.CreatedAt,
-				UpdatedAt:       r.UpdatedAt,
+				ID:                 r.ID,
+				SportCenterID:      r.SportCenterID,
+				SportCenterName:    center.Name,
+				CourtID:            r.CourtID,
+				CourtName:          courtMap[r.CourtID],
+				CustomerName:       r.CustomerName,
+				CustomerPhone:      r.CustomerPhone,
+				Hour:               r.Hour,
+				Minutes:            r.Minutes,
+				DurationMinutes:    r.DurationMinutes,
+				DayOfWeek:          r.DayOfWeek,
+				DayOfWeekName:      r.DayOfWeekName,
+				Price:              r.Price,
+				Notes:              r.Notes,
+				Status:             r.Status,
+				CancelledBy:        r.CancelledBy,
+				CancelReason:       r.CancelReason,
+				FinishedAt:         r.FinishedAt,
+				FinishedBy:         r.FinishedBy,
+				FinishReason:       r.FinishReason,
+				CancelledDates:     r.CancelledDates,
+				StartDate:          r.StartDate,
+				HorizonWeeks:       r.HorizonWeeks,
+				LastGeneratedAt:    r.LastGeneratedAt,
+				LastGenerationOK:   r.LastGenerationOK,
+				LastGeneratedCount: r.LastGeneratedCount,
+				GenerationError:    r.GenerationError,
+				GenerationIssues:   r.GenerationIssues,
+				CreatedAt:          r.CreatedAt,
+				UpdatedAt:          r.UpdatedAt,
 			})
 		}
 	}
@@ -1666,24 +1847,33 @@ func (uc *BookingUseCase) GetRecurringReservationsByCourt(ctx context.Context, c
 		}
 
 		results = append(results, domain.RecurringReservationResponse{
-			ID:              r.ID,
-			SportCenterID:   r.SportCenterID,
-			SportCenterName: centerName,
-			CourtID:         r.CourtID,
-			CourtName:       court.Name,
-			CustomerName:    r.CustomerName,
-			CustomerPhone:   r.CustomerPhone,
-			Hour:            r.Hour,
-			Minutes:         r.Minutes,
-			DayOfWeek:       r.DayOfWeek,
-			DayOfWeekName:   dayOfWeekName,
-			Price:           r.Price,
-			Notes:           r.Notes,
-			Status:          r.Status,
-			CancelledBy:     r.CancelledBy,
-			CancelReason:    r.CancelReason,
-			CreatedAt:       r.CreatedAt,
-			UpdatedAt:       r.UpdatedAt,
+			ID:                 r.ID,
+			SportCenterID:      r.SportCenterID,
+			SportCenterName:    centerName,
+			CourtID:            r.CourtID,
+			CourtName:          court.Name,
+			CustomerName:       r.CustomerName,
+			CustomerPhone:      r.CustomerPhone,
+			Hour:               r.Hour,
+			Minutes:            r.Minutes,
+			DurationMinutes:    r.DurationMinutes,
+			DayOfWeek:          r.DayOfWeek,
+			DayOfWeekName:      dayOfWeekName,
+			Price:              r.Price,
+			Notes:              r.Notes,
+			Status:             r.Status,
+			CancelledBy:        r.CancelledBy,
+			CancelReason:       r.CancelReason,
+			CancelledDates:     r.CancelledDates,
+			StartDate:          r.StartDate,
+			HorizonWeeks:       r.HorizonWeeks,
+			LastGeneratedAt:    r.LastGeneratedAt,
+			LastGenerationOK:   r.LastGenerationOK,
+			LastGeneratedCount: r.LastGeneratedCount,
+			GenerationError:    r.GenerationError,
+			GenerationIssues:   r.GenerationIssues,
+			CreatedAt:          r.CreatedAt,
+			UpdatedAt:          r.UpdatedAt,
 		})
 	}
 
@@ -1719,6 +1909,11 @@ func (uc *BookingUseCase) CancelRecurringReservation(ctx context.Context, id pri
 	if reason == "" {
 		reason = "Reserva indefinida finalizada por el administrador"
 	}
+	if uc.repo != nil {
+		if _, err := uc.repo.CancelFutureByRecurringID(ctx, id.Hex(), time.Now(), userID, reason); err != nil {
+			return fmt.Errorf("error cancelling future recurring bookings: %w", err)
+		}
+	}
 	return uc.recurringReservationRepo.Finish(ctx, id, userID, reason, time.Now())
 }
 
@@ -1746,11 +1941,27 @@ func (uc *BookingUseCase) CancelRecurringDate(ctx context.Context, id primitive.
 		return fmt.Errorf("no se puede anular una fecha pasada")
 	}
 
-	return uc.recurringReservationRepo.AddCancelledDate(ctx, id, date)
+	if err := uc.recurringReservationRepo.AddCancelledDate(ctx, id, date); err != nil {
+		return err
+	}
+	uc.cancelRecurringOccurrenceBooking(ctx, id, parsedDate, "admin", "Fecha anulada en la recurrencia")
+	return nil
+}
+
+// UserAdministersAnyCenter indica si el usuario administra al menos un centro.
+// Se usa para proteger acciones globales disparadas desde el panel admin.
+func (uc *BookingUseCase) UserAdministersAnyCenter(ctx context.Context, userID string) (bool, error) {
+	if uc.centerRepo == nil {
+		return false, nil
+	}
+	centers, err := uc.centerRepo.FindByUserID(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	return len(centers) > 0, nil
 }
 
 func (uc *BookingUseCase) IsSlotAvailableForRecurring(ctx context.Context, courtID primitive.ObjectID, hour int, minutes int) (bool, error) {
-	// Check if there's already an active recurring reservation
 	existing, err := uc.recurringReservationRepo.FindActiveByCourtAndHour(ctx, courtID, hour, minutes)
 	if err == nil && existing != nil {
 		return false, nil

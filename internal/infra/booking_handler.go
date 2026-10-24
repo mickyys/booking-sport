@@ -2,6 +2,7 @@ package infra
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -1085,6 +1087,11 @@ func (h *BookingHandler) CreateRecurringReservation(c *gin.Context) {
 			"court_id", input.CourtID.Hex(),
 			"customer_name", input.CustomerName,
 		)
+		var appErr *domain.AppError
+		if errors.As(err, &appErr) {
+			c.JSON(appErr.StatusCode, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -1200,6 +1207,76 @@ func (h *BookingHandler) CancelRecurringDate(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "date_cancelled"})
+}
+
+// GenerateRecurringBookings ejecuta manualmente el generador de ocurrencias
+// desde el panel de administración.
+func (h *BookingHandler) GenerateRecurringBookings(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in token"})
+		return
+	}
+	userIDStr, ok := userID.(string)
+	if !ok || userIDStr == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid user_id"})
+		return
+	}
+	isAdmin := false
+	if rolesValue, exists := c.Get("user_roles"); exists {
+		if roles, ok := rolesValue.([]string); ok {
+			for _, role := range roles {
+				lower := strings.ToLower(role)
+				if lower == "admin" || lower == "administrator" {
+					isAdmin = true
+					break
+				}
+			}
+		}
+	}
+	if !isAdmin {
+		administers, err := h.useCase.UserAdministersAnyCenter(c.Request.Context(), userIDStr)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if !administers {
+			c.JSON(http.StatusForbidden, gin.H{"error": "only administrators can generate recurring bookings"})
+			return
+		}
+	}
+
+	summary, err := h.useCase.GenerateUpcomingRecurringBookings(c.Request.Context())
+	if err != nil {
+		h.baseHandler.LogError(c, "recurring_generation_failed", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, summary)
+}
+
+// GenerateRecurringBookingsInternal es el endpoint idempotente que invoca el
+// batch desde GitHub Actions. Se protege con un token compartido en la cabecera
+// X-Job-Token (variable RECURRING_JOB_TOKEN).
+func (h *BookingHandler) GenerateRecurringBookingsInternal(c *gin.Context) {
+	expected := os.Getenv("RECURRING_JOB_TOKEN")
+	if expected == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "recurring generation job is not configured"})
+		return
+	}
+	provided := c.GetHeader("X-Job-Token")
+	if subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid job token"})
+		return
+	}
+
+	summary, err := h.useCase.GenerateUpcomingRecurringBookings(c.Request.Context())
+	if err != nil {
+		h.baseHandler.LogError(c, "recurring_generation_failed", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, summary)
 }
 
 func errorStatusCode(err error) int {

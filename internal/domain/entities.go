@@ -687,18 +687,60 @@ type RecurringReservation struct {
 	FinishedBy      string                     `bson:"finished_by,omitempty" json:"finished_by,omitempty"`
 	FinishReason    string                     `bson:"finish_reason,omitempty" json:"finish_reason,omitempty"`
 	CancelledDates  []string                   `bson:"cancelled_dates,omitempty" json:"cancelled_dates,omitempty"`
-	CreatedAt       time.Time                  `bson:"created_at" json:"created_at"`
-	UpdatedAt       time.Time                  `bson:"updated_at" json:"updated_at"`
+	// StartDate es la primera fecha civil de la serie (zona America/Santiago).
+	// Es la base para calcular las ocurrencias futuras; las recurrencias
+	// antiguas sin este campo usan CreatedAt como respaldo.
+	StartDate time.Time `bson:"start_date,omitempty" json:"start_date,omitempty"`
+	// HorizonWeeks indica cuántas ocurrencias futuras mantiene el generador.
+	// 0 se interpreta como el valor por defecto (4).
+	HorizonWeeks int `bson:"horizon_weeks,omitempty" json:"horizon_weeks,omitempty"`
+	// Estado de la última generación automática de reservas.
+	LastGeneratedAt    *time.Time                 `bson:"last_generated_at,omitempty" json:"last_generated_at,omitempty"`
+	LastGenerationOK   bool                       `bson:"last_generation_ok" json:"last_generation_ok"`
+	LastGeneratedCount int                        `bson:"last_generated_count" json:"last_generated_count"`
+	GenerationError    string                     `bson:"generation_error,omitempty" json:"generation_error,omitempty"`
+	GenerationIssues   []RecurringGenerationIssue `bson:"generation_issues,omitempty" json:"generation_issues,omitempty"`
+	CreatedAt          time.Time                  `bson:"created_at" json:"created_at"`
+	UpdatedAt          time.Time                  `bson:"updated_at" json:"updated_at"`
+}
+
+// RecurringGenerationIssue describe una fecha que no pudo generar reserva y
+// el motivo (conflicto, bloqueo, feriado, pago pendiente, etc.).
+type RecurringGenerationIssue struct {
+	Date   string `bson:"date" json:"date"`
+	Reason string `bson:"reason" json:"reason"`
 }
 
 func (r *RecurringReservation) IsDateCancelled(date time.Time) bool {
-	dateStr := date.Format("2006-01-02")
+	dateStr := SantiagoCivilDate(date).Format(civilDateLayout)
 	for _, cd := range r.CancelledDates {
 		if cd == dateStr {
 			return true
 		}
 	}
 	return false
+}
+
+// EffectiveStartDate devuelve la primera fecha de la serie. Para recurrencias
+// creadas antes de incorporar StartDate se usa CreatedAt como respaldo.
+func (r *RecurringReservation) EffectiveStartDate() time.Time {
+	if !r.StartDate.IsZero() {
+		return SantiagoCivilDate(r.StartDate)
+	}
+	if !r.CreatedAt.IsZero() {
+		return SantiagoCivilDate(r.CreatedAt)
+	}
+	return time.Time{}
+}
+
+// CoversDate indica si la fecha pertenece a la vigencia de la serie. Las
+// recurrencias sin StartDate (legacy) cubren cualquier fecha.
+func (r *RecurringReservation) CoversDate(date time.Time) bool {
+	start := r.EffectiveStartDate()
+	if start.IsZero() {
+		return true
+	}
+	return !SantiagoCivilDate(date).Before(start)
 }
 
 type RecurringReservationResponse struct {
@@ -711,6 +753,7 @@ type RecurringReservationResponse struct {
 	CustomerPhone   string                     `bson:"customer_phone" json:"customer_phone"`
 	Hour            int                        `bson:"hour" json:"hour"`
 	Minutes         int                        `bson:"minutes" json:"minutes"`
+	DurationMinutes int                        `bson:"duration_minutes,omitempty" json:"duration_minutes,omitempty"`
 	DayOfWeek       int                        `bson:"day_of_week" json:"day_of_week"`
 	DayOfWeekName   string                     `bson:"day_of_week_name,omitempty" json:"day_of_week_name,omitempty"`
 	Price           float64                    `bson:"price" json:"price"`
@@ -722,8 +765,17 @@ type RecurringReservationResponse struct {
 	FinishedBy      string                     `bson:"finished_by,omitempty" json:"finished_by,omitempty"`
 	FinishReason    string                     `bson:"finish_reason,omitempty" json:"finish_reason,omitempty"`
 	CancelledDates  []string                   `bson:"cancelled_dates,omitempty" json:"cancelled_dates,omitempty"`
-	CreatedAt       time.Time                  `bson:"created_at" json:"created_at"`
-	UpdatedAt       time.Time                  `bson:"updated_at" json:"updated_at"`
+	StartDate       time.Time                  `bson:"start_date,omitempty" json:"start_date,omitempty"`
+	HorizonWeeks    int                        `bson:"horizon_weeks,omitempty" json:"horizon_weeks,omitempty"`
+
+	LastGeneratedAt    *time.Time                 `bson:"last_generated_at,omitempty" json:"last_generated_at,omitempty"`
+	LastGenerationOK   bool                       `bson:"last_generation_ok" json:"last_generation_ok"`
+	LastGeneratedCount int                        `bson:"last_generated_count" json:"last_generated_count"`
+	GenerationError    string                     `bson:"generation_error,omitempty" json:"generation_error,omitempty"`
+	GenerationIssues   []RecurringGenerationIssue `bson:"generation_issues,omitempty" json:"generation_issues,omitempty"`
+
+	CreatedAt time.Time `bson:"created_at" json:"created_at"`
+	UpdatedAt time.Time `bson:"updated_at" json:"updated_at"`
 }
 
 type SlotHold struct {

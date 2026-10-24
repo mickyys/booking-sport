@@ -22,6 +22,10 @@ type mockBookingRepoForHold struct {
 	MarkExpiredFn                func(ctx context.Context, id primitive.ObjectID) error
 	FindByIDFn                   func(ctx context.Context, id primitive.ObjectID) (*domain.Booking, error)
 	FindConfirmedBookingsAfterFn func(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error)
+	FindByRecurringIDAndDateFn   func(ctx context.Context, recurringID string, date time.Time) (*domain.Booking, error)
+	CreateRecurringBookingFn     func(ctx context.Context, booking *domain.Booking) error
+	CancelFutureByRecurringIDFn  func(ctx context.Context, recurringID string, from time.Time, cancelledBy, reason string) (int64, error)
+	DeleteByRecurringIDFn        func(ctx context.Context, recurringID string) (int64, error)
 	FinishSeriesFn               func(ctx context.Context, seriesID string, centerIDs []primitive.ObjectID, finishedBy, reason string, now time.Time) (int64, error)
 
 	FindConfirmedBySlotCalls []findConfirmedBySlotCall
@@ -139,6 +143,33 @@ func (m *mockBookingRepoForHold) FindByCourtAndDate(ctx context.Context, courtID
 }
 func (m *mockBookingRepoForHold) FindBySportCenterAndDate(ctx context.Context, centerID primitive.ObjectID, date time.Time) ([]domain.Booking, error) {
 	return nil, nil
+}
+func (m *mockBookingRepoForHold) FindByRecurringIDAndDate(ctx context.Context, recurringID string, date time.Time) (*domain.Booking, error) {
+	if m.FindByRecurringIDAndDateFn != nil {
+		return m.FindByRecurringIDAndDateFn(ctx, recurringID, date)
+	}
+	return nil, domain.ErrNotFound
+}
+func (m *mockBookingRepoForHold) CreateRecurringBooking(ctx context.Context, booking *domain.Booking) error {
+	if m.CreateRecurringBookingFn != nil {
+		return m.CreateRecurringBookingFn(ctx, booking)
+	}
+	return nil
+}
+func (m *mockBookingRepoForHold) CancelFutureByRecurringID(ctx context.Context, recurringID string, from time.Time, cancelledBy, reason string) (int64, error) {
+	if m.CancelFutureByRecurringIDFn != nil {
+		return m.CancelFutureByRecurringIDFn(ctx, recurringID, from, cancelledBy, reason)
+	}
+	return 0, nil
+}
+func (m *mockBookingRepoForHold) DeleteByRecurringID(ctx context.Context, recurringID string) (int64, error) {
+	if m.DeleteByRecurringIDFn != nil {
+		return m.DeleteByRecurringIDFn(ctx, recurringID)
+	}
+	return 0, nil
+}
+func (m *mockBookingRepoForHold) ClearRecurringID(ctx context.Context, id primitive.ObjectID) error {
+	return nil
 }
 func (m *mockBookingRepoForHold) FindConflictingBooking(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
 	return nil, nil

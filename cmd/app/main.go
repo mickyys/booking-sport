@@ -90,6 +90,7 @@ func main() {
 	bookingRepo := mongo.NewBookingRepository(db)
 	holdRepo := mongo.NewSlotHoldRepository(db)
 	recurringReservationRepo := mongo.NewRecurringReservationRepository(db)
+	jobLockRepo := mongo.NewJobLockRepository(db)
 	userDeviceRepo := mongo.NewUserDeviceRepository(db)
 	facilityRepo := mongo.NewFacilityRepository(db)
 	spaceRepo := mongo.NewSpaceRepository(db)
@@ -152,6 +153,7 @@ func main() {
 
 	bookingUC := app.NewBookingUseCase(bookingRepo, holdRepo, courtRepo, sportCenterRepo, userRepo, userDeviceRepo, bookingMailer, notifier, recurringReservationRepo, client, mercadopago.NewClient(getEnv("MP_ACCESS_TOKEN", "")))
 	bookingUC.SetScheduleResolver(app.NewScheduleResolver(scheduleRuleRepo, scheduleExceptionRepo, blockRepo))
+	bookingUC.SetJobLockRepository(jobLockRepo)
 
 	log.Infow("use_cases_initialized")
 
@@ -248,6 +250,7 @@ func main() {
 	r.GET("/api/bookings/mercadopago/return", bookingHandler.MercadoPagoReturn)
 	r.POST("/api/bookings/mercadopago/mock-confirm", bookingHandler.MockMercadoPagoConfirm)
 	r.POST("/api/internal/sync-payment", bookingHandler.SyncConfirmedPayment)
+	r.POST("/api/internal/jobs/recurring-generate", bookingHandler.GenerateRecurringBookingsInternal)
 	r.GET("/api/bookings/code/:code", bookingHandler.GetByBookingCode)
 	r.POST("/api/bookings/code/:code/cancel", bookingHandler.CancelByBookingCode)
 	r.POST("/api/bookings", bookingHandler.CreateBooking)
@@ -314,6 +317,7 @@ func main() {
 
 		// Recurring Reservation routes
 		api.POST("/admin/recurring", bookingHandler.CreateRecurringReservation)
+		api.POST("/admin/recurring/generate", bookingHandler.GenerateRecurringBookings)
 		api.GET("/admin/recurring", bookingHandler.GetRecurringReservationsByCenter)
 		api.GET("/admin/recurring/:id", bookingHandler.GetRecurringReservation)
 		api.GET("/admin/recurring/court/:courtId", bookingHandler.GetRecurringReservationsByCourt)

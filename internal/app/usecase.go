@@ -54,6 +54,11 @@ type BookingRepository interface {
 	AddRefundByBookingID(ctx context.Context, bookingID primitive.ObjectID, refund domain.Refund) error
 	FindByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error)
 	FindBySportCenterAndDate(ctx context.Context, centerID primitive.ObjectID, date time.Time) ([]domain.Booking, error)
+	FindByRecurringIDAndDate(ctx context.Context, recurringID string, date time.Time) (*domain.Booking, error)
+	CreateRecurringBooking(ctx context.Context, booking *domain.Booking) error
+	CancelFutureByRecurringID(ctx context.Context, recurringID string, from time.Time, cancelledBy, reason string) (int64, error)
+	DeleteByRecurringID(ctx context.Context, recurringID string) (int64, error)
+	ClearRecurringID(ctx context.Context, id primitive.ObjectID) error
 	FindConfirmedBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error)
 	FindConfirmedByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error)
 	HasConfirmedBookingsAfter(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) (bool, error)
@@ -84,6 +89,7 @@ type RecurringReservationRepository interface {
 	FindByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int, minutes int) (*domain.RecurringReservation, error)
 	FindByCourtHourAndDay(ctx context.Context, courtID primitive.ObjectID, hour int, minutes int, dayOfWeek int) (*domain.RecurringReservation, error)
 	FindActiveByCourtAndHour(ctx context.Context, courtID primitive.ObjectID, hour int, minutes int) (*domain.RecurringReservation, error)
+	FindAllActive(ctx context.Context) ([]domain.RecurringReservation, error)
 	FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error)
 	FindAdminByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error)
 	FindByCenterIDAndDayOfWeek(ctx context.Context, centerID primitive.ObjectID, dayOfWeek int) ([]domain.RecurringReservation, error)
@@ -93,6 +99,14 @@ type RecurringReservationRepository interface {
 	Finish(ctx context.Context, id primitive.ObjectID, finishedBy string, reason string, finishedAt time.Time) error
 	Delete(ctx context.Context, id primitive.ObjectID) error
 	AddCancelledDate(ctx context.Context, id primitive.ObjectID, date string) error
+	UpdateGenerationState(ctx context.Context, id primitive.ObjectID, at time.Time, ok bool, errMsg string, created int, issues []domain.RecurringGenerationIssue) error
+}
+
+// JobLockRepository implementa un lock distribuido simple en MongoDB para
+// evitar ejecuciones concurrentes de jobs idempotentes.
+type JobLockRepository interface {
+	TryAcquire(ctx context.Context, name, owner string, ttl time.Duration, now time.Time) (bool, error)
+	Release(ctx context.Context, name, owner string) error
 }
 
 // CenterWelcomeEmail son los datos del correo de bienvenida que se envía al
@@ -447,7 +461,7 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 			}
 
 			// Check for recurring reservation (excludes cancelled dates)
-			if rec, exists := recurringHours[slotKey]; exists && rec != nil && !rec.IsDateCancelled(searchDate) {
+			if rec, exists := recurringHours[slotKey]; exists && rec != nil && rec.CoversDate(searchDate) && !rec.IsDateCancelled(searchDate) {
 				if slotTime.Before(nowInLoc) {
 					sch.Status = "passed"
 				} else {
@@ -754,7 +768,7 @@ func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, c
 			}
 
 			slotKey := s.Hour*60 + s.Minutes
-			if recurring, exists := recurringHours[slotKey]; exists && recurring != nil && !recurring.IsDateCancelled(searchDate) {
+			if recurring, exists := recurringHours[slotKey]; exists && recurring != nil && recurring.CoversDate(searchDate) && !recurring.IsDateCancelled(searchDate) {
 				sch.IsRecurringWeekly = true
 				sch.RecurringReservationID = recurring.ID.Hex()
 				sch.CustomerName = recurring.CustomerName

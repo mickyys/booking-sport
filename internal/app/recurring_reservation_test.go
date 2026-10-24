@@ -21,11 +21,13 @@ type mockRecurringReservationRepo struct {
 	FindAdminByCenterIDFn        func(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error)
 	FindByCenterIDAndDayOfWeekFn func(ctx context.Context, centerID primitive.ObjectID, dayOfWeek int) ([]domain.RecurringReservation, error)
 	FindByCourtIDFn              func(ctx context.Context, courtID primitive.ObjectID) ([]domain.RecurringReservation, error)
+	FindAllActiveFn              func(ctx context.Context) ([]domain.RecurringReservation, error)
 	UpdateFn                     func(ctx context.Context, reservation *domain.RecurringReservation) error
 	CancelFn                     func(ctx context.Context, id primitive.ObjectID, cancelledBy string, reason string) error
 	FinishFn                     func(ctx context.Context, id primitive.ObjectID, finishedBy string, reason string, finishedAt time.Time) error
 	DeleteFn                     func(ctx context.Context, id primitive.ObjectID) error
 	AddCancelledDateFn           func(ctx context.Context, id primitive.ObjectID, date string) error
+	UpdateGenerationStateFn      func(ctx context.Context, id primitive.ObjectID, at time.Time, ok bool, errMsg string, created int, issues []domain.RecurringGenerationIssue) error
 
 	CreateCalls int
 }
@@ -92,6 +94,20 @@ func (m *mockRecurringReservationRepo) FindByCourtID(ctx context.Context, courtI
 		return m.FindByCourtIDFn(ctx, courtID)
 	}
 	return nil, nil
+}
+
+func (m *mockRecurringReservationRepo) FindAllActive(ctx context.Context) ([]domain.RecurringReservation, error) {
+	if m.FindAllActiveFn != nil {
+		return m.FindAllActiveFn(ctx)
+	}
+	return nil, nil
+}
+
+func (m *mockRecurringReservationRepo) UpdateGenerationState(ctx context.Context, id primitive.ObjectID, at time.Time, ok bool, errMsg string, created int, issues []domain.RecurringGenerationIssue) error {
+	if m.UpdateGenerationStateFn != nil {
+		return m.UpdateGenerationStateFn(ctx, id, at, ok, errMsg, created, issues)
+	}
+	return nil
 }
 
 func (m *mockRecurringReservationRepo) Update(ctx context.Context, reservation *domain.RecurringReservation) error {

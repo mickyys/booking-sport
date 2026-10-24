@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/hamp/booking-sport/internal/domain"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -41,6 +42,10 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	}
 
 	if err := ensureSlotHoldIndexes(ctx, db); err != nil {
+		return err
+	}
+
+	if err := ensureJobLockIndexes(ctx, db); err != nil {
 		return err
 	}
 
@@ -318,6 +323,25 @@ func ensureBookingIndexes(ctx context.Context, db *mongo.Database) error {
 			Keys:    bson.D{{Key: "hold_id", Value: 1}},
 			Options: options.Index().SetName("idx_bookings_hold_id"),
 		},
+		{
+			Keys:    bson.D{{Key: "recurring_id", Value: 1}},
+			Options: options.Index().SetName("idx_bookings_recurring_id"),
+		},
+		{
+			Keys: bson.D{
+				{Key: "recurring_id", Value: 1},
+				{Key: "date", Value: 1},
+			},
+			Options: options.Index().SetName("idx_bookings_recurring_date"),
+		},
+		{
+			Keys: bson.D{
+				{Key: "recurring_id", Value: 1},
+				{Key: "status", Value: 1},
+				{Key: "scheduled_at", Value: 1},
+			},
+			Options: options.Index().SetName("idx_bookings_recurring_status_scheduled"),
+		},
 	}
 
 	_, err := collection.Indexes().DropOne(ctx, "idx_bookings_ttl_pending")
@@ -426,6 +450,43 @@ func ensureRecurringReservationIndexes(ctx context.Context, db *mongo.Database) 
 	}
 
 	log.Println("[MONGODB] recurring_reservations indexes created")
+
+	// Índice único parcial: evita crear dos recurrencias activas para la misma
+	// cancha, hora y día. Se crea por separado para que, si existieran datos
+	// históricos duplicados, no impida crear el resto de los índices.
+	_, err = collection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{
+			{Key: "court_id", Value: 1},
+			{Key: "hour", Value: 1},
+			{Key: "minutes", Value: 1},
+			{Key: "day_of_week", Value: 1},
+		},
+		Options: options.Index().
+			SetUnique(true).
+			SetPartialFilterExpression(bson.M{"status": domain.RecurringReservationStatusActive}).
+			SetName("idx_recurring_unique_active_slot"),
+	})
+	if err != nil {
+		log.Printf("[MONGODB] Warning creating idx_recurring_unique_active_slot (posibles duplicados existentes): %v", err)
+	}
+
+	return nil
+}
+
+func ensureJobLockIndexes(ctx context.Context, db *mongo.Database) error {
+	collection := db.Collection("job_locks")
+	indexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "expires_at", Value: 1}},
+			Options: options.Index().SetExpireAfterSeconds(0).SetName("idx_job_locks_ttl"),
+		},
+	}
+	_, err := collection.Indexes().CreateMany(ctx, indexes)
+	if err != nil {
+		log.Printf("[MONGODB] Error creating job_locks indexes: %v", err)
+		return err
+	}
+	log.Println("[MONGODB] job_locks indexes created")
 	return nil
 }
 

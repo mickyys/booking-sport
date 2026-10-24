@@ -4,6 +4,7 @@ package mongo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -131,6 +132,92 @@ func (r *BookingRepository) Create(ctx context.Context, booking *domain.Booking)
 	}
 	booking.ID = res.InsertedID.(primitive.ObjectID)
 	return nil
+}
+
+// CreateRecurringBooking inserta una ocurrencia generada por una recurrencia.
+// A diferencia de Create, no expira pagos pendientes: si el horario está
+// ocupado devuelve domain.ErrBookingSlotTaken para que el generador salte esa
+// fecha y continúe con las siguientes.
+func (r *BookingRepository) CreateRecurringBooking(ctx context.Context, booking *domain.Booking) error {
+	if err := booking.NormalizeSchedule(); err != nil {
+		return err
+	}
+	booking.Version = 1
+	res, err := r.collection.InsertOne(ctx, booking)
+	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return domain.ErrBookingSlotTaken
+		}
+		return err
+	}
+	booking.ID = res.InsertedID.(primitive.ObjectID)
+	return nil
+}
+
+// FindByRecurringIDAndDate devuelve la ocurrencia generada para una fecha.
+func (r *BookingRepository) FindByRecurringIDAndDate(ctx context.Context, recurringID string, date time.Time) (*domain.Booking, error) {
+	start, end := domain.SantiagoDayBounds(date)
+	var booking domain.Booking
+	err := r.collection.FindOne(ctx, bson.M{
+		"recurring_id": recurringID,
+		"date":         bson.M{"$gte": start, "$lt": end},
+	}).Decode(&booking)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
+	}
+	return &booking, nil
+}
+
+// CancelFutureByRecurringID cancela las ocurrencias futuras (confirmadas o
+// pendientes) de una recurrencia. Las fechas pasadas se preservan. Devuelve la
+// cantidad de reservas modificadas.
+func (r *BookingRepository) CancelFutureByRecurringID(ctx context.Context, recurringID string, from time.Time, cancelledBy, reason string) (int64, error) {
+	now := time.Now()
+	filter := bson.M{
+		"recurring_id": recurringID,
+		"status": bson.M{"$in": []domain.BookingStatus{
+			domain.BookingStatusConfirmed,
+			domain.BookingStatusPending,
+		}},
+		"$or": []bson.M{
+			{"scheduled_at": bson.M{"$gt": from}},
+			{"scheduled_at": bson.M{"$exists": false}, "date": bson.M{"$gte": domain.SantiagoDateStart(from)}},
+		},
+	}
+	res, err := r.collection.UpdateMany(ctx, filter, bson.M{"$set": bson.M{
+		"status":              domain.BookingStatusCancelled,
+		"cancelled_by":        cancelledBy,
+		"cancellation_reason": reason,
+		"updated_at":          now,
+	}})
+	if err != nil {
+		return 0, err
+	}
+	return res.ModifiedCount, nil
+}
+
+// DeleteByRecurringID elimina todas las reservas generadas por una recurrencia.
+// Se usa únicamente para revertir una creación que no pudo generar su primera
+// ocurrencia.
+func (r *BookingRepository) DeleteByRecurringID(ctx context.Context, recurringID string) (int64, error) {
+	res, err := r.collection.DeleteMany(ctx, bson.M{"recurring_id": recurringID})
+	if err != nil {
+		return 0, err
+	}
+	return res.DeletedCount, nil
+}
+
+// ClearRecurringID desvincula una reserva de su recurrencia (por ejemplo, si el
+// administrador la mueve a otra fecha u hora).
+func (r *BookingRepository) ClearRecurringID(ctx context.Context, id primitive.ObjectID) error {
+	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
+		"$unset": bson.M{"recurring_id": ""},
+		"$set":   bson.M{"updated_at": time.Now()},
+	})
+	return err
 }
 
 func (r *BookingRepository) expireStalePending(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) {
