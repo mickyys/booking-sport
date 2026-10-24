@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -222,6 +223,9 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		existingBooking.LockExpiresAt = &lockExpires
 		existingBooking.HoldID = &hold.ID
 
+		if err := uc.holdOccupancy(ctx, existingBooking, mpHoldTTL); err != nil {
+			return "", err
+		}
 		uc.repo.Update(ctx, existingBooking)
 
 		client := mercadopago.NewClient(center.MercadoPago.AccessToken)
@@ -271,8 +275,13 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	booking.HoldID = &hold.ID
 	booking.LockExpiresAt = &lockExpires
 
+	if err := uc.holdOccupancy(ctx, booking, mpHoldTTL); err != nil {
+		uc.holdRepo.Delete(ctx, hold.ID)
+		return "", err
+	}
 	if err := uc.repo.Create(ctx, booking); err != nil {
 		uc.holdRepo.Delete(ctx, hold.ID)
+		uc.releaseOccupancy(ctx, booking)
 		return "", err
 	}
 
@@ -355,9 +364,13 @@ func (uc *BookingUseCase) MockConfirmPayment(ctx context.Context, bookingCode, s
 			return nil, fmt.Errorf("failed to store mock payment id: %w", err)
 		}
 
+		if err := uc.beginConfirm(ctx, booking); err != nil {
+			return nil, fmt.Errorf("failed to confirm booking: %w", err)
+		}
 		if err := uc.repo.ConfirmPayment(ctx, booking.ID, domain.BookingStatusConfirmed, booking.Price, 0, paymentInfo); err != nil {
 			return nil, fmt.Errorf("failed to confirm booking: %w", err)
 		}
+		uc.finishConfirm(ctx, booking)
 
 	case "rejected":
 		if err := uc.repo.UpdateMPPaymentID(ctx, booking.ID, paymentID); err != nil {
@@ -367,6 +380,7 @@ func (uc *BookingUseCase) MockConfirmPayment(ctx context.Context, bookingCode, s
 		if err := uc.repo.ConfirmPayment(ctx, booking.ID, domain.BookingStatusCancelled, 0, booking.Price, nil); err != nil {
 			return nil, fmt.Errorf("failed to cancel booking: %w", err)
 		}
+		uc.releaseOccupancy(ctx, booking)
 
 	default:
 		return nil, fmt.Errorf("invalid status: %s", status)
@@ -485,8 +499,37 @@ func (uc *BookingUseCase) HandleMercadoPagoWebhook(ctx context.Context, paymentI
 		paymentInfo.CardholderName = payment.Card.Cardholder.Name
 	}
 
+	latePayment := false
+	if newStatus == domain.BookingStatusConfirmed {
+		if err := uc.beginConfirm(ctx, booking); err != nil {
+			if !errors.Is(err, ErrLatePaymentConflict) {
+				return fmt.Errorf("error confirming occupancy: %w", err)
+			}
+			// Pago aprobado tras vencer el hold y con el horario ya tomado:
+			// se registra el pago, se cancela la reserva y se reembolsa todo.
+			latePayment = true
+			newStatus = domain.BookingStatusCancelled
+			log.Errorw("mp_late_payment_conflict",
+				"msg", fmt.Sprintf("Pago aprobado para booking %s pero el horario ya no está disponible; se reembolsará", booking.BookingCode),
+				"booking_code", booking.BookingCode, "payment_id", paymentID)
+		}
+	}
+
 	if err := uc.repo.ConfirmPayment(ctx, booking.ID, newStatus, paidAmount, pendingAmount, paymentInfo); err != nil {
 		return fmt.Errorf("error updating booking status: %w", err)
+	}
+	if latePayment {
+		booking.PaidAmount = paidAmount
+		booking.MPPaymentID = paymentIDStr
+		booking.IsPartialPayment = false
+		if err := uc.processMercadoPagoRefund(ctx, booking, center, 100); err != nil {
+			log.Errorw("mp_late_payment_refund_failed", "booking_code", booking.BookingCode, "error", err)
+		}
+	}
+	if newStatus == domain.BookingStatusConfirmed {
+		uc.finishConfirm(ctx, booking)
+	} else {
+		uc.releaseOccupancy(ctx, booking)
 	}
 
 	if booking.HoldID != nil {
@@ -590,11 +633,15 @@ func (uc *BookingUseCase) ValidateMercadoPagoPaymentAndGetCode(ctx context.Conte
 		}
 
 		if payment.Status == "approved" {
+			if err := uc.beginConfirm(ctx, booking); err != nil {
+				return booking.BookingCode, fmt.Errorf("error confirming occupancy: %w", err)
+			}
 			booking.Status = domain.BookingStatusConfirmed
 			booking.UpdatedAt = time.Now()
 			if err := uc.repo.Update(ctx, booking); err != nil {
 				return booking.BookingCode, fmt.Errorf("error updating booking: %w", err)
 			}
+			uc.finishConfirm(ctx, booking)
 			if booking.HoldID != nil {
 				uc.holdRepo.Delete(ctx, *booking.HoldID)
 			}
@@ -654,6 +701,9 @@ func (uc *BookingUseCase) SyncPendingBookingPaymentStatus(ctx context.Context, b
 
 	for _, p := range searchRes.Results {
 		if p.Status == "approved" {
+			if err := uc.beginConfirm(ctx, booking); err != nil {
+				return fmt.Errorf("error confirming occupancy from sync: %w", err)
+			}
 			booking.Status = domain.BookingStatusConfirmed
 			booking.MPPaymentID = fmt.Sprintf("%d", p.ID)
 			booking.PaidAmount = p.TransactionAmount
@@ -666,6 +716,7 @@ func (uc *BookingUseCase) SyncPendingBookingPaymentStatus(ctx context.Context, b
 			if err := uc.repo.Update(ctx, booking); err != nil {
 				return fmt.Errorf("error updating booking status from sync: %w", err)
 			}
+			uc.finishConfirm(ctx, booking)
 
 			if booking.HoldID != nil {
 				uc.holdRepo.Delete(ctx, *booking.HoldID)
@@ -732,6 +783,9 @@ func (uc *BookingUseCase) SyncConfirmedPayment(ctx context.Context, bookingCode 
 		return nil
 	}
 
+	if err := uc.beginConfirm(ctx, booking); err != nil {
+		return fmt.Errorf("error confirming occupancy: %w", err)
+	}
 	booking.Status = domain.BookingStatusConfirmed
 	booking.PaidAmount = paidAmount
 	booking.PendingAmount = pendingAmount
@@ -744,6 +798,7 @@ func (uc *BookingUseCase) SyncConfirmedPayment(ctx context.Context, bookingCode 
 	if err := uc.repo.Update(ctx, booking); err != nil {
 		return fmt.Errorf("error updating booking: %w", err)
 	}
+	uc.finishConfirm(ctx, booking)
 
 	if booking.HoldID != nil {
 		uc.holdRepo.Delete(ctx, *booking.HoldID)

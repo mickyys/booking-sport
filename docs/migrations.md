@@ -136,7 +136,97 @@ docker exec booking_sport_db mongosh --quiet sport_booking --eval '
 
 ---
 
+## Backfill temporal UTC (etapa 3)
+
+Ambos comandos corren en **DRY_RUN por defecto**; `APPLY=true` escribe. Son
+idempotentes y nunca modifican documentos ya migrados.
+
+```bash
+# 1. Zona horaria de los centros (histórico = America/Santiago)
+MONGO_URI=... MONGO_DB=sport_booking go run ./cmd/migrate-sport-center-timezone
+APPLY=true MONGO_URI=... go run ./cmd/migrate-sport-center-timezone
+# Opcional: TIMEZONE=America/Santiago CENTER_ID=<objectid>
+
+# 2. Reservas: scheduled_at, ends_at, timezone, local_date, schedule_schema_version=2
+MONGO_URI=... go run ./cmd/migrate-booking-schedule-fields
+APPLY=true MONGO_URI=... go run ./cmd/migrate-booking-schedule-fields
+# Opcional: FROM=2026-01-01 TO=2026-12-31 LIMIT=1000 BATCH_SIZE=500 CENTER_ID=<objectid>
+```
+
+Orden: auditar (`make audit-bookings`) → timezone de centros → backfill de
+reservas → auditar de nuevo (debe dar 0 faltantes e incoherentes). Horas
+inexistentes o ambiguas se omiten y se reportan por motivo.
+
 ## Notas de compatibilidad
 
 - La disponibilidad y las reservas siguen funcionando con el modelo legacy (`spaces.schedule`) para espacios **sin** `schedule_rules`. El nuevo motor (reglas → excepciones → bloqueos → bookings) se activa automáticamente cuando el espacio tiene reglas.
 - `migrate-spaces` y `migrate-schedule-rules` NO borran el campo `spaces.schedule`; queda como respaldo hasta la limpieza final (fase 10).
+
+---
+
+## Auditorías previas a la migración UTC + Redis
+
+Antes de tocar el modelo temporal (ver `docs/README-reservas-utc-redis.md`) hay dos
+comandos de **sólo lectura**. Ninguno escribe en MongoDB.
+
+### `cmd/audit-indexes`
+
+Lista los índices reales de `users`, `slot_holds`, `bookings`, `sport_centers`,
+`spaces` y `recurring_reservations`, y reporta anomalías conocidas.
+
+```bash
+# Local
+make audit-indexes
+
+# Staging / producción (URI real en el gestor de secretos)
+MONGO_URI='mongodb+srv://...' MONGO_DB=sport_booking make audit-indexes
+
+# Falla con exit 1 si hay anomalías (para CI o un job de control)
+STRICT=true MONGO_URI='...' MONGO_DB=sport_booking make audit-indexes
+```
+
+Anomalías que detecta:
+
+- índices `idx_slot_holds_*` creados por error sobre `users` (bug histórico de
+  `ensureUserIndexes`);
+- índices únicos legacy por slot que ya debieron retirarse;
+- índices esperados que faltan (`deploy` incompleto o `EnsureIndexes` falló).
+
+Los índices espurios **no** se eliminan automáticamente en el arranque: se
+revisan y retiran manualmente con `db.collection.dropIndex(...)` tras confirmar
+el reporte.
+
+### `cmd/audit-bookings`
+
+Genera el inventario temporal de las reservas y de los centros.
+
+```bash
+make audit-bookings
+
+# Inventario Markdown versionable + JSON completo para análisis
+SAMPLE_LIMIT=200 MONGO_URI='mongodb+srv://...' MONGO_DB=sport_booking make audit-inventory
+```
+
+Reporta:
+
+- documentos sin `local_date`, `scheduled_at`, `duration_minutes` o `timezone`;
+- `local_date` o `date` incoherentes con el instante canónico;
+- horas locales inexistentes o ambiguas (sólo documentos sin `scheduled_at`,
+  porque el resto ya tiene un instante explícito);
+- solapamientos entre reservas activas del mismo espacio, comparando por
+  instante y por lo tanto cubriendo cruces de medianoche;
+- presencia del campo legacy `day_of_week` en `bookings`;
+- centros sin zona horaria o con zona inválida.
+
+Salida:
+
+- consola con el resumen y una muestra de hallazgos (`SAMPLE_LIMIT`);
+- `OUTPUT_FILE` → JSON completo;
+- `OUTPUT_MARKDOWN` → `../docs/migration-inventory.md`.
+
+`make audit-inventory` escribe el Markdown en `docs/migration-inventory.md` de
+la raíz del workspace y el JSON en `/tmp/migration-inventory.json`.
+
+> Ejecutar siempre primero en staging. Las cifras se adjuntan al PR de la
+> etapa 1 y son la línea base para firmar el backfill.
+

@@ -69,12 +69,24 @@ type SportCenterBranding struct {
 }
 
 type SportCenter struct {
-	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
-	Slug        string             `bson:"slug" json:"slug"`
-	Name        string             `bson:"name" json:"name"`
-	City        string             `bson:"city" json:"city"`
-	Address     string             `bson:"address" json:"address"`
-	Coordinates Coordinates        `bson:"coordinates" json:"coordinates"`
+	ID   primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	Slug string             `bson:"slug" json:"slug"`
+	Name string             `bson:"name" json:"name"`
+	City string             `bson:"city" json:"city"`
+	// Timezone es la zona IANA del centro (por ejemplo America/Santiago).
+	// Gobierna la interpretación de fechas y horas civiles. Vacío en centros
+	// históricos: se interpretan como America/Santiago hasta el backfill.
+	Timezone string `bson:"timezone,omitempty" json:"timezone,omitempty"`
+	// OccupancyAuthority gobierna quién decide la exclusión de horarios del
+	// centro: "" u "off" (sólo MongoDB), "shadow" (MongoDB decide, Redis recibe
+	// copia y se comparan decisiones) o "authority" (Redis decide). No es
+	// editable por la API pública.
+	OccupancyAuthority string `bson:"occupancy_authority,omitempty" json:"-"`
+	// OccupancyGeneration se publica en MongoDB y Redis en cada corte. Una
+	// instancia con generación vieja no puede adquirir horarios.
+	OccupancyGeneration int64       `bson:"occupancy_generation,omitempty" json:"-"`
+	Address             string      `bson:"address" json:"address"`
+	Coordinates         Coordinates `bson:"coordinates" json:"coordinates"`
 	// Location es la representación GeoJSON de Coordinates, usada solo para el
 	// índice 2dsphere y $geoNear. No se expone en la API pública.
 	Location              *GeoJSONPoint        `bson:"location,omitempty" json:"-"`
@@ -498,6 +510,8 @@ type BookingSummary struct {
 	LocalDate          string             `bson:"local_date,omitempty" json:"local_date,omitempty"`
 	Timezone           string             `bson:"timezone,omitempty" json:"timezone,omitempty"`
 	ScheduledAt        time.Time          `bson:"scheduled_at,omitempty" json:"scheduled_at,omitempty"`
+	EndsAt             time.Time          `bson:"ends_at,omitempty" json:"ends_at,omitempty"`
+	DurationMinutes    int                `bson:"duration_minutes,omitempty" json:"duration_minutes,omitempty"`
 	Hour               int                `bson:"hour" json:"hour"`
 	Minutes            int                `bson:"minutes" json:"minutes"`
 	CourtName          string             `bson:"court_name" json:"court_name"`
@@ -577,8 +591,19 @@ type Booking struct {
 	LocalDate       string             `bson:"local_date,omitempty" json:"local_date,omitempty"`
 	Timezone        string             `bson:"timezone,omitempty" json:"timezone,omitempty"`
 	ScheduledAt     time.Time          `bson:"scheduled_at,omitempty" json:"scheduled_at,omitempty"`
-	Hour            int                `bson:"hour" json:"hour"`
-	Minutes         int                `bson:"minutes" json:"minutes"`
+	// EndsAt es el fin exclusivo del intervalo, en UTC. Derivado de
+	// scheduled_at + duration_minutes en documentos v2.
+	EndsAt time.Time `bson:"ends_at,omitempty" json:"ends_at,omitempty"`
+	// ScheduleSchemaVersion identifica el contrato temporal con el que se
+	// escribió el documento. 0/ausente = legacy (date + hour + minutes),
+	// 2 = UTC canónico (scheduled_at + ends_at).
+	ScheduleSchemaVersion int `bson:"schedule_schema_version,omitempty" json:"schedule_schema_version,omitempty"`
+	// OccupancyID/OccupancyToken vinculan la reserva con su intervalo en el
+	// coordinador de ocupación. El token es secreto: nunca se serializa a JSON.
+	OccupancyID    string `bson:"occupancy_id,omitempty" json:"-"`
+	OccupancyToken string `bson:"occupancy_token,omitempty" json:"-"`
+	Hour           int    `bson:"hour" json:"hour"`
+	Minutes        int    `bson:"minutes" json:"minutes"`
 	// DurationMinutes es la duración de la reserva en minutos. 0 o 60 implica 1 hora.
 	DurationMinutes       int                   `bson:"duration_minutes,omitempty" json:"duration_minutes,omitempty"`
 	FinalPrice            float64               `bson:"final_price" json:"final_price"`

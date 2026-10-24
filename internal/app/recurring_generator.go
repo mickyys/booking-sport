@@ -313,6 +313,7 @@ func (uc *BookingUseCase) generateForRecurring(ctx context.Context, reservation 
 
 		conflicting, _ := uc.repo.FindConfirmedBySlot(ctx, reservation.CourtID, target, reservation.Hour, reservation.Minutes)
 		if conflicting != nil {
+			uc.shadowCompareMongoConflict(ctx, &booking)
 			result.Skipped++
 			result.addIssue(dateStr, "horario ocupado por otra reserva")
 			markFirst(false, "horario ocupado por otra reserva")
@@ -351,7 +352,13 @@ func (uc *BookingUseCase) generateForRecurring(ctx context.Context, reservation 
 			}
 		}
 
-		if err := uc.repo.CreateRecurringBooking(ctx, &booking); err != nil {
+		if err := uc.persistWithOccupancy(ctx, &booking, func() error { return uc.repo.CreateRecurringBooking(ctx, &booking) }); err != nil {
+			if isConflict(err) {
+				result.Skipped++
+				result.addIssue(dateStr, "horario ocupado según el coordinador")
+				markFirst(false, "horario ocupado por otra reserva")
+				continue
+			}
 			if errors.Is(err, domain.ErrBookingSlotTaken) {
 				result.AlreadyExists++
 				markFirst(false, "horario ocupado por otra reserva")

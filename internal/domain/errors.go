@@ -9,6 +9,10 @@ var ErrNotFound = errors.New("not found")
 // conflicto esperable de un error de infraestructura.
 var ErrBookingSlotTaken = errors.New("booking slot already taken")
 
+// ErrVersionConflict indica que el documento cambió entre la lectura y la
+// escritura. El llamador debe releer y reintentar la transición.
+var ErrVersionConflict = errors.New("booking version conflict")
+
 type AppError struct {
 	Message    string
 	StatusCode int

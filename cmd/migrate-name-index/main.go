@@ -63,7 +63,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error listing indexes: %v", err)
 	}
-	
+
 	var indexes []bson.M
 	if err := indexCursor.All(ctx, &indexes); err != nil {
 		log.Fatalf("Error decoding indexes: %v", err)

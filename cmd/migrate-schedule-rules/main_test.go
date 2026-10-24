@@ -3,19 +3,25 @@ package main
 import (
 	"reflect"
 	"testing"
+
+	"github.com/hamp/booking-sport/internal/app"
+	"github.com/hamp/booking-sport/internal/domain"
 )
 
+// La conversión de slots legacy a reglas vive en internal/app para que el
+// comando de migración y el fallback de lectura no diverjan. Estos tests
+// verifican el contrato que consume cmd/migrate-schedule-rules.
 func intPtr(i int) *int { return &i }
 
 func TestBuildRulesGeneralAndSpecific(t *testing.T) {
-	slots := []legacyCourtSchedule{
+	slots := []domain.CourtSchedule{
 		{Hour: 9, Minutes: 0, Price: 10000, Status: "available", DayOfWeek: nil},
 		{Hour: 10, Minutes: 0, Price: 10000, Status: "available", DayOfWeek: nil},
 		{Hour: 15, Minutes: 30, Price: 20000, Status: "available", DayOfWeek: intPtr(1)}, // lunes 15:30
 		{Hour: 17, Minutes: 0, Price: 20000, Status: "available", DayOfWeek: intPtr(1)},  // lunes 17:00
 	}
 
-	rules := buildRules(slots)
+	rules := app.BuildRulesFromLegacyCourtSchedule(slots)
 
 	if len(rules) != 2 {
 		t.Fatalf("expected 2 rules, got %d", len(rules))
@@ -57,12 +63,12 @@ func TestBuildRulesGeneralAndSpecific(t *testing.T) {
 }
 
 func TestBuildRulesSkipsClosed(t *testing.T) {
-	slots := []legacyCourtSchedule{
+	slots := []domain.CourtSchedule{
 		{Hour: 9, Minutes: 0, Price: 10000, Status: "available", DayOfWeek: nil},
 		{Hour: 10, Minutes: 0, Price: 10000, Status: "closed", DayOfWeek: nil},
 	}
 
-	rules := buildRules(slots)
+	rules := app.BuildRulesFromLegacyCourtSchedule(slots)
 
 	if len(rules) != 1 {
 		t.Fatalf("expected 1 rule (closed slot skipped), got %d", len(rules))
@@ -73,13 +79,13 @@ func TestBuildRulesSkipsClosed(t *testing.T) {
 }
 
 func TestBuildRulesMidnightSlots(t *testing.T) {
-	slots := []legacyCourtSchedule{
+	slots := []domain.CourtSchedule{
 		{Hour: 22, Minutes: 0, Price: 30000, Status: "available", DayOfWeek: nil},
 		{Hour: 23, Minutes: 0, Price: 31000, Status: "available", DayOfWeek: nil},
 		{Hour: 23, Minutes: 59, Price: 32000, Status: "available", DayOfWeek: nil},
 	}
 
-	rules := buildRules(slots)
+	rules := app.BuildRulesFromLegacyCourtSchedule(slots)
 
 	if len(rules) != 1 {
 		t.Fatalf("expected 1 rule, got %d", len(rules))
@@ -96,14 +102,14 @@ func TestBuildRulesMidnightSlots(t *testing.T) {
 
 func TestBuildRulesPaymentFlags(t *testing.T) {
 	p := true
-	slots := []legacyCourtSchedule{
+	slots := []domain.CourtSchedule{
 		{
 			Hour: 9, Minutes: 0, Price: 10000, Status: "available",
 			PaymentRequired: false, PaymentOptional: true, PartialPaymentEnabled: &p, DayOfWeek: nil,
 		},
 	}
 
-	rules := buildRules(slots)
+	rules := app.BuildRulesFromLegacyCourtSchedule(slots)
 	if len(rules) != 1 || len(rules[0].Slots) != 1 {
 		t.Fatalf("unexpected rules: %d rules, %d franjas", len(rules), len(rules[0].Slots))
 	}

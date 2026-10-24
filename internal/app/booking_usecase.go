@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hamp/booking-sport/internal/domain"
@@ -38,6 +39,10 @@ type BookingUseCase struct {
 	mongoClient              *mongo.Client
 	mpClient                 *mercadopago.Client
 	scheduleResolver         *ScheduleResolver
+	occupancy                OccupancyCoordinator
+	occupancyDefault         OccupancyMode
+	policyMu                 sync.Mutex
+	policies                 map[primitive.ObjectID]occupancyPolicy
 }
 
 // SetScheduleResolver inyecta el resolver de disponibilidad basado en reglas
@@ -361,7 +366,12 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 
 	log := logger.FromContext(ctx)
 
-	confirmed, _ := uc.repo.FindConfirmedBySlot(ctx, courtID, normalizedDate, hour, minutes)
+	confirmed, err := uc.repo.FindConfirmedBySlot(ctx, courtID, normalizedDate, hour, minutes)
+	if err != nil {
+		// Un fallo de lectura no significa "libre": abortar el claim es más
+		// seguro que permitir una doble reserva.
+		return nil, nil, fmt.Errorf("error checking confirmed availability: %w", err)
+	}
 	if confirmed != nil {
 		log.Infow("claim_renew_confirmed_found",
 			"court_id", courtID.Hex(),
@@ -372,7 +382,10 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 		return nil, nil, domain.NewConflictError("este horario ya esta reservado")
 	}
 
-	pending, _ := uc.repo.FindPendingBySlot(ctx, courtID, normalizedDate, hour, minutes)
+	pending, err := uc.repo.FindPendingBySlot(ctx, courtID, normalizedDate, hour, minutes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error checking pending availability: %w", err)
+	}
 	if pending != nil {
 		log.Infow("claim_renew_pending_found",
 			"booking_id", pending.ID.Hex(),
@@ -589,10 +602,9 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 		}
 	}
 
-	// Calcular horas restantes (negativo si ya pasó) en horario de Santiago
-	loc := domain.GetSantiagoLocation()
-	bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, 0, 0, 0, loc)
-	hoursUntilMatch := time.Until(bookingDateTime.In(loc)).Hours()
+	// Calcular horas restantes (negativo si ya pasó) usando el instante
+	// canónico de inicio, que incluye los minutos de la reserva.
+	hoursUntilMatch := time.Until(booking.StartInstant()).Hours()
 
 	if hoursUntilMatch <= 0 {
 		// Los admins pueden cancelar hasta 48 horas pasadas
@@ -675,6 +687,7 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 	if booking.HoldID != nil {
 		uc.holdRepo.Delete(ctx, *booking.HoldID)
 	}
+	uc.releaseOccupancy(ctx, booking)
 
 	log.Infow("booking_cancelled",
 		"msg", fmt.Sprintf("Booking %s cancelado en %s — cancelado por %s",
@@ -788,6 +801,7 @@ func (uc *BookingUseCase) RescheduleBooking(ctx context.Context, id primitive.Ob
 	if err != nil {
 		return nil, domain.NewNotFoundError("reserva no encontrada")
 	}
+	original := *booking
 	originalDate := booking.Date
 	originalHour, originalMinutes := booking.Hour, booking.Minutes
 	originalCourtID := booking.CourtID
@@ -878,7 +892,7 @@ func (uc *BookingUseCase) RescheduleBooking(ctx context.Context, id primitive.Ob
 		}
 	}
 
-	if err := uc.repo.Update(ctx, booking); err != nil {
+	if err := uc.moveOccupancy(ctx, &original, booking, func() error { return uc.repo.Update(ctx, booking) }); err != nil {
 		return nil, err
 	}
 
@@ -938,28 +952,25 @@ func (uc *BookingUseCase) resolveBookingPrice(ctx context.Context, court *domain
 
 // checkConfirmedIntervalConflict valida que el intervalo de la reserva no se
 // superponga con reservas confirmadas existentes del mismo espacio y fecha.
-func (uc *BookingUseCase) checkConfirmedIntervalConflict(ctx context.Context, booking *domain.Booking, minutes int) error {
-	duration := booking.DurationMinutes
-	if duration <= 0 {
-		duration = 60
+// checkConfirmedIntervalConflict verifica solapamientos por intervalo real,
+// no por hora de inicio. Cubre reservas de distinta duración y cruces de
+// medianoche. Un fallo de lectura se propaga: asumir "libre" permitiría una
+// doble reserva.
+func (uc *BookingUseCase) checkConfirmedIntervalConflict(ctx context.Context, booking *domain.Booking, _ int) error {
+	var exclude *primitive.ObjectID
+	if !booking.ID.IsZero() {
+		id := booking.ID
+		exclude = &id
 	}
-	start := booking.Hour*60 + minutes
-	end := start + duration
 
-	confirmed, err := uc.repo.FindConfirmedByCourtAndDate(ctx, booking.CourtID, booking.Date)
+	conflicts, err := uc.repo.FindOccupancy(ctx, booking.CourtID, booking.StartInstant(), booking.EndInstant(), exclude)
 	if err != nil {
-		return nil
+		return fmt.Errorf("error checking availability: %w", err)
 	}
-	for _, b := range confirmed {
-		if b.ID == booking.ID {
-			continue
-		}
-		bDur := b.DurationMinutes
-		if bDur <= 0 {
-			bDur = 60
-		}
-		bStart := b.Hour*60 + b.Minutes
-		if start < bStart+bDur && bStart < end {
+
+	for _, b := range conflicts {
+		if b.Status == domain.BookingStatusConfirmed {
+			uc.shadowCompareMongoConflict(ctx, booking)
 			return domain.NewConflictError("ya existe una reserva confirmada que se superpone con este horario")
 		}
 	}
@@ -1019,6 +1030,7 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 		return fmt.Errorf("error checking availability: %w", err)
 	}
 	if conflicting != nil {
+		uc.shadowCompareMongoConflict(ctx, booking)
 		return fmt.Errorf("ya existe un proceso de reserva o reserva confirmada para este horario")
 	}
 
@@ -1051,7 +1063,7 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 		}
 	}
 
-	if err := uc.repo.Create(ctx, booking); err != nil {
+	if err := uc.persistWithOccupancy(ctx, booking, func() error { return uc.repo.Create(ctx, booking) }); err != nil {
 		return err
 	}
 
@@ -1152,6 +1164,7 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 			return nil, fmt.Errorf("error checking availability: %w", err)
 		}
 		if conflicting != nil {
+			uc.shadowCompareMongoConflict(ctx, &b)
 			return nil, fmt.Errorf("No disponible: %s - ya existe una reserva confirmada para este horario", dateStr)
 		}
 
@@ -1208,13 +1221,42 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 		validated = append(validated, validatedBooking{booking: b, price: price})
 	}
 
-	created := make([]domain.Booking, 0, len(validated))
-	for _, vb := range validated {
-		b := vb.booking
-		if err := uc.repo.Create(ctx, &b); err != nil {
-			return nil, fmt.Errorf("error creating booking for %s: %w", b.Date.Format("02/01/2006"), err)
+	// Atomicidad por espacio: se adquieren todos los intervalos antes de
+	// insertar; si alguno está ocupado se liberan los ya tomados.
+	toCreate := make([]domain.Booking, len(validated))
+	for i, vb := range validated {
+		toCreate[i] = vb.booking
+	}
+	acquired := make([]*domain.Booking, 0, len(toCreate))
+	for i := range toCreate {
+		if err := uc.acquireOccupancy(ctx, &toCreate[i], occupancyCommitTTL); err != nil {
+			for _, a := range acquired {
+				uc.releaseOccupancy(ctx, a)
+			}
+			return nil, fmt.Errorf("error reservando %s: %w", toCreate[i].Date.Format("02/01/2006"), err)
 		}
-		created = append(created, b)
+		acquired = append(acquired, &toCreate[i])
+	}
+
+	created := make([]domain.Booking, 0, len(toCreate))
+	for i := range toCreate {
+		b := &toCreate[i]
+		insert := func() error { return uc.repo.Create(ctx, b) }
+		var err error
+		if uc.occupancyModeFor(ctx, b.SportCenterID) == OccupancyOff || b.OccupancyID == "" {
+			err = insert()
+		} else {
+			err = uc.commitOccupancy(ctx, b, insert)
+		}
+		if err != nil {
+			// Liberar los intervalos que aún no se confirmaron.
+			for _, rest := range toCreate[i+1:] {
+				r := rest
+				uc.releaseOccupancy(ctx, &r)
+			}
+			return created, fmt.Errorf("error creating booking for %s: %w", b.Date.Format("02/01/2006"), err)
+		}
+		created = append(created, *b)
 	}
 
 	log := logger.FromContext(ctx)
@@ -1240,9 +1282,9 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 
 	found := false
 	for _, s := range court.Schedule {
-		if s.Hour == booking.Hour {
+		if s.Hour == booking.Hour && s.Minutes == booking.Minutes {
 			if s.Status != "available" {
-				return fmt.Errorf("hour %d is not available", booking.Hour)
+				return fmt.Errorf("hour %02d:%02d is not available", booking.Hour, booking.Minutes)
 			}
 			if s.PaymentRequired {
 				return fmt.Errorf("payment required for this slot")
@@ -1254,7 +1296,7 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 	}
 
 	if !found {
-		return fmt.Errorf("hour %d not found in schedule", booking.Hour)
+		return fmt.Errorf("hour %02d:%02d not found in schedule", booking.Hour, booking.Minutes)
 	}
 
 	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
@@ -1283,8 +1325,8 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 
 	log := logger.FromContext(ctx)
 	log.Infow("booking_create_started",
-		"msg", fmt.Sprintf("Se crea booking para las %02d:00 hrs en %s (%s)",
-			booking.Hour, booking.SportCenterName, booking.CourtName),
+		"msg", fmt.Sprintf("Se crea booking para las %02d:%02d hrs en %s (%s)",
+			booking.Hour, booking.Minutes, booking.SportCenterName, booking.CourtName),
 		"center_id", booking.SportCenterID.Hex(),
 		"center_name", booking.SportCenterName,
 	)
@@ -1294,6 +1336,7 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 		return fmt.Errorf("error checking availability: %w", err)
 	}
 	if conflicting != nil {
+		uc.shadowCompareMongoConflict(ctx, booking)
 		return domain.NewConflictError("ya existe una reserva confirmada para este horario")
 	}
 
@@ -1314,7 +1357,7 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 		}
 	}
 
-	if err := uc.repo.Create(ctx, booking); err != nil {
+	if err := uc.persistWithOccupancy(ctx, booking, func() error { return uc.repo.Create(ctx, booking) }); err != nil {
 		return err
 	}
 

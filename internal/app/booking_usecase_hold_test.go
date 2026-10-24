@@ -17,6 +17,7 @@ import (
 
 type mockBookingRepoForHold struct {
 	FindConfirmedBySlotFn        func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error)
+	FindOccupancyFn              func(ctx context.Context, courtID primitive.ObjectID, startUTC, endUTC time.Time, excludeBookingID *primitive.ObjectID) ([]domain.Booking, error)
 	FindPendingBySlotFn          func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error)
 	UpdateLockExpiresAtFn        func(ctx context.Context, id primitive.ObjectID, expiresAt time.Time) error
 	MarkExpiredFn                func(ctx context.Context, id primitive.ObjectID) error
@@ -61,6 +62,13 @@ func (m *mockBookingRepoForHold) FindConfirmedBySlot(ctx context.Context, courtI
 	m.FindConfirmedBySlotCalls = append(m.FindConfirmedBySlotCalls, findConfirmedBySlotCall{courtID, date, hour, minutes})
 	if m.FindConfirmedBySlotFn != nil {
 		return m.FindConfirmedBySlotFn(ctx, courtID, date, hour, minutes)
+	}
+	return nil, nil
+}
+
+func (m *mockBookingRepoForHold) FindOccupancy(ctx context.Context, courtID primitive.ObjectID, startUTC, endUTC time.Time, excludeBookingID *primitive.ObjectID) ([]domain.Booking, error) {
+	if m.FindOccupancyFn != nil {
+		return m.FindOccupancyFn(ctx, courtID, startUTC, endUTC, excludeBookingID)
 	}
 	return nil, nil
 }

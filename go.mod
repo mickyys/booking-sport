@@ -13,6 +13,7 @@ require (
 	github.com/newrelic/go-agent/v3 v3.43.3
 	github.com/newrelic/go-agent/v3/integrations/logcontext-v2/nrlogrus v1.1.3
 	github.com/newrelic/go-agent/v3/integrations/nrgin v1.4.2
+	github.com/redis/go-redis/v9 v9.14.0
 	github.com/sirupsen/logrus v1.9.4
 	go.mongodb.org/mongo-driver v1.17.9
 	golang.org/x/sync v0.20.0
@@ -41,6 +42,7 @@ require (
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/cncf/xds/go v0.0.0-20251210132809-ee656c7534f5 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.36.0 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.3.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect

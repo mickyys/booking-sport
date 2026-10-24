@@ -60,6 +60,10 @@ type BookingRepository interface {
 	DeleteByRecurringID(ctx context.Context, recurringID string) (int64, error)
 	ClearRecurringID(ctx context.Context, id primitive.ObjectID) error
 	FindConfirmedBySlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error)
+	// FindOccupancy devuelve las reservas activas (confirmed/pending) que se
+	// solapan con el intervalo [startUTC, endUTC). excludeBookingID permite
+	// ignorar la propia reserva al reprogramar.
+	FindOccupancy(ctx context.Context, courtID primitive.ObjectID, startUTC, endUTC time.Time, excludeBookingID *primitive.ObjectID) ([]domain.Booking, error)
 	FindConfirmedByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error)
 	HasConfirmedBookingsAfter(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) (bool, error)
 	FindConfirmedBookingsAfter(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error)
@@ -957,6 +961,11 @@ func applyBlocksToSlots(slots []domain.CourtSchedule, blocks []domain.Block) []d
 }
 
 func (uc *SportCenterUseCase) CreateSportCenter(ctx context.Context, center *domain.SportCenter) error {
+	if center.Timezone != "" {
+		if _, err := domain.LoadTimezone(center.Timezone); err != nil {
+			return err
+		}
+	}
 	if center.Slug != "" {
 		existing, _ := uc.repo.FindBySlug(ctx, center.Slug)
 		if existing != nil {
@@ -1035,6 +1044,7 @@ func (uc *SportCenterUseCase) CreateSportCenterOnboard(ctx context.Context, name
 		Slug:              slug,
 		Address:           address,
 		City:              city,
+		Timezone:          domain.SantiagoTimezone,
 		Rut:               rut,
 		AdminEmail:        adminEmail,
 		Users:             users,
@@ -1168,6 +1178,16 @@ func replaceAccents(s string) string {
 func (uc *SportCenterUseCase) UpdateSportCenter(ctx context.Context, id primitive.ObjectID, updatedCenter *domain.SportCenter) error {
 	existing, err := uc.repo.FindByID(ctx, id)
 	if err != nil {
+		return err
+	}
+
+	// Campos operativos del coordinador: sólo los cambia el comando de corte.
+	updatedCenter.OccupancyAuthority = existing.OccupancyAuthority
+	updatedCenter.OccupancyGeneration = existing.OccupancyGeneration
+
+	if updatedCenter.Timezone == "" {
+		updatedCenter.Timezone = existing.Timezone
+	} else if _, err := domain.LoadTimezone(updatedCenter.Timezone); err != nil {
 		return err
 	}
 

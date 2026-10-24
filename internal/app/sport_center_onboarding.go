@@ -44,7 +44,7 @@ type UpdateOnboardingInput struct {
 	Email          *string
 	Direccion      *string
 	Telefono       *string
-	Templates     []domain.SpaceTemplate
+	Templates      []domain.SpaceTemplate
 	PaymentMode    *string
 	ImageURL       *string
 	FirstMonthFree *bool

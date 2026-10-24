@@ -372,26 +372,11 @@ func ensureBookingIndexes(ctx context.Context, db *mongo.Database) error {
 func ensureUserIndexes(ctx context.Context, db *mongo.Database) error {
 	collection := db.Collection("users")
 
+	// Nota: los índices de slot_holds vivían aquí por error (creaban
+	// idx_slot_holds_* sobre la colección users). Se movieron a
+	// ensureSlotHoldIndexes. Los índices espurios ya desplegados se detectan
+	// con cmd/audit-indexes y se retiran manualmente, nunca en startup.
 	indexes := []mongo.IndexModel{
-		{
-			Keys: bson.D{
-				{Key: "court_id", Value: 1},
-				{Key: "local_date", Value: 1},
-				{Key: "hour", Value: 1},
-				{Key: "minutes", Value: 1},
-			},
-			Options: options.Index().
-				SetUnique(true).
-				SetPartialFilterExpression(bson.M{"local_date": bson.M{"$type": "string"}}).
-				SetName("idx_slot_holds_unique_local_slot"),
-		},
-		{
-			Keys: bson.D{
-				{Key: "court_id", Value: 1},
-				{Key: "scheduled_at", Value: 1},
-			},
-			Options: options.Index().SetName("idx_slot_holds_court_scheduled_at"),
-		},
 		{
 			Keys:    bson.D{{Key: "username", Value: 1}},
 			Options: options.Index().SetUnique(true).SetName("idx_users_username"),
@@ -506,6 +491,13 @@ func ensureSlotHoldIndexes(ctx context.Context, db *mongo.Database) error {
 				SetName("idx_slot_holds_unique_slot_v2"),
 		},
 		{
+			Keys: bson.D{
+				{Key: "court_id", Value: 1},
+				{Key: "scheduled_at", Value: 1},
+			},
+			Options: options.Index().SetName("idx_slot_holds_court_scheduled_at"),
+		},
+		{
 			Keys: bson.D{{Key: "expires_at", Value: 1}},
 			Options: options.Index().
 				SetExpireAfterSeconds(0).
@@ -522,6 +514,24 @@ func ensureSlotHoldIndexes(ctx context.Context, db *mongo.Database) error {
 	if err != nil {
 		log.Printf("[MONGODB] Error creating slot_holds indexes: %v", err)
 		return err
+	}
+
+	// Índice único por fecha civil. Se crea por separado para que, si hubiera
+	// holds históricos duplicados por local_date, no impida crear el resto.
+	_, err = collection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{
+			{Key: "court_id", Value: 1},
+			{Key: "local_date", Value: 1},
+			{Key: "hour", Value: 1},
+			{Key: "minutes", Value: 1},
+		},
+		Options: options.Index().
+			SetUnique(true).
+			SetPartialFilterExpression(bson.M{"local_date": bson.M{"$type": "string"}}).
+			SetName("idx_slot_holds_unique_local_slot"),
+	})
+	if err != nil {
+		log.Printf("[MONGODB] Warning creating idx_slot_holds_unique_local_slot (posibles duplicados existentes): %v", err)
 	}
 
 	log.Println("[MONGODB] slot_holds indexes created")

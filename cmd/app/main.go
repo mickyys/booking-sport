@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -15,6 +16,7 @@ import (
 	mg "github.com/hamp/booking-sport/internal/infra/mailgun"
 	"github.com/hamp/booking-sport/internal/infra/middleware"
 	"github.com/hamp/booking-sport/internal/infra/mongo"
+	occredis "github.com/hamp/booking-sport/internal/infra/redis"
 	"github.com/hamp/booking-sport/pkg/auth"
 	"github.com/hamp/booking-sport/pkg/logger"
 	"github.com/hamp/booking-sport/pkg/mercadopago"
@@ -154,6 +156,49 @@ func main() {
 	bookingUC := app.NewBookingUseCase(bookingRepo, holdRepo, courtRepo, sportCenterRepo, userRepo, userDeviceRepo, bookingMailer, notifier, recurringReservationRepo, client, mercadopago.NewClient(getEnv("MP_ACCESS_TOKEN", "")))
 	bookingUC.SetScheduleResolver(app.NewScheduleResolver(scheduleRuleRepo, scheduleExceptionRepo, blockRepo))
 	bookingUC.SetJobLockRepository(jobLockRepo)
+
+	if getEnv("BOOKING_REDIS_AUTHORITY", "false") == "true" {
+		maxDuration, err := time.ParseDuration(getEnv("BOOKING_MAX_DURATION", "24h"))
+		if err != nil {
+			log.Fatalw("invalid_booking_max_duration", "error", err)
+		}
+		coordinator, err := occredis.NewCoordinator(occredis.Config{
+			URL:         getEnv("REDIS_URL", ""),
+			KeyPrefix:   getEnv("REDIS_KEY_PREFIX", "reservaloya"),
+			MaxDuration: maxDuration,
+		})
+		if err != nil {
+			log.Fatalw("occupancy_coordinator_config_error", "error", err)
+		}
+		healthCtx, cancelHealth := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := coordinator.Health(healthCtx); err != nil {
+			cancelHealth()
+			log.Fatalw("occupancy_coordinator_unavailable", "error", err)
+		}
+		cancelHealth()
+		bookingUC.SetOccupancyCoordinator(coordinator)
+		// Modo por defecto de los centros sin occupancy_authority propio.
+		// "off" permite activar el coordinador centro por centro.
+		defaultMode, ok := app.ParseOccupancyMode(getEnv("BOOKING_OCCUPANCY_MODE", string(app.OccupancyAuthority)))
+		if !ok {
+			log.Fatalw("invalid_booking_occupancy_mode")
+		}
+		bookingUC.SetOccupancyDefaultMode(defaultMode)
+		log.Infow("occupancy_default_mode", "mode", string(defaultMode))
+
+		interval, err := time.ParseDuration(getEnv("BOOKING_RECONCILE_INTERVAL", "60s"))
+		if err != nil || interval <= 0 {
+			log.Fatalw("invalid_booking_reconcile_interval", "error", err)
+		}
+		reconciler := &app.OccupancyReconciler{
+			Store: mongo.NewOccupancyReconcileStore(db),
+			Coord: coordinator,
+			Locks: jobLockRepo,
+			Apply: true,
+		}
+		go reconciler.Loop(context.Background(), interval)
+		log.Infow("occupancy_coordinator_enabled")
+	}
 
 	log.Infow("use_cases_initialized")
 

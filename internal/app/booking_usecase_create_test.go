@@ -14,10 +14,14 @@ import (
 // the bookings passed to Create.
 type mockBookingRepoForCreate struct {
 	*mockBookingRepoForHold
-	Created []*domain.Booking
+	Created   []*domain.Booking
+	CreateErr error
 }
 
 func (m *mockBookingRepoForCreate) Create(ctx context.Context, booking *domain.Booking) error {
+	if m.CreateErr != nil {
+		return m.CreateErr
+	}
 	m.Created = append(m.Created, booking)
 	return nil
 }
@@ -187,7 +191,7 @@ func TestCreate_RejectsHourNotFound(t *testing.T) {
 		Hour:    12,
 		Date:    time.Now().AddDate(0, 0, 2),
 	})
-	assertErrorContains(t, err, "hour 12 not found")
+	assertErrorContains(t, err, "hour 12:00 not found in schedule")
 	if len(bookingRepo.Created) != 0 {
 		t.Errorf("expected no booking to be created, got %d", len(bookingRepo.Created))
 	}
