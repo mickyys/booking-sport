@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="x-apple-disable-message-reformatting">
 
-  <title>Bienvenido a ReservaloYA</title>
+  <title>{{.Title}}</title>
 
   <style>
     body {
@@ -75,7 +75,7 @@
       color:transparent;
     "
   >
-    Tu centro deportivo está listo en ReservaloYA.
+    {{.Preheader}}
   </div>
 
   <table
@@ -209,7 +209,7 @@
                         color:#0d1b3a;
                       "
                     >
-                      ¡Bienvenido a ReservaloYA!
+                      {{.Title}}
                     </h1>
 
                     <!-- GREETING -->
@@ -237,11 +237,7 @@
                         color:#59645e;
                       "
                     >
-                      Registramos con éxito tu centro deportivo en
-                      <strong style="color:#17201b;">
-                        ReservaloYA
-                      </strong>.
-                      Estos son tus datos de acceso y los de tu centro:
+                      {{.Intro}}
                     </p>
 
                     <!-- ACCOUNT BOX -->
@@ -322,7 +318,7 @@
                               letter-spacing:0.6px;
                             "
                           >
-                            Tu centro deportivo
+                            {{.CenterLabel}}
                           </p>
 
                           <p

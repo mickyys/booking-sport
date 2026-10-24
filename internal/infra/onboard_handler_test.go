@@ -114,6 +114,9 @@ type mockAuth0Client struct {
 	lastAssignedRole    string
 	lastAssignedUser    string
 	assignRoleErr       error
+	hasRole             bool
+	hasRoleErr          error
+	hasRoleCalls        int
 	accountErr          error
 
 	setupTicketCalls   int
@@ -158,6 +161,14 @@ func (m *mockAuth0Client) AssignRole(ctx context.Context, auth0UserID, roleID st
 	return m.assignRoleErr
 }
 
+func (m *mockAuth0Client) UserHasRole(ctx context.Context, auth0UserID, roleID string) (bool, error) {
+	m.hasRoleCalls++
+	if m.hasRoleErr != nil {
+		return false, m.hasRoleErr
+	}
+	return m.hasRole, nil
+}
+
 var _ auth0mgmt.Client = (*mockAuth0Client)(nil)
 
 // ---------- Mock app.Mailer ----------
@@ -166,6 +177,10 @@ type mockMailer struct {
 	welcomeCalls int
 	lastWelcome  app.CenterWelcomeEmail
 	welcomeErr   error
+
+	inviteCalls int
+	lastInvite  app.CenterInvitationEmail
+	inviteErr   error
 }
 
 func (m *mockMailer) SendBookingConfirmation(ctx context.Context, booking *domain.Booking, cancellationHours, retentionPercent int, paidAmount, pendingAmount float64) error {
@@ -181,6 +196,12 @@ func (m *mockMailer) SendCenterOnboardWelcome(ctx context.Context, data app.Cent
 	m.welcomeCalls++
 	m.lastWelcome = data
 	return m.welcomeErr
+}
+
+func (m *mockMailer) SendCenterInvitation(ctx context.Context, data app.CenterInvitationEmail) error {
+	m.inviteCalls++
+	m.lastInvite = data
+	return m.inviteErr
 }
 
 var _ app.Mailer = (*mockMailer)(nil)

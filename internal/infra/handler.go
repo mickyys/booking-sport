@@ -494,10 +494,22 @@ func (h *SportCenterHandler) UpdateSportCenterSettings(c *gin.Context) {
 		City                  *string                     `json:"city"`
 		Coordinates           *domain.Coordinates         `json:"coordinates"`
 		PaymentMode           *string                     `json:"payment_mode"`
+		GooglePlaceID         *string                     `json:"google_place_id"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	if body.GooglePlaceID != nil {
+		if err := h.useCase.UpdateGooglePlaceID(c.Request.Context(), id, *body.GooglePlaceID); err != nil {
+			if errors.Is(err, app.ErrInvalidGooglePlaceID) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	if err := h.useCase.UpdateSettings(c.Request.Context(), id, body.Slug, body.CancellationHours, body.RetentionPercent, body.PartialPaymentEnabled, body.PartialPaymentPercent, body.ImageURL, body.MarketplaceFeePercent, body.IsFeatured, body.Branding, body.Address, body.City, body.Coordinates, body.PaymentMode); err != nil {
@@ -642,8 +654,8 @@ func (h *SportCenterHandler) GetCenterUsers(c *gin.Context) {
 		auth0User := Auth0User{UserID: uID}
 
 		userData := fetchAuth0UserByID(auth0Domain, uID)
-		log.Printf("GetCenterUsers: other user %s - name=%s, picture=%s, last_login=%s", uID, userData.Name, userData.Picture, userData.LastLogin)
 		if userData != nil {
+			log.Printf("GetCenterUsers: user %s - name=%s", uID, userData.Name)
 			auth0User.Name = userData.Name
 			auth0User.Email = userData.Email
 			auth0User.Picture = userData.Picture
@@ -688,6 +700,15 @@ func (h *SportCenterHandler) RemoveCenterUser(c *gin.Context) {
 	}
 
 	center := centers[0]
+
+	if userIDToRemove == userIDStr {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no puedes quitar tu propio acceso"})
+		return
+	}
+	if len(center.Users) <= 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "el centro debe tener al menos un administrador"})
+		return
+	}
 
 	found := false
 	newUsers := make([]string, 0, len(center.Users))

@@ -111,6 +111,9 @@ type SportCenter struct {
 	CreatedAt             time.Time            `bson:"created_at" json:"created_at"`
 	UpdatedAt             time.Time            `bson:"updated_at" json:"updated_at"`
 	Rut                   string               `bson:"rut" json:"rut"`
+	// GooglePlaceID identifica el recinto en Google Maps; se usa para mostrar
+	// calificación y reseñas en el detalle público del centro.
+	GooglePlaceID string `bson:"google_place_id,omitempty" json:"google_place_id,omitempty"`
 	// AdminEmail es el correo del administrador dueño del centro (1 email = 1 centro).
 	// Se normaliza (trim + minúsculas) antes de guardar y consultar.
 	AdminEmail string `bson:"admin_email" json:"admin_email"`
@@ -379,11 +382,13 @@ type FacilityInquiry struct {
 	Message       string             `bson:"message,omitempty" json:"message,omitempty"`
 	Month         int                `bson:"month,omitempty" json:"month,omitempty"`
 	Days          []int              `bson:"days,omitempty" json:"days,omitempty"`
-	Date          string             `bson:"date,omitempty" json:"date,omitempty"`
-	SlotKind      string             `bson:"slot_kind,omitempty" json:"slot_kind,omitempty"`
-	TotalPrice    float64            `bson:"total_price,omitempty" json:"total_price,omitempty"`
-	Status        string             `bson:"status" json:"status"`
-	CreatedAt     time.Time          `bson:"created_at" json:"created_at"`
+	// Dates (YYYY-MM-DD) permite solicitar días sueltos de distintos meses.
+	Dates      []string  `bson:"dates,omitempty" json:"dates,omitempty"`
+	Date       string    `bson:"date,omitempty" json:"date,omitempty"`
+	SlotKind   string    `bson:"slot_kind,omitempty" json:"slot_kind,omitempty"`
+	TotalPrice float64   `bson:"total_price,omitempty" json:"total_price,omitempty"`
+	Status     string    `bson:"status" json:"status"`
+	CreatedAt  time.Time `bson:"created_at" json:"created_at"`
 }
 
 type Court struct {

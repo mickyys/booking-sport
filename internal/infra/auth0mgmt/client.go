@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -22,6 +23,22 @@ import (
 	"sync"
 	"time"
 )
+
+type traceKey struct{}
+
+// WithTrace asocia un identificador de seguimiento al contexto para que los
+// logs de la Management API puedan correlacionarse con la solicitud que los
+// originó (p. ej. la invitación de un administrador).
+func WithTrace(ctx context.Context, traceID string) context.Context {
+	return context.WithValue(ctx, traceKey{}, traceID)
+}
+
+func traceTag(ctx context.Context) string {
+	if id, ok := ctx.Value(traceKey{}).(string); ok && id != "" {
+		return "[" + id + "] "
+	}
+	return ""
+}
 
 // DefaultConnection es la conexión de base de datos Auth0 donde se crean las
 // cuentas nuevas (AUTH0_CONNECTION permite sobreescribirla).
@@ -50,7 +67,14 @@ type Client interface {
 	CreatePasswordSetupTicket(ctx context.Context, auth0UserID string) (string, error)
 	// AssignRole asigna roleID al usuario. Idempotente: si ya lo tiene, no-op.
 	AssignRole(ctx context.Context, auth0UserID, roleID string) error
+	// UserHasRole indica si el usuario tiene roleID asignado. Si la app M2M no
+	// tiene el scope read:roles retorna ErrRolesUnreadable.
+	UserHasRole(ctx context.Context, auth0UserID, roleID string) (bool, error)
 }
+
+// ErrRolesUnreadable se retorna cuando no es posible leer los roles de un
+// usuario (falta el scope read:roles en la app M2M).
+var ErrRolesUnreadable = errors.New("auth0: la app M2M no puede leer roles (falta read:roles)")
 
 type ManagementClient struct {
 	domain       string
@@ -214,6 +238,8 @@ func (c *ManagementClient) apiRequest(ctx context.Context, method, path string, 
 		return fmt.Errorf("auth0: %s %s respondió %d: %s", method, path, resp.StatusCode, msg)
 	}
 
+	log.Printf("%s[AUTH0MGMT] %s %s -> %d", traceTag(ctx), method, strings.SplitN(path, "?", 2)[0], resp.StatusCode)
+
 	if out != nil && len(body) > 0 {
 		if err := json.Unmarshal(body, out); err != nil {
 			return fmt.Errorf("auth0: decodificando respuesta %s %s: %w", method, path, err)
@@ -299,7 +325,14 @@ func (c *ManagementClient) AssignRole(ctx context.Context, auth0UserID, roleID s
 		return nil
 	}
 	payload := map[string][]string{"roles": {roleID}}
-	return c.apiRequest(ctx, http.MethodPost, "/users/"+url.PathEscape(auth0UserID)+"/roles", payload, nil)
+	log.Printf("%s[AUTH0MGMT] AssignRole: POST /users/%s/roles roles=[%s] domain=%s", traceTag(ctx), auth0UserID, roleID, c.domain)
+	err := c.apiRequest(ctx, http.MethodPost, "/users/"+url.PathEscape(auth0UserID)+"/roles", payload, nil)
+	if err != nil {
+		log.Printf("%s[AUTH0MGMT] AssignRole: FALLÓ user=%s role=%s: %v", traceTag(ctx), auth0UserID, roleID, err)
+		return err
+	}
+	log.Printf("%s[AUTH0MGMT] AssignRole: respuesta 2xx de Auth0 user=%s role=%s", traceTag(ctx), auth0UserID, roleID)
+	return nil
 }
 
 // passwordResetResultURL retorna la URL a la que Auth0 redirige tras definir
@@ -337,4 +370,25 @@ func (c *ManagementClient) CreatePasswordSetupTicket(ctx context.Context, auth0U
 		return "", fmt.Errorf("auth0: respuesta de ticket sin URL")
 	}
 	return ticket.Ticket, nil
+}
+
+// UserHasRole consulta los roles del usuario y verifica que roleID esté
+// asignado.
+func (c *ManagementClient) UserHasRole(ctx context.Context, auth0UserID, roleID string) (bool, error) {
+	var roles []struct {
+		ID string `json:"id"`
+	}
+	path := "/users/" + url.PathEscape(auth0UserID) + "/roles?per_page=50"
+	if err := c.apiRequest(ctx, http.MethodGet, path, nil, &roles); err != nil {
+		if strings.Contains(err.Error(), "respondió 403") {
+			return false, ErrRolesUnreadable
+		}
+		return false, err
+	}
+	for _, r := range roles {
+		if r.ID == roleID {
+			return true, nil
+		}
+	}
+	return false, nil
 }

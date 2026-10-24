@@ -307,6 +307,10 @@ type welcomeTemplateData struct {
 	ButtonLabel    string
 	ActionURL      string
 	ShowExpiration bool // solo cuentas nuevas (ticket de un solo uso)
+	Title          string
+	Preheader      string
+	Intro          string
+	CenterLabel    string
 }
 
 // SendCenterOnboardWelcome envía el correo de bienvenida por cada creación de
@@ -379,6 +383,10 @@ func (m *MailgunMailer) SendCenterOnboardWelcome(ctx context.Context, data app.C
 			ButtonLabel:    buttonLabel,
 			ActionURL:      actionURL,
 			ShowExpiration: isNewAccount,
+			Title:          "¡Bienvenido a ReservaloYA!",
+			Preheader:      "Tu centro deportivo está listo en ReservaloYA.",
+			Intro:          "Registramos con éxito tu centro deportivo en ReservaloYA. Estos son tus datos de acceso y los de tu centro:",
+			CenterLabel:    "Tu centro deportivo",
 		})
 		if err != nil {
 			logger.GetLogger().Errorw("mailgun_welcome_template_error",
@@ -408,6 +416,87 @@ func (m *MailgunMailer) SendCenterOnboardWelcome(ctx context.Context, data app.C
 	logger.GetLogger().Infow("mailgun_welcome_email_sent",
 		"msg", fmt.Sprintf("Correo de bienvenida enviado a %s para centro %s",
 			logger.MaskEmail(data.To), data.CenterName),
+		"to", logger.MaskEmail(data.To),
+		"message_id", id,
+	)
+	return nil
+}
+
+// SendCenterInvitation envía la invitación para administrar un centro ya
+// existente. Siempre usa la plantilla HTML local (no el template alojado en
+// Mailgun, que es el de bienvenida por creación de centro). Si la cuenta es
+// nueva (SetupURL presente) el botón lleva a crear la contraseña; si ya tenía
+// cuenta, enlaza directo al panel.
+func (m *MailgunMailer) SendCenterInvitation(ctx context.Context, data app.CenterInvitationEmail) error {
+	if data.To == "" {
+		return fmt.Errorf("no recipient email for center invitation")
+	}
+
+	loginURL := data.LoginURL
+	if loginURL == "" {
+		loginURL = strings.TrimRight(os.Getenv("URL_FRONTEND"), "/") + "/admin"
+	}
+	isNewAccount := data.SetupURL != ""
+	actionURL := loginURL
+	buttonLabel := "Ir al panel"
+	nextStepText := "Ingresa con tu cuenta de ReservaloYA para gestionar el centro."
+	if isNewAccount {
+		actionURL = data.SetupURL
+		buttonLabel = "Crear mi contraseña"
+		nextStepText = "Aún no tienes una cuenta, así que la creamos por ti. Crea tu contraseña con el botón para activarla; después ingresa con este mismo correo."
+	}
+
+	greetingName := data.UserName
+	if greetingName == "" {
+		greetingName = data.To
+	}
+	homeURL := strings.TrimRight(os.Getenv("URL_FRONTEND"), "/")
+	if homeURL == "" {
+		homeURL = "http://localhost:3000"
+	}
+
+	var body bytes.Buffer
+	err := welcomeCenterTemplate.Execute(&body, welcomeTemplateData{
+		LogoURL:        logoReservaloYA,
+		HomeURL:        homeURL,
+		GreetingName:   greetingName,
+		Email:          data.To,
+		CenterName:     data.CenterName,
+		Address:        data.Address,
+		TenantURL:      data.TenantURL,
+		NextStepText:   nextStepText,
+		ButtonLabel:    buttonLabel,
+		ActionURL:      actionURL,
+		ShowExpiration: isNewAccount,
+		Title:          "Te invitaron a administrar un centro",
+		Preheader:      fmt.Sprintf("Te dieron acceso como administrador de %s en ReservaloYA.", data.CenterName),
+		Intro:          fmt.Sprintf("Te dieron acceso como administrador de %s en ReservaloYA. Podrás gestionar sus espacios, horarios y reservas.", data.CenterName),
+		CenterLabel:    "Centro deportivo",
+	})
+	if err != nil {
+		return fmt.Errorf("mailgun invitation template error: %w", err)
+	}
+
+	subject := fmt.Sprintf("Te invitaron a administrar %s en ReservaloYA", data.CenterName)
+	message := m.mg.NewMessage(m.from, subject, "", data.To)
+	message.SetHtml(body.String())
+
+	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	_, id, err := m.mg.Send(sendCtx, message)
+	if err != nil {
+		logger.GetLogger().Errorw("mailgun_invitation_email_failed",
+			"msg", fmt.Sprintf("Error al enviar invitación a %s para centro %s",
+				logger.MaskEmail(data.To), data.CenterName),
+			"error", err,
+			"to", logger.MaskEmail(data.To),
+		)
+		return fmt.Errorf("mailgun send error: %w", err)
+	}
+
+	logger.GetLogger().Infow("mailgun_invitation_email_sent",
+		"msg", fmt.Sprintf("Invitación enviada a %s para centro %s", logger.MaskEmail(data.To), data.CenterName),
 		"to", logger.MaskEmail(data.To),
 		"message_id", id,
 	)

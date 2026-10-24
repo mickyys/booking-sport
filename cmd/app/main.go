@@ -277,6 +277,7 @@ func main() {
 	r.GET("/api/sport-centers", sportCenterHandler.List)
 	r.GET("/api/cities", sportCenterHandler.ListCities)
 	r.GET("/api/sport-centers/slug/:slug", sportCenterHandler.GetBySlug)
+	r.GET("/api/sport-centers/slug/:slug/reviews", infra.NewGoogleReviewsHandler(sportCenterUC).GetBySlug)
 	r.POST("/api/sport-centers", sportCenterHandler.Create)
 	r.POST("/api/sport-centers/onboard", sportCenterHandler.OnboardCreate)
 	r.GET("/api/sport-centers/onboard/verification-status", sportCenterHandler.OnboardVerificationStatus)
@@ -371,6 +372,7 @@ func main() {
 
 		// Users management routes
 		api.GET("/admin/users", sportCenterHandler.GetCenterUsers)
+		api.POST("/admin/users", sportCenterHandler.InviteCenterUser)
 		api.DELETE("/admin/users/:userId", sportCenterHandler.RemoveCenterUser)
 
 		// MercadoPago Connect (marketplace) routes

@@ -369,6 +369,18 @@ func (r *SportCenterRepository) Update(ctx context.Context, center *domain.Sport
 	return err
 }
 
+// UpdateGooglePlaceID guarda (o limpia, si viene vacío) el Place ID de Google del centro.
+func (r *SportCenterRepository) UpdateGooglePlaceID(ctx context.Context, id primitive.ObjectID, placeID string) error {
+	update := bson.M{"$set": bson.M{"updated_at": time.Now()}}
+	if placeID == "" {
+		update["$unset"] = bson.M{"google_place_id": ""}
+	} else {
+		update["$set"].(bson.M)["google_place_id"] = placeID
+	}
+	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, update)
+	return err
+}
+
 func (r *SportCenterRepository) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
 	updateData := bson.M{
 		"updated_at": time.Now(),

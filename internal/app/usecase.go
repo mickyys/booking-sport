@@ -125,12 +125,25 @@ type CenterWelcomeEmail struct {
 	SetupURL   string // ticket de Auth0 para configurar la clave (solo cuentas nuevas); vacío = cuenta existente
 }
 
+// CenterInvitationEmail son los datos del correo que recibe una persona
+// invitada como administradora de un centro deportivo ya existente.
+type CenterInvitationEmail struct {
+	To         string
+	UserName   string // nombre indicado al invitar; vacío → saluda con el correo
+	CenterName string
+	Address    string
+	TenantURL  string
+	LoginURL   string
+	SetupURL   string // ticket de Auth0 para crear la clave (solo cuentas nuevas)
+}
+
 // Mailer envía correos transaccionales (p. ej. confirmación de reserva)
 type Mailer interface {
 	SendBookingConfirmation(ctx context.Context, booking *domain.Booking, cancellationHours, retentionPercent int, paidAmount, pendingAmount float64) error
 	SendBookingCancellation(ctx context.Context, booking *domain.Booking) error
 	SendContactEmail(ctx context.Context, to string, name string, email string, phone string, sportCenterName string, message string) error
 	SendCenterOnboardWelcome(ctx context.Context, data CenterWelcomeEmail) error
+	SendCenterInvitation(ctx context.Context, data CenterInvitationEmail) error
 }
 
 type UserDeviceRepository interface {
@@ -223,6 +236,28 @@ func (uc *SportCenterUseCase) FindByID(ctx context.Context, id primitive.ObjectI
 
 func (uc *SportCenterUseCase) FindBySlug(ctx context.Context, slug string) (*domain.SportCenter, error) {
 	return uc.repo.FindBySlug(ctx, slug)
+}
+
+// googlePlaceIDUpdater es opcional para no ampliar SportCenterRepository.
+type googlePlaceIDUpdater interface {
+	UpdateGooglePlaceID(ctx context.Context, id primitive.ObjectID, placeID string) error
+}
+
+var googlePlaceIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{10,200}$`)
+
+var ErrInvalidGooglePlaceID = errors.New("google_place_id inválido")
+
+// UpdateGooglePlaceID valida y persiste el Place ID de Google del centro.
+func (uc *SportCenterUseCase) UpdateGooglePlaceID(ctx context.Context, id primitive.ObjectID, placeID string) error {
+	placeID = strings.TrimSpace(placeID)
+	if placeID != "" && !googlePlaceIDPattern.MatchString(placeID) {
+		return ErrInvalidGooglePlaceID
+	}
+	u, ok := uc.repo.(googlePlaceIDUpdater)
+	if !ok {
+		return errors.New("el repositorio no soporta google_place_id")
+	}
+	return u.UpdateGooglePlaceID(ctx, id, placeID)
 }
 
 func (uc *SportCenterUseCase) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
