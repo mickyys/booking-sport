@@ -182,6 +182,10 @@ func (m *mockCourtRepoForRecurring) SyncPartialPaymentSlots(ctx context.Context,
 	return 0, nil
 }
 
+func (m *mockCourtRepoForRecurring) SyncPaymentModeSlots(ctx context.Context, centerID primitive.ObjectID, paymentRequired bool) (int64, error) {
+	return 0, nil
+}
+
 var _ CourtRepository = (*mockCourtRepoForRecurring)(nil)
 
 // ---------- Mock SportCenterRepository (stub) ----------
@@ -228,15 +232,15 @@ func (m *mockCenterRepoForRecurring) FindAll(ctx context.Context) ([]domain.Spor
 	return nil, nil
 }
 
-func (m *mockCenterRepoForRecurring) FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int, lat, lng *float64, priorityCity string) ([]domain.SportCenter, int64, error) {
-	return nil, 0, nil
+func (m *mockCenterRepoForRecurring) FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int, lat, lng, radiusKm *float64, priorityCity string) ([]domain.SportCenter, int64, bool, error) {
+	return nil, 0, false, nil
 }
 
 func (m *mockCenterRepoForRecurring) Update(ctx context.Context, center *domain.SportCenter) error {
 	return nil
 }
 
-func (m *mockCenterRepoForRecurring) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates) error {
+func (m *mockCenterRepoForRecurring) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
 	return nil
 }
 

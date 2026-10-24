@@ -60,12 +60,12 @@ func (h *ScheduleHandler) GetSchedule(c *gin.Context) {
 	if !ok {
 		return
 	}
-	rules, err := h.useCase.GetSchedule(c.Request.Context(), spaceID, userID)
+	rules, source, err := h.useCase.GetScheduleConfig(c.Request.Context(), spaceID, userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"rules": rules})
+	c.JSON(http.StatusOK, gin.H{"rules": rules, "source": source})
 }
 
 // SaveSchedule reemplaza las reglas semanales de un espacio (PUT).
@@ -125,10 +125,10 @@ func (h *ScheduleHandler) CreateException(c *gin.Context) {
 	}
 
 	var body struct {
-		Type  string                      `json:"type"`
-		Date  string                      `json:"date"`
-		Slots []domain.ScheduleRuleSlot   `json:"slots"`
-		Note  string                      `json:"note"`
+		Type  string                    `json:"type"`
+		Date  string                    `json:"date"`
+		Slots []domain.ScheduleRuleSlot `json:"slots"`
+		Note  string                    `json:"note"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -166,10 +166,10 @@ func (h *ScheduleHandler) UpdateException(c *gin.Context) {
 	}
 
 	var body struct {
-		Type  string                      `json:"type"`
-		Date  string                      `json:"date"`
-		Slots []domain.ScheduleRuleSlot   `json:"slots"`
-		Note  string                      `json:"note"`
+		Type  string                    `json:"type"`
+		Date  string                    `json:"date"`
+		Slots []domain.ScheduleRuleSlot `json:"slots"`
+		Note  string                    `json:"note"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

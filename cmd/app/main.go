@@ -99,7 +99,17 @@ func main() {
 
 	log.Infow("repositories_initialized")
 
+	mpConnectClient := mercadopago.NewConnectClient(
+		getEnv("NEXT_PUBLIC_MP_CLIENT_ID", ""),
+		getEnv("MP_CLIENT_SECRET", ""),
+		getEnv("MP_REDIRECT_URI", ""),
+		getEnv("MP_AUTH_BASE", ""),
+		getEnv("NEXT_PUBLIC_MP_PUBLIC_KEY", ""),
+	)
+	mpConnectUC := app.NewMPConnectUseCase(sportCenterRepo, mpConnectClient, getEnv("MP_CLIENT_SECRET", ""))
+
 	sportCenterUC := app.NewSportCenterUseCase(sportCenterRepo, courtRepo, userRepo, bookingRepo, holdRepo, recurringReservationRepo, spaceRepo, scheduleRuleRepo)
+	sportCenterUC.SetMPDisconnector(mpConnectUC)
 	courtUC := app.NewCourtUseCase(courtRepo, sportCenterRepo, bookingRepo)
 	facilityUC := app.NewFacilityUseCase(facilityRepo, sportCenterRepo)
 	spaceUC := app.NewSpaceUseCase(spaceRepo, sportCenterRepo)
@@ -149,19 +159,11 @@ func main() {
 	if os.Getenv("AUTH0_ADMIN_ROLE_ID") == "" {
 		log.Warnw("auth0_admin_role_id_not_configured", "effect", "onboard no asignará rol de administrador")
 	}
-	sportCenterHandler := infra.NewSportCenterHandler(sportCenterUC, auth0Mgmt, bookingMailer)
+	sportCenterHandler := infra.NewSportCenterHandler(sportCenterUC, auth0Mgmt, bookingMailer, facilityUC)
 	courtHandler := infra.NewCourtHandler(courtUC)
 	bookingHandler := infra.NewBookingHandler(bookingUC)
 	contactHandler := infra.NewContactHandler(bookingMailer)
 
-	mpConnectClient := mercadopago.NewConnectClient(
-		getEnv("NEXT_PUBLIC_MP_CLIENT_ID", ""),
-		getEnv("MP_CLIENT_SECRET", ""),
-		getEnv("MP_REDIRECT_URI", ""),
-		getEnv("MP_AUTH_BASE", ""),
-		getEnv("NEXT_PUBLIC_MP_PUBLIC_KEY", ""),
-	)
-	mpConnectUC := app.NewMPConnectUseCase(sportCenterRepo, mpConnectClient, getEnv("MP_CLIENT_SECRET", ""))
 	mpConnectHandler := infra.NewMPConnectHandler(mpConnectUC)
 
 	tenantUC := app.NewTenantUseCase(sportCenterRepo)
@@ -307,6 +309,7 @@ func main() {
 		api.POST("/admin/bookings/internal/batch", bookingHandler.CreateInternalBookingsBatch)
 		api.POST("/admin/bookings/:id/pay-balance", bookingHandler.MarkPartialPaymentAsPaid)
 		api.PATCH("/admin/bookings/:id/undo-pay-balance", bookingHandler.UndoBalancePayment)
+		api.PATCH("/admin/bookings/:id/reschedule", bookingHandler.RescheduleBooking)
 		api.DELETE("/admin/bookings/:id", bookingHandler.DeleteBooking)
 
 		// Recurring Reservation routes

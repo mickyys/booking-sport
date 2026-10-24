@@ -67,6 +67,10 @@ func isValidPaymentMode(mode string) bool {
 	return mode == PaymentModePayAtCenter || mode == PaymentModePayOnline
 }
 
+// ErrInvalidPaymentMode indica que la modalidad de cobro enviada no es una de
+// las válidas ("pay_at_center" | "pay_online").
+var ErrInvalidPaymentMode = fmt.Errorf("modalidad de cobro inválida: debe ser %q o %q", PaymentModePayAtCenter, PaymentModePayOnline)
+
 // applyPaymentModeToSlots fuerza las franjas (reglas semanales) al esquema de
 // pago de la modalidad comercial del centro: con "pago anticipado" toda franja
 // exige pago online; con "solo reservas" el pago se hace en el centro. Con

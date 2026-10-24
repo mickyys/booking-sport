@@ -18,7 +18,7 @@ import (
 type SportCenterRepository interface {
 	Create(ctx context.Context, center *domain.SportCenter) error
 	Update(ctx context.Context, center *domain.SportCenter) error
-	UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates) error
+	UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error
 	FindByID(ctx context.Context, id primitive.ObjectID) (*domain.SportCenter, error)
 	FindBySlug(ctx context.Context, slug string) (*domain.SportCenter, error)
 	FindBySubdomain(ctx context.Context, subdomain string) (*domain.SportCenter, error)
@@ -26,7 +26,7 @@ type SportCenterRepository interface {
 	FindByAdminEmail(ctx context.Context, email string) (*domain.SportCenter, error)
 	FindByHost(ctx context.Context, host string) (*domain.SportCenter, error)
 	FindAll(ctx context.Context) ([]domain.SportCenter, error)
-	FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int, lat, lng *float64, priorityCity string) ([]domain.SportCenter, int64, error)
+	FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int, lat, lng, radiusKm *float64, priorityCity string) ([]domain.SportCenter, int64, bool, error)
 	FindByUserID(ctx context.Context, userID string) ([]domain.SportCenter, error)
 	GetCities(ctx context.Context) ([]string, error)
 	UpdateMercadoPagoConfig(ctx context.Context, id primitive.ObjectID, config *domain.MercadoPagoConfig) error
@@ -138,6 +138,13 @@ type SlotHoldRepository interface {
 	TryClaimSlot(ctx context.Context, hold *domain.SlotHold) (*domain.SlotHold, error)
 	FindOneAndDeleteIfExpired(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.SlotHold, error)
 }
+
+// MPDisconnector permite revocar y borrar las credenciales de Mercado Pago de
+// un centro cuando se desactiva el cobro online.
+type MPDisconnector interface {
+	DisconnectByCenterID(ctx context.Context, centerID primitive.ObjectID) error
+}
+
 type SportCenterUseCase struct {
 	repo                     SportCenterRepository
 	courtRepo                CourtRepository
@@ -148,6 +155,13 @@ type SportCenterUseCase struct {
 	spaceRepo                SpaceRepository
 	ruleRepo                 ScheduleRuleRepository
 	scheduleResolver         *ScheduleResolver
+	mpDisconnector           MPDisconnector
+}
+
+// SetMPDisconnector inyecta el caso de uso de Mercado Pago Connect para poder
+// revocar credenciales al cambiar la modalidad comercial a "solo reservas".
+func (uc *SportCenterUseCase) SetMPDisconnector(disconnector MPDisconnector) {
+	uc.mpDisconnector = disconnector
 }
 
 type EnrichedCourtSchedule struct {
@@ -158,6 +172,8 @@ type EnrichedCourtSchedule struct {
 	PaymentRequired bool                `json:"payment_required"`
 	PaymentOptional bool                `json:"payment_optional"`
 	BookingID       *primitive.ObjectID `json:"booking_id,omitempty"`
+	// SeriesID agrupa las reservas generadas por una reserva recurrente de N semanas.
+	SeriesID string `json:"series_id,omitempty"`
 	// Información del cliente cuando la franja está reservada (opcional)
 	CustomerName  string `json:"customer_name,omitempty"`
 	CustomerEmail string `json:"customer_email,omitempty"`
@@ -173,6 +189,8 @@ type EnrichedCourtSchedule struct {
 	// Información de reserva recurrente semanal
 	IsRecurringWeekly      bool   `json:"is_recurring_weekly,omitempty"`
 	RecurringReservationID string `json:"recurring_reservation_id,omitempty"`
+	// Duración del bloque reservado. 0 o 60 implican 1 hora.
+	DurationMinutes int `json:"duration_minutes,omitempty"`
 }
 
 type CourtScheduleResponse struct {
@@ -189,18 +207,35 @@ func (uc *SportCenterUseCase) FindBySlug(ctx context.Context, slug string) (*dom
 	return uc.repo.FindBySlug(ctx, slug)
 }
 
-func (uc *SportCenterUseCase) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates) error {
+func (uc *SportCenterUseCase) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
+	if paymentMode != nil && !isValidPaymentMode(*paymentMode) {
+		return ErrInvalidPaymentMode
+	}
+
 	center, err := uc.repo.FindByID(ctx, id)
 	if err != nil {
 		return err
 	}
 
-	err = uc.repo.UpdateSettings(ctx, id, slug, cancellationHours, retentionPercent, partialPaymentEnabled, partialPaymentPercent, imageURL, marketplaceFeePercent, isFeatured, branding, address, city, coordinates)
+	modeChanged := paymentMode != nil && *paymentMode != center.PaymentMode
+
+	// Al desactivar el cobro online se eliminan las credenciales de Mercado
+	// Pago del centro. Se hace antes de persistir la modalidad para no dejar
+	// un centro en "solo reservas" con la cuenta todavía conectada.
+	if modeChanged && *paymentMode == PaymentModePayAtCenter && uc.mpDisconnector != nil {
+		if err := uc.mpDisconnector.DisconnectByCenterID(ctx, id); err != nil {
+			log.Printf("[MP] Error disconnecting Mercado Pago for center %s: %v", id.Hex(), err)
+			return err
+		}
+		log.Printf("[MP] Mercado Pago credentials removed for center %s", id.Hex())
+	}
+
+	err = uc.repo.UpdateSettings(ctx, id, slug, cancellationHours, retentionPercent, partialPaymentEnabled, partialPaymentPercent, imageURL, marketplaceFeePercent, isFeatured, branding, address, city, coordinates, paymentMode)
 	if err != nil {
 		return err
 	}
 
-	if partialPaymentEnabled != nil {
+	if partialPaymentEnabled != nil && uc.courtRepo != nil {
 		wasEnabled := center.PartialPaymentEnabled
 		if wasEnabled != *partialPaymentEnabled {
 			syncedCount, err := uc.courtRepo.SyncPartialPaymentSlots(ctx, id, *partialPaymentEnabled)
@@ -208,6 +243,30 @@ func (uc *SportCenterUseCase) UpdateSettings(ctx context.Context, id primitive.O
 				log.Printf("[SYNC] Error syncing partial payment slots: %v", err)
 			} else {
 				log.Printf("[SYNC] Synced %d courts with partial payment = %v", syncedCount, *partialPaymentEnabled)
+			}
+		}
+	}
+
+	// La modalidad comercial define si las franjas exigen pago online. Al
+	// cambiarla hay que alinear los horarios ya materializados; de lo
+	// contrario el booking público seguiría mostrando (o ocultando) Mercado
+	// Pago con los flags antiguos.
+	if modeChanged {
+		paymentRequired := *paymentMode == PaymentModePayOnline
+		if uc.ruleRepo != nil {
+			synced, err := uc.ruleRepo.SyncPaymentModeSlots(ctx, id, paymentRequired)
+			if err != nil {
+				log.Printf("[SYNC] Error syncing schedule rule slots for payment mode: %v", err)
+			} else {
+				log.Printf("[SYNC] Synced %d schedule rules with payment_required = %v", synced, paymentRequired)
+			}
+		}
+		if uc.courtRepo != nil {
+			synced, err := uc.courtRepo.SyncPaymentModeSlots(ctx, id, paymentRequired)
+			if err != nil {
+				log.Printf("[SYNC] Error syncing legacy court slots for payment mode: %v", err)
+			} else {
+				log.Printf("[SYNC] Synced %d courts with payment_required = %v", synced, paymentRequired)
 			}
 		}
 	}
@@ -701,6 +760,10 @@ func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, c
 				sch.CustomerName = recurring.CustomerName
 				sch.CustomerPhone = recurring.CustomerPhone
 				sch.Price = recurring.Price
+				sch.DurationMinutes = recurring.DurationMinutes
+				if sch.DurationMinutes <= 0 {
+					sch.DurationMinutes = 60
+				}
 				if _, hasBooking := bookedHours[slotKey]; !hasBooking {
 					if slotTime.Before(nowInLoc) {
 						sch.Status = "passed_booked"
@@ -717,6 +780,7 @@ func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, c
 					sch.Status = "passed_booked"
 				}
 				sch.BookingID = &b.ID
+				sch.SeriesID = b.SeriesID
 				if b.GuestDetails != nil {
 					sch.CustomerName = b.GuestDetails.Name
 					sch.CustomerEmail = b.GuestDetails.Email
@@ -732,6 +796,10 @@ func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, c
 				sch.PaidAmount = b.PaidAmount
 				sch.PendingAmount = b.PendingAmount
 				sch.PartialPaymentPaid = b.PartialPaymentPaid
+				sch.DurationMinutes = b.DurationMinutes
+				if sch.DurationMinutes <= 0 {
+					sch.DurationMinutes = 60
+				}
 				if b.PaymentMethod == "internal" {
 					if b.GuestDetails != nil && b.GuestDetails.Name != "" {
 						sch.PaymentMethod = "internal_reservation"
@@ -1111,7 +1179,7 @@ func (uc *SportCenterUseCase) ListCities(ctx context.Context) ([]string, error) 
 	return cities, nil
 }
 
-func (uc *SportCenterUseCase) ListSportCentersPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int, lat, lng *float64) (*domain.PagedResponse, error) {
+func (uc *SportCenterUseCase) ListSportCentersPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int, lat, lng, radiusKm *float64) (*domain.PagedResponse, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -1125,7 +1193,7 @@ func (uc *SportCenterUseCase) ListSportCentersPaged(ctx context.Context, page, l
 		priorityCity = city
 	}
 
-	centers, total, err := uc.repo.FindPaged(ctx, page, limit, name, city, date, hour, lat, lng, priorityCity)
+	centers, total, usedRadiusFallback, err := uc.repo.FindPaged(ctx, page, limit, name, city, date, hour, lat, lng, radiusKm, priorityCity)
 	if err != nil {
 		return nil, err
 	}
@@ -1138,11 +1206,12 @@ func (uc *SportCenterUseCase) ListSportCentersPaged(ctx context.Context, page, l
 	totalPages := int((total + int64(limit) - 1) / int64(limit))
 
 	return &domain.PagedResponse{
-		Data:       centers,
-		Total:      total,
-		Page:       page,
-		Limit:      limit,
-		TotalPages: totalPages,
+		Data:               centers,
+		Total:              total,
+		Page:               page,
+		Limit:              limit,
+		TotalPages:         totalPages,
+		UsedRadiusFallback: usedRadiusFallback,
 	}, nil
 }
 
@@ -1175,6 +1244,9 @@ type CourtRepository interface {
 	FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.Court, error)
 	FindAllPaged(ctx context.Context, page, limit int) ([]domain.Court, int64, error)
 	SyncPartialPaymentSlots(ctx context.Context, centerID primitive.ObjectID, partialPaymentEnabled bool) (int64, error)
+	// SyncPaymentModeSlots alinea el horario legacy del centro con su
+	// modalidad comercial (pago online vs solo reservas).
+	SyncPaymentModeSlots(ctx context.Context, centerID primitive.ObjectID, paymentRequired bool) (int64, error)
 }
 
 type CourtUseCase struct {

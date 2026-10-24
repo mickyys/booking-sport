@@ -482,6 +482,9 @@ type PagedResponse struct {
 	Page       int         `json:"page"`
 	Limit      int         `json:"limit"`
 	TotalPages int         `json:"total_pages"`
+	// true cuando el filtro por radio no dejó registros y se retornó
+	// la cantidad por defecto (los más cercanos) sin corte de distancia.
+	UsedRadiusFallback bool `json:"used_radius_fallback,omitempty"`
 }
 
 type BookingSummary struct {

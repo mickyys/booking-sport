@@ -632,6 +632,53 @@ func (h *BookingHandler) DeleteBooking(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }
 
+// RescheduleBooking mueve una reserva existente a otra fecha/hora. Lo usa el
+// panel de administración al arrastrar un evento en la agenda.
+func (h *BookingHandler) RescheduleBooking(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid booking id"})
+		return
+	}
+
+	var req struct {
+		Date    string `json:"date" binding:"required"`
+		Hour    int    `json:"hour"`
+		Minutes int    `json:"minutes"`
+		CourtID string `json:"court_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	var courtID *primitive.ObjectID
+	if req.CourtID != "" {
+		parsed, err := primitive.ObjectIDFromHex(req.CourtID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid court id"})
+			return
+		}
+		courtID = &parsed
+	}
+
+	booking, err := h.useCase.RescheduleBooking(
+		c.Request.Context(),
+		id,
+		req.Date,
+		req.Hour,
+		req.Minutes,
+		courtID,
+		h.baseHandler.GetUserID(c),
+	)
+	if err != nil {
+		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, booking)
+}
+
 func (h *BookingHandler) GetAdminDashboard(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {

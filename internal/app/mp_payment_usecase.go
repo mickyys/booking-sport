@@ -119,6 +119,13 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		return "", fmt.Errorf("sport center not found: %w", err)
 	}
 
+	// La modalidad "solo reservas" desactiva explícitamente el cobro online.
+	// Los centros legacy sin modalidad configurada mantienen el comportamiento
+	// anterior y se resuelven por los flags de cada franja.
+	if center.PaymentMode == PaymentModePayAtCenter {
+		return "", fmt.Errorf("online payments are disabled for this sport center")
+	}
+
 	amountToPay := price
 	isPartial := false
 

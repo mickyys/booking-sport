@@ -709,6 +709,100 @@ func (uc *BookingUseCase) DeleteBooking(ctx context.Context, id primitive.Object
 	return uc.repo.Delete(ctx, id)
 }
 
+// RescheduleBooking mueve una reserva confirmada a otra fecha y/u hora. Si se
+// indica courtID y es distinto al actual, también cambia de cancha (siempre
+// dentro del mismo centro deportivo). No modifica precios ni pagos existentes.
+func (uc *BookingUseCase) RescheduleBooking(ctx context.Context, id primitive.ObjectID, dateStr string, hour, minutes int, courtID *primitive.ObjectID, modifiedBy string) (*domain.Booking, error) {
+	booking, err := uc.repo.FindByID(ctx, id)
+	if err != nil {
+		return nil, domain.NewNotFoundError("reserva no encontrada")
+	}
+	if booking.Status != domain.BookingStatusConfirmed {
+		return nil, domain.NewBadRequestError("solo se pueden mover reservas confirmadas")
+	}
+	if hour < 0 || hour > 23 || minutes < 0 || minutes > 59 {
+		return nil, domain.NewBadRequestError("hora inválida")
+	}
+
+	newDate, err := domain.ParseSantiagoDate(dateStr)
+	if err != nil {
+		return nil, domain.NewBadRequestError("fecha inválida, se espera YYYY-MM-DD")
+	}
+
+	loc := domain.GetSantiagoLocation()
+	if time.Date(newDate.Year(), newDate.Month(), newDate.Day(), hour, minutes, 0, 0, loc).Before(time.Now().In(loc)) {
+		return nil, domain.NewBadRequestError("no se puede mover una reserva al pasado")
+	}
+
+	if courtID != nil && !courtID.IsZero() && *courtID != booking.CourtID {
+		court, err := uc.courtRepo.FindByID(ctx, *courtID)
+		if err != nil {
+			return nil, domain.NewNotFoundError("cancha no encontrada")
+		}
+		if court.SportCenterID != booking.SportCenterID {
+			return nil, domain.NewBadRequestError("la cancha pertenece a otro centro deportivo")
+		}
+		booking.CourtID = court.ID
+		booking.CourtName = court.Name
+	}
+
+	booking.Date = newDate
+	booking.Hour = hour
+	booking.Minutes = minutes
+	if err := booking.NormalizeSchedule(); err != nil {
+		return nil, domain.NewBadRequestError(err.Error())
+	}
+
+	if err := uc.checkConfirmedIntervalConflict(ctx, booking, minutes); err != nil {
+		return nil, err
+	}
+
+	if uc.recurringReservationRepo != nil {
+		dayOfWeek := int(booking.Date.Weekday())
+		existing, _ := uc.recurringReservationRepo.FindByCourtHourAndDay(ctx, booking.CourtID, booking.Hour, booking.Minutes, dayOfWeek)
+		if existing != nil && !existing.IsDateCancelled(booking.Date) {
+			return nil, domain.NewConflictError("no disponible: existe una reserva recurrente semanal para este horario")
+		}
+	}
+
+	if uc.holdRepo != nil {
+		activeHold, _ := uc.holdRepo.FindBySlot(ctx, booking.CourtID, booking.Date, booking.Hour, booking.Minutes)
+		if activeHold != nil && time.Now().Before(activeHold.ExpiresAt) {
+			return nil, domain.NewConflictError("otro usuario está en proceso de pago para este horario")
+		}
+	}
+
+	if pending, _ := uc.repo.FindPendingBySlot(ctx, booking.CourtID, booking.Date, booking.Hour, booking.Minutes); pending != nil && pending.ID != booking.ID {
+		if pending.LockExpiresAt == nil || time.Now().After(*pending.LockExpiresAt) {
+			if pending.HoldID != nil && uc.holdRepo != nil {
+				uc.holdRepo.Delete(ctx, *pending.HoldID)
+			}
+			uc.repo.MarkExpired(ctx, pending.ID)
+		} else {
+			return nil, domain.NewConflictError("otro usuario está en proceso de pago para este horario")
+		}
+	}
+
+	now := time.Now()
+	booking.ModifiedBy = modifiedBy
+	booking.ModifiedAt = &now
+	booking.UpdatedAt = now
+
+	if err := uc.repo.Update(ctx, booking); err != nil {
+		return nil, err
+	}
+
+	logger.FromContext(ctx).Infow("booking_rescheduled",
+		"msg", fmt.Sprintf("Reserva %s movida al %s a las %02d:%02d hrs",
+			booking.BookingCode, booking.Date.Format("02/01/2006"), booking.Hour, booking.Minutes),
+		"booking_id", booking.ID.Hex(),
+		"booking_code", booking.BookingCode,
+		"modified_by", modifiedBy,
+	)
+
+	return booking, nil
+}
+
 // resolveBookingPrice determina el precio de una reserva. Si el espacio tiene
 // reglas (schedule_rules), resuelve la franja que cubre el intervalo
 // [hora, hora+duración]; si no, usa el horario legacy de la cancha.
@@ -1413,15 +1507,21 @@ func (uc *BookingUseCase) CreateRecurringReservation(ctx context.Context, reserv
 		}
 	}
 
-	// Verificar que el precio no sea 0
+	// Si no se envió precio, resolverlo con las reglas semanales y, si no
+	// existen, con el horario legacy. Así las recurrencias no quedan con
+	// precios de 0 cuando el espacio ya migró a `schedule_rules`.
 	if reservation.Price <= 0 {
-		// Obtener precio del schedule
-		for _, s := range court.Schedule {
-			if s.Hour == reservation.Hour {
-				reservation.Price = s.Price
-				break
-			}
+		priceBooking := &domain.Booking{
+			CourtID:         reservation.CourtID,
+			Date:            date,
+			Hour:            reservation.Hour,
+			Minutes:         reservation.Minutes,
+			DurationMinutes: reservation.DurationMinutes,
 		}
+		if err := uc.resolveBookingPrice(ctx, court, priceBooking, reservation.Minutes); err != nil {
+			return logRecurringError("price_not_found", err)
+		}
+		reservation.Price = priceBooking.Price
 	}
 
 	reservation.SportCenterID = court.SportCenterID

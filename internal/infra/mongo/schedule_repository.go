@@ -91,6 +91,27 @@ func (r *ScheduleRuleRepository) DeleteBySpaceID(ctx context.Context, spaceID pr
 	return err
 }
 
+// SyncPaymentModeSlots alinea todas las franjas del centro con su modalidad
+// comercial: con pago online las franjas exigen pago; con solo reservas el
+// pago se realiza en el centro.
+func (r *ScheduleRuleRepository) SyncPaymentModeSlots(ctx context.Context, centerID primitive.ObjectID, paymentRequired bool) (int64, error) {
+	result, err := r.collection.UpdateMany(
+		ctx,
+		bson.M{"sport_center_id": centerID},
+		bson.M{
+			"$set": bson.M{
+				"slots.$[].payment_required": paymentRequired,
+				"slots.$[].payment_optional": false,
+				"updated_at":                 time.Now(),
+			},
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.ModifiedCount, nil
+}
+
 // ScheduleExceptionRepository persiste excepciones de horario (schedule_exceptions).
 type ScheduleExceptionRepository struct {
 	collection *mongodb.Collection

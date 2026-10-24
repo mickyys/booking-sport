@@ -216,7 +216,25 @@ func (uc *MPConnectUseCase) Disconnect(ctx context.Context, userID string) error
 	if err != nil {
 		return err
 	}
+	return uc.disconnectCenter(ctx, center)
+}
 
+// DisconnectByCenterID revoca y elimina las credenciales de Mercado Pago de un
+// centro específico. Se usa al desactivar el cobro online después del
+// onboarding, donde la operación se origina desde la configuración del centro
+// y no desde el usuario autenticado.
+func (uc *MPConnectUseCase) DisconnectByCenterID(ctx context.Context, centerID primitive.ObjectID) error {
+	center, err := uc.centerRepo.FindByID(ctx, centerID)
+	if err != nil {
+		return fmt.Errorf("error finding sport center: %w", err)
+	}
+	return uc.disconnectCenter(ctx, center)
+}
+
+// disconnectCenter revoca el token (best-effort) y limpia las credenciales del
+// centro. La revocación remota no bloquea la limpieza local: si Mercado Pago
+// no responde, el token igualmente deja de usarse desde la plataforma.
+func (uc *MPConnectUseCase) disconnectCenter(ctx context.Context, center *domain.SportCenter) error {
 	if center.MercadoPago != nil && center.MercadoPago.AccessToken != "" {
 		if err := uc.connectClient.RevokeToken(ctx, center.MercadoPago.AccessToken); err != nil {
 			logger.FromContext(ctx).Warnw("mp_connect_revoke_token_failed",

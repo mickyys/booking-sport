@@ -37,6 +37,9 @@ type mockCenterRepoForOnboarding struct {
 	createCalls int
 	lastCreated *domain.SportCenter
 	slugLookups []string
+
+	settingsCalls   int
+	lastPaymentMode *string
 }
 
 func (m *mockCenterRepoForOnboarding) Create(ctx context.Context, center *domain.SportCenter) error {
@@ -52,7 +55,9 @@ func (m *mockCenterRepoForOnboarding) Update(ctx context.Context, center *domain
 	return nil
 }
 
-func (m *mockCenterRepoForOnboarding) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates) error {
+func (m *mockCenterRepoForOnboarding) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
+	m.settingsCalls++
+	m.lastPaymentMode = paymentMode
 	return nil
 }
 
@@ -94,8 +99,8 @@ func (m *mockCenterRepoForOnboarding) FindAll(ctx context.Context) ([]domain.Spo
 	return nil, nil
 }
 
-func (m *mockCenterRepoForOnboarding) FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int, lat, lng *float64, priorityCity string) ([]domain.SportCenter, int64, error) {
-	return nil, 0, nil
+func (m *mockCenterRepoForOnboarding) FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int, lat, lng, radiusKm *float64, priorityCity string) ([]domain.SportCenter, int64, bool, error) {
+	return nil, 0, false, nil
 }
 
 func (m *mockCenterRepoForOnboarding) FindByUserID(ctx context.Context, userID string) ([]domain.SportCenter, error) {

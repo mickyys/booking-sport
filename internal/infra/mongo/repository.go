@@ -113,21 +113,16 @@ func (r *SportCenterRepository) FindAll(ctx context.Context) ([]domain.SportCent
 	return centers, nil
 }
 
-func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int, lat, lng *float64, priorityCity string) ([]domain.SportCenter, int64, error) {
+func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int, lat, lng, radiusKm *float64, priorityCity string) ([]domain.SportCenter, int64, bool, error) {
 	pipeline := mongodb.Pipeline{}
 
 	useGeoNear := lat != nil && lng != nil
+	applyRadius := useGeoNear && radiusKm != nil && *radiusKm > 0
+
+	// Construye la stage $geoNear; con withRadius aplica el corte por distancia.
+	var geoNearBuilder func(withRadius bool) bson.D
 
 	if useGeoNear {
-		// $geoNear debe ser el primer stage. Los filtros name/city van en su campo "query".
-		geoNear := bson.D{
-			{Key: "near", Value: bson.D{
-				{Key: "type", Value: "Point"},
-				{Key: "coordinates", Value: bson.A{*lng, *lat}},
-			}},
-			{Key: "distanceField", Value: "distance"},
-			{Key: "spherical", Value: true},
-		}
 		query := bson.D{}
 		if name != "" {
 			query = append(query, bson.E{
@@ -141,10 +136,27 @@ func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, 
 				Value: bson.M{"$regex": "^" + regexp.QuoteMeta(city), "$options": "i"},
 			})
 		}
-		if len(query) > 0 {
-			geoNear = append(geoNear, bson.E{Key: "query", Value: query})
+
+		geoNearBuilder = func(withRadius bool) bson.D {
+			// $geoNear debe ser el primer stage. Los filtros name/city van en su campo "query".
+			geoNear := bson.D{
+				{Key: "near", Value: bson.D{
+					{Key: "type", Value: "Point"},
+					{Key: "coordinates", Value: bson.A{*lng, *lat}},
+				}},
+				{Key: "distanceField", Value: "distance"},
+			}
+			if withRadius {
+				geoNear = append(geoNear, bson.E{Key: "maxDistance", Value: *radiusKm * 1000})
+			}
+			geoNear = append(geoNear, bson.E{Key: "spherical", Value: true})
+			if len(query) > 0 {
+				geoNear = append(geoNear, bson.E{Key: "query", Value: query})
+			}
+			return geoNear
 		}
-		pipeline = append(pipeline, bson.D{{Key: "$geoNear", Value: geoNear}})
+
+		pipeline = append(pipeline, bson.D{{Key: "$geoNear", Value: geoNearBuilder(applyRadius)}})
 
 		// Prioridad: destacados en la ciudad de referencia primero, luego por distancia.
 		priorityExpr := bson.D{{Key: "$eq", Value: bson.A{"$is_featured", true}}}
@@ -263,22 +275,47 @@ func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, 
 		)
 	}
 
-	// For total count
-	countPipeline := append(pipeline, bson.D{{Key: "$count", Value: "total"}})
-	cursor, err := r.collection.Aggregate(ctx, countPipeline)
+	// For total count. Copia la pipeline para no compartir el backing array.
+	runCount := func(p mongodb.Pipeline) (int64, error) {
+		countPipeline := append(mongodb.Pipeline{}, p...)
+		countPipeline = append(countPipeline, bson.D{{Key: "$count", Value: "total"}})
+		cursor, err := r.collection.Aggregate(ctx, countPipeline)
+		if err != nil {
+			return 0, err
+		}
+		defer cursor.Close(ctx)
+		var countResult []bson.M
+		if err = cursor.All(ctx, &countResult); err != nil {
+			return 0, err
+		}
+		if len(countResult) == 0 {
+			return 0, nil
+		}
+		switch t := countResult[0]["total"].(type) {
+		case int32:
+			return int64(t), nil
+		case int64:
+			return t, nil
+		case int:
+			return int64(t), nil
+		}
+		return 0, nil
+	}
+
+	total, err := runCount(pipeline)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
-	var countResult []bson.M
-	if err = cursor.All(ctx, &countResult); err != nil {
-		return nil, 0, err
-	}
-	var total int64
-	if len(countResult) > 0 {
-		if t, ok := countResult[0]["total"].(int32); ok {
-			total = int64(t)
-		} else if t, ok := countResult[0]["total"].(int64); ok {
-			total = t
+
+	// Si el radio no dejó ningún registro, se ignora y se retorna por defecto
+	// la cantidad que corresponde al limit (los más cercanos sin corte de radio).
+	usedRadiusFallback := false
+	if applyRadius && total == 0 && geoNearBuilder != nil {
+		usedRadiusFallback = true
+		pipeline[0] = bson.D{{Key: "$geoNear", Value: geoNearBuilder(false)}}
+		total, err = runCount(pipeline)
+		if err != nil {
+			return nil, 0, false, err
 		}
 	}
 
@@ -289,22 +326,22 @@ func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, 
 		bson.D{{Key: "$limit", Value: int64(limit)}},
 	)
 
-	cursor, err = r.collection.Aggregate(ctx, pipeline)
+	cursor, err := r.collection.Aggregate(ctx, pipeline)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 	defer cursor.Close(ctx)
 
 	var centers []domain.SportCenter
 	if err = cursor.All(ctx, &centers); err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 
 	if centers == nil {
 		centers = []domain.SportCenter{}
 	}
 
-	return centers, total, nil
+	return centers, total, usedRadiusFallback, nil
 }
 
 func (r *SportCenterRepository) FindByUserID(ctx context.Context, userID string) ([]domain.SportCenter, error) {
@@ -332,7 +369,7 @@ func (r *SportCenterRepository) Update(ctx context.Context, center *domain.Sport
 	return err
 }
 
-func (r *SportCenterRepository) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates) error {
+func (r *SportCenterRepository) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
 	updateData := bson.M{
 		"updated_at": time.Now(),
 	}
@@ -357,6 +394,9 @@ func (r *SportCenterRepository) UpdateSettings(ctx context.Context, id primitive
 	}
 	if marketplaceFeePercent != nil {
 		updateData["marketplace_fee_percent"] = *marketplaceFeePercent
+	}
+	if paymentMode != nil {
+		updateData["payment_mode"] = *paymentMode
 	}
 	if isFeatured != nil {
 		updateData["is_featured"] = *isFeatured
@@ -638,6 +678,33 @@ func (r *CourtRepository) SyncPartialPaymentSlots(ctx context.Context, centerID 
 			"$set": bson.M{
 				"schedule.$[].partial_payment_enabled": partialPaymentEnabled,
 				"updated_at":                           time.Now(),
+			},
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.ModifiedCount, nil
+}
+
+// SyncPaymentModeSlots alinea el horario legacy de las canchas del centro con
+// su modalidad comercial (pago online vs solo reservas).
+func (r *CourtRepository) SyncPaymentModeSlots(ctx context.Context, centerID primitive.ObjectID, paymentRequired bool) (int64, error) {
+	result, err := r.collection.UpdateMany(
+		ctx,
+		bson.M{
+			"sport_center_id": centerID,
+			"$or": bson.A{
+				bson.M{"category": domain.SpaceCategoryCancha},
+				bson.M{"category": bson.M{"$exists": false}},
+				bson.M{"category": ""},
+			},
+		},
+		bson.M{
+			"$set": bson.M{
+				"schedule.$[].payment_required": paymentRequired,
+				"schedule.$[].payment_optional": false,
+				"updated_at":                    time.Now(),
 			},
 		},
 	)

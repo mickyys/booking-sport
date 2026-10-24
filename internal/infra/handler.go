@@ -3,6 +3,7 @@ package infra
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -31,14 +32,16 @@ type Auth0User struct {
 
 type SportCenterHandler struct {
 	useCase     *app.SportCenterUseCase
+	facilityUC  *app.FacilityUseCase
 	baseHandler *BaseHandler
 	auth0       auth0mgmt.Client
 	mailer      app.Mailer
 }
 
-func NewSportCenterHandler(uc *app.SportCenterUseCase, auth0 auth0mgmt.Client, mailer app.Mailer) *SportCenterHandler {
+func NewSportCenterHandler(uc *app.SportCenterUseCase, auth0 auth0mgmt.Client, mailer app.Mailer, facilityUC *app.FacilityUseCase) *SportCenterHandler {
 	return &SportCenterHandler{
 		useCase:     uc,
+		facilityUC:  facilityUC,
 		baseHandler: NewBaseHandler(),
 		auth0:       auth0,
 		mailer:      mailer,
@@ -123,7 +126,27 @@ func (h *SportCenterHandler) List(c *gin.Context) {
 		lat, lng = &latF, &lngF
 	}
 
-	response, err := h.useCase.ListSportCentersPaged(c.Request.Context(), page, limit, name, city, date, hour, lat, lng)
+	// Radio de búsqueda en km. Solo tiene sentido con coordenadas.
+	var radiusKm *float64
+	radiusStr := c.Query("radius")
+	if radiusStr != "" {
+		if lat == nil || lng == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "radius requires lat and lng"})
+			return
+		}
+		radiusF, err := strconv.ParseFloat(radiusStr, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid radius format"})
+			return
+		}
+		if radiusF <= 0 || radiusF > 500 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "radius must be greater than 0 and at most 500 km"})
+			return
+		}
+		radiusKm = &radiusF
+	}
+
+	response, err := h.useCase.ListSportCentersPaged(c.Request.Context(), page, limit, name, city, date, hour, lat, lng, radiusKm)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -154,7 +177,24 @@ func (h *SportCenterHandler) GetBySlug(c *gin.Context) {
 		"retention_percent": center.RetentionPercent,
 	}
 
-	c.JSON(http.StatusOK, gin.H{"center": center, "cancellation_policy": cancellationPolicy})
+	// Facilities (quincho/sede/piscina) incluidas en el detalle del centro para
+	// que la UI cargue centro + facilities en una sola llamada. Si falla la
+	// consulta se degrada a lista vacía para no romper el detalle.
+	facilities := []domain.Facility{}
+	if h.facilityUC != nil {
+		list, err := h.facilityUC.ListByCenterID(c.Request.Context(), center.ID)
+		if err != nil {
+			log.Printf("GetBySlug: error listando facilities para slug %s: %v", slug, err)
+		} else if list != nil {
+			facilities = list
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"center":              center,
+		"cancellation_policy": cancellationPolicy,
+		"facilities":          facilities,
+	})
 }
 
 func (h *SportCenterHandler) Create(c *gin.Context) {
@@ -213,15 +253,15 @@ func tenantSiteURL(slug string) string {
 
 func (h *SportCenterHandler) OnboardCreate(c *gin.Context) {
 	var body struct {
-		Nombre    string `json:"nombre" binding:"required,min=1,max=100"`
-		Rut       string `json:"rut" binding:"required"`
-		Direccion string `json:"direccion" binding:"required,min=1"`
-		Email    string   `json:"email" binding:"required,email"`
-		Slug     string   `json:"slug,omitempty"`
-		Ciudad   string   `json:"ciudad" binding:"max=100"`
-		Latitud  *float64 `json:"latitud"`
-		Longitud *float64 `json:"longitud"`
-		Clave    string   `json:"clave,omitempty"`
+		Nombre    string   `json:"nombre" binding:"required,min=1,max=100"`
+		Rut       string   `json:"rut" binding:"required"`
+		Direccion string   `json:"direccion" binding:"required,min=1"`
+		Email     string   `json:"email" binding:"required,email"`
+		Slug      string   `json:"slug,omitempty"`
+		Ciudad    string   `json:"ciudad" binding:"max=100"`
+		Latitud   *float64 `json:"latitud"`
+		Longitud  *float64 `json:"longitud"`
+		Clave     string   `json:"clave,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -453,13 +493,18 @@ func (h *SportCenterHandler) UpdateSportCenterSettings(c *gin.Context) {
 		Address               *string                     `json:"address"`
 		City                  *string                     `json:"city"`
 		Coordinates           *domain.Coordinates         `json:"coordinates"`
+		PaymentMode           *string                     `json:"payment_mode"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := h.useCase.UpdateSettings(c.Request.Context(), id, body.Slug, body.CancellationHours, body.RetentionPercent, body.PartialPaymentEnabled, body.PartialPaymentPercent, body.ImageURL, body.MarketplaceFeePercent, body.IsFeatured, body.Branding, body.Address, body.City, body.Coordinates); err != nil {
+	if err := h.useCase.UpdateSettings(c.Request.Context(), id, body.Slug, body.CancellationHours, body.RetentionPercent, body.PartialPaymentEnabled, body.PartialPaymentPercent, body.ImageURL, body.MarketplaceFeePercent, body.IsFeatured, body.Branding, body.Address, body.City, body.Coordinates, body.PaymentMode); err != nil {
+		if errors.Is(err, app.ErrInvalidPaymentMode) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -503,17 +548,17 @@ func (h *SportCenterHandler) UpdateMySportCenterOnboarding(c *gin.Context) {
 	userIDStr := userID.(string)
 
 	var body struct {
-		Step           int                      `json:"step"`
-		Nombre         *string                  `json:"nombre,omitempty"`
-		Rut            *string                  `json:"rut,omitempty"`
-		Email          *string                  `json:"email,omitempty"`
-		Direccion      *string                  `json:"direccion,omitempty"`
-		Telefono       *string                  `json:"telefono,omitempty"`
-		Templates     []domain.SpaceTemplate `json:"templates,omitempty"`
-		PaymentMode    *string                  `json:"payment_mode,omitempty"`
-		ImageURL       *string                  `json:"image_url,omitempty"`
-		FirstMonthFree *bool                    `json:"first_month_free,omitempty"`
-		Finalize       bool                     `json:"finalize,omitempty"`
+		Step           int                    `json:"step"`
+		Nombre         *string                `json:"nombre,omitempty"`
+		Rut            *string                `json:"rut,omitempty"`
+		Email          *string                `json:"email,omitempty"`
+		Direccion      *string                `json:"direccion,omitempty"`
+		Telefono       *string                `json:"telefono,omitempty"`
+		Templates      []domain.SpaceTemplate `json:"templates,omitempty"`
+		PaymentMode    *string                `json:"payment_mode,omitempty"`
+		ImageURL       *string                `json:"image_url,omitempty"`
+		FirstMonthFree *bool                  `json:"first_month_free,omitempty"`
+		Finalize       bool                   `json:"finalize,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -527,7 +572,7 @@ func (h *SportCenterHandler) UpdateMySportCenterOnboarding(c *gin.Context) {
 		Email:          body.Email,
 		Direccion:      body.Direccion,
 		Telefono:       body.Telefono,
-		Templates:     body.Templates,
+		Templates:      body.Templates,
 		PaymentMode:    body.PaymentMode,
 		ImageURL:       body.ImageURL,
 		FirstMonthFree: body.FirstMonthFree,

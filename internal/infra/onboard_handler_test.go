@@ -39,6 +39,8 @@ type mockCenterRepoForOnboardHandler struct {
 	lastCreated          *domain.SportCenter
 	centersByUser        []domain.SportCenter
 	lastUpdated          *domain.SportCenter
+	settingsCalls        int
+	lastPaymentMode      *string
 }
 
 func (m *mockCenterRepoForOnboardHandler) Create(ctx context.Context, center *domain.SportCenter) error {
@@ -50,7 +52,9 @@ func (m *mockCenterRepoForOnboardHandler) Update(ctx context.Context, center *do
 	m.lastUpdated = center
 	return nil
 }
-func (m *mockCenterRepoForOnboardHandler) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates) error {
+func (m *mockCenterRepoForOnboardHandler) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
+	m.settingsCalls++
+	m.lastPaymentMode = paymentMode
 	return nil
 }
 func (m *mockCenterRepoForOnboardHandler) FindByID(ctx context.Context, id primitive.ObjectID) (*domain.SportCenter, error) {
@@ -83,8 +87,8 @@ func (m *mockCenterRepoForOnboardHandler) FindByHost(ctx context.Context, host s
 func (m *mockCenterRepoForOnboardHandler) FindAll(ctx context.Context) ([]domain.SportCenter, error) {
 	return nil, nil
 }
-func (m *mockCenterRepoForOnboardHandler) FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int, lat, lng *float64, priorityCity string) ([]domain.SportCenter, int64, error) {
-	return nil, 0, nil
+func (m *mockCenterRepoForOnboardHandler) FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int, lat, lng, radiusKm *float64, priorityCity string) ([]domain.SportCenter, int64, bool, error) {
+	return nil, 0, false, nil
 }
 func (m *mockCenterRepoForOnboardHandler) FindByUserID(ctx context.Context, userID string) ([]domain.SportCenter, error) {
 	return m.centersByUser, nil
@@ -192,7 +196,7 @@ func newOnboardRouter(t *testing.T, repo *mockCenterRepoForOnboardHandler, auth0
 	if len(mailers) > 0 {
 		mailer = mailers[0]
 	}
-	h := NewSportCenterHandler(uc, auth0, mailer)
+	h := NewSportCenterHandler(uc, auth0, mailer, nil)
 	r := gin.New()
 	r.Use(middleware.Recovery()) // paridad con cmd/app/main.go:174
 	r.POST("/api/sport-centers/onboard", h.OnboardCreate)
@@ -766,10 +770,10 @@ func TestVerificationStatus_SinQueryParam_Retorna400(t *testing.T) {
 
 func wizardCenter() domain.SportCenter {
 	return domain.SportCenter{
-		ID:              primitive.NewObjectID(),
-		Name:            "Club Wizard",
-		AdminEmail:      "admin@club.cl",
-		Users:           []string{"auth0|wizard-admin"},
+		ID:               primitive.NewObjectID(),
+		Name:             "Club Wizard",
+		AdminEmail:       "admin@club.cl",
+		Users:            []string{"auth0|wizard-admin"},
 		OnboardingStatus: "pending",
 	}
 }
@@ -786,14 +790,16 @@ func (m *mockWizardSpaceRepo) Create(ctx context.Context, space *domain.Space) e
 	m.created = append(m.created, space)
 	return nil
 }
-func (m *mockWizardSpaceRepo) FindByID(ctx context.Context, id primitive.ObjectID) (*domain.Space, error) { return nil, nil }
+func (m *mockWizardSpaceRepo) FindByID(ctx context.Context, id primitive.ObjectID) (*domain.Space, error) {
+	return nil, nil
+}
 func (m *mockWizardSpaceRepo) FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.Space, error) {
 	return nil, nil
 }
 func (m *mockWizardSpaceRepo) FindByCenterAndCategory(ctx context.Context, centerID primitive.ObjectID, category domain.SpaceCategory) ([]domain.Space, error) {
 	return nil, nil
 }
-func (m *mockWizardSpaceRepo) Update(ctx context.Context, space *domain.Space) error { return nil }
+func (m *mockWizardSpaceRepo) Update(ctx context.Context, space *domain.Space) error   { return nil }
 func (m *mockWizardSpaceRepo) Delete(ctx context.Context, id primitive.ObjectID) error { return nil }
 func (m *mockWizardSpaceRepo) UpdateScheduleSlot(ctx context.Context, id primitive.ObjectID, slot domain.CourtSchedule) error {
 	return nil
@@ -825,13 +831,18 @@ func (m *mockWizardRuleRepo) FindBySportCenterID(ctx context.Context, centerID p
 	return nil, nil
 }
 func (m *mockWizardRuleRepo) Delete(ctx context.Context, id primitive.ObjectID) error { return nil }
-func (m *mockWizardRuleRepo) DeleteBySpaceID(ctx context.Context, spaceID primitive.ObjectID) error { return nil }
+func (m *mockWizardRuleRepo) DeleteBySpaceID(ctx context.Context, spaceID primitive.ObjectID) error {
+	return nil
+}
+func (m *mockWizardRuleRepo) SyncPaymentModeSlots(ctx context.Context, centerID primitive.ObjectID, paymentRequired bool) (int64, error) {
+	return 0, nil
+}
 
 func newOnboardingWizardRouter(t *testing.T, repo *mockCenterRepoForOnboardHandler) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	uc := app.NewSportCenterUseCase(repo, nil, nil, nil, nil, nil, &mockWizardSpaceRepo{}, &mockWizardRuleRepo{})
-	h := NewSportCenterHandler(uc, &mockAuth0Client{}, &mockMailer{})
+	h := NewSportCenterHandler(uc, &mockAuth0Client{}, &mockMailer{}, nil)
 	r := gin.New()
 	r.Use(func(c *gin.Context) { c.Set("user_id", "auth0|wizard-admin") })
 	r.PUT("/api/admin/my-sport-center/onboarding", h.UpdateMySportCenterOnboarding)
@@ -991,4 +1002,3 @@ func TestOnboardingWizard_Finalizar_Completo_MarcaCompleted(t *testing.T) {
 		t.Errorf("onboarding_step = %d, want 5", repo.lastUpdated.OnboardingStep)
 	}
 }
-

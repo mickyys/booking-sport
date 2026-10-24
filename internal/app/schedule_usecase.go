@@ -21,6 +21,9 @@ type ScheduleRuleRepository interface {
 	FindBySportCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.ScheduleRule, error)
 	Delete(ctx context.Context, id primitive.ObjectID) error
 	DeleteBySpaceID(ctx context.Context, spaceID primitive.ObjectID) error
+	// SyncPaymentModeSlots fuerza el esquema de pago de todas las franjas del
+	// centro para que coincida con su modalidad comercial.
+	SyncPaymentModeSlots(ctx context.Context, centerID primitive.ObjectID, paymentRequired bool) (int64, error)
 }
 
 // ScheduleExceptionRepository es el contrato de persistencia de excepciones.
@@ -85,12 +88,45 @@ func (uc *ScheduleUseCase) authorizeSpace(ctx context.Context, spaceID primitive
 	return space, center, nil
 }
 
+// ScheduleSource indica el origen de la configuración devuelta al panel:
+// reglas persistidas, conversión del horario legacy, o ninguna.
+type ScheduleSource string
+
+const (
+	ScheduleSourceRules  ScheduleSource = "rules"
+	ScheduleSourceLegacy ScheduleSource = "legacy"
+	ScheduleSourceNone   ScheduleSource = "none"
+)
+
 // GetSchedule retorna las reglas semanales de un espacio.
 func (uc *ScheduleUseCase) GetSchedule(ctx context.Context, spaceID primitive.ObjectID, userID string) ([]domain.ScheduleRule, error) {
-	if _, _, err := uc.authorizeSpace(ctx, spaceID, userID); err != nil {
-		return nil, err
+	rules, _, err := uc.GetScheduleConfig(ctx, spaceID, userID)
+	return rules, err
+}
+
+// GetScheduleConfig retorna las reglas semanales del espacio junto con su
+// origen. Si el espacio todavía no tiene reglas persistidas, deriva una vista
+// de solo lectura desde el modelo legacy para que el panel pueda mostrar y
+// migrar la configuración existente sin perder información.
+func (uc *ScheduleUseCase) GetScheduleConfig(ctx context.Context, spaceID primitive.ObjectID, userID string) ([]domain.ScheduleRule, ScheduleSource, error) {
+	space, _, err := uc.authorizeSpace(ctx, spaceID, userID)
+	if err != nil {
+		return nil, ScheduleSourceNone, err
 	}
-	return uc.ruleRepo.FindBySpaceID(ctx, spaceID)
+
+	rules, err := uc.ruleRepo.FindBySpaceID(ctx, spaceID)
+	if err != nil {
+		return nil, ScheduleSourceNone, err
+	}
+	if len(rules) > 0 {
+		return rules, ScheduleSourceRules, nil
+	}
+
+	legacy := BuildRulesFromLegacySpace(space)
+	if len(legacy) > 0 {
+		return legacy, ScheduleSourceLegacy, nil
+	}
+	return []domain.ScheduleRule{}, ScheduleSourceNone, nil
 }
 
 // SaveSchedule reemplaza las reglas semanales de un espacio (semántica PUT).
@@ -256,12 +292,12 @@ func (uc *ScheduleUseCase) DeleteBlock(ctx context.Context, spaceID primitive.Ob
 // SpaceAvailabilityResponse es la disponibilidad pública de un espacio para
 // una fecha (sin autenticación), útil para facilities (quincho/sede/piscina).
 type SpaceAvailabilityResponse struct {
-	SpaceID  string                      `json:"space_id"`
-	Date     string                      `json:"date"`
-	HasRules bool                        `json:"has_rules"`
-	Closed   bool                        `json:"closed"`
-	Blocked  bool                        `json:"blocked"`
-	Franjas  []domain.ScheduleRuleSlot   `json:"franjas"`
+	SpaceID  string                    `json:"space_id"`
+	Date     string                    `json:"date"`
+	HasRules bool                      `json:"has_rules"`
+	Closed   bool                      `json:"closed"`
+	Blocked  bool                      `json:"blocked"`
+	Franjas  []domain.ScheduleRuleSlot `json:"franjas"`
 }
 
 // PublicAvailability resuelve la disponibilidad de un espacio para una fecha

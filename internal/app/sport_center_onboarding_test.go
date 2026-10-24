@@ -14,9 +14,9 @@ import (
 
 type mockOnboardingRepo struct {
 	SportCenterRepository // hereda los métodos no usados del wizard
-	centers    []domain.SportCenter
-	lastUpdate *domain.SportCenter
-	updateErr  error
+	centers               []domain.SportCenter
+	lastUpdate            *domain.SportCenter
+	updateErr             error
 }
 
 func (m *mockOnboardingRepo) FindByUserID(ctx context.Context, userID string) ([]domain.SportCenter, error) {
@@ -43,7 +43,9 @@ func (m *mockSpaceRepo) Create(ctx context.Context, space *domain.Space) error {
 	m.created = append(m.created, space)
 	return nil
 }
-func (m *mockSpaceRepo) FindByID(ctx context.Context, id primitive.ObjectID) (*domain.Space, error) { return nil, nil }
+func (m *mockSpaceRepo) FindByID(ctx context.Context, id primitive.ObjectID) (*domain.Space, error) {
+	return nil, nil
+}
 func (m *mockSpaceRepo) FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.Space, error) {
 	out := make([]domain.Space, 0, len(m.created))
 	for _, s := range m.created {
@@ -54,7 +56,7 @@ func (m *mockSpaceRepo) FindByCenterID(ctx context.Context, centerID primitive.O
 func (m *mockSpaceRepo) FindByCenterAndCategory(ctx context.Context, centerID primitive.ObjectID, category domain.SpaceCategory) ([]domain.Space, error) {
 	return nil, nil
 }
-func (m *mockSpaceRepo) Update(ctx context.Context, space *domain.Space) error { return nil }
+func (m *mockSpaceRepo) Update(ctx context.Context, space *domain.Space) error   { return nil }
 func (m *mockSpaceRepo) Delete(ctx context.Context, id primitive.ObjectID) error { return nil }
 func (m *mockSpaceRepo) UpdateScheduleSlot(ctx context.Context, id primitive.ObjectID, slot domain.CourtSchedule) error {
 	return nil
@@ -86,7 +88,12 @@ func (m *mockRuleRepo) FindBySportCenterID(ctx context.Context, centerID primiti
 	return nil, nil
 }
 func (m *mockRuleRepo) Delete(ctx context.Context, id primitive.ObjectID) error { return nil }
-func (m *mockRuleRepo) DeleteBySpaceID(ctx context.Context, spaceID primitive.ObjectID) error { return nil }
+func (m *mockRuleRepo) DeleteBySpaceID(ctx context.Context, spaceID primitive.ObjectID) error {
+	return nil
+}
+func (m *mockRuleRepo) SyncPaymentModeSlots(ctx context.Context, centerID primitive.ObjectID, paymentRequired bool) (int64, error) {
+	return 0, nil
+}
 
 func onboardingCenter() domain.SportCenter {
 	return domain.SportCenter{
@@ -204,7 +211,7 @@ func TestUpdateOnboarding_Espacios_Invalidos_Rechaza(t *testing.T) {
 		repo := &mockOnboardingRepo{centers: []domain.SportCenter{onboardingCenter()}}
 		uc := onboardingUCWithRepo(repo)
 		err := uc.UpdateSportCenterOnboarding(context.Background(), "auth0|wizard", UpdateOnboardingInput{
-			Step:       OnboardingStepEspacios,
+			Step:      OnboardingStepEspacios,
 			Templates: templates,
 		})
 		if err == nil {
@@ -530,7 +537,7 @@ func TestUpdateOnboarding_EspaciosConSpaceTemplates_PersisteBorrador(t *testing.
 	}
 
 	err := uc.UpdateSportCenterOnboarding(context.Background(), "auth0|wizard", UpdateOnboardingInput{
-		Step:       OnboardingStepEspacios,
+		Step:      OnboardingStepEspacios,
 		Templates: templates,
 	})
 	if err != nil {
@@ -558,16 +565,16 @@ func TestUpdateOnboarding_EspaciosConSpaceTemplates_CanchaSinFranjas_Rechaza(t *
 	// Regla con día definido pero sin franjas → debe rechazarse.
 	templates := []domain.SpaceTemplate{
 		{
-			Tipo:   "cancha",
+			Tipo:     "cancha",
 			Cantidad: 1,
-			Cancha: true,
+			Cancha:   true,
 			Rules: []domain.ScheduleRule{
 				{DaysOfWeek: []int{1}, Slots: []domain.ScheduleRuleSlot{}},
 			},
 		},
 	}
 	err := uc.UpdateSportCenterOnboarding(context.Background(), "auth0|wizard", UpdateOnboardingInput{
-		Step:       OnboardingStepEspacios,
+		Step:      OnboardingStepEspacios,
 		Templates: templates,
 	})
 	if err == nil || !strings.Contains(err.Error(), "horarios") {
@@ -600,7 +607,7 @@ func TestUpdateOnboarding_EspaciosConSpaceTemplates_FranjasSolapadasMismoDia_Rec
 		},
 	}
 	err := uc.UpdateSportCenterOnboarding(context.Background(), "auth0|wizard", UpdateOnboardingInput{
-		Step:       OnboardingStepEspacios,
+		Step:      OnboardingStepEspacios,
 		Templates: templates,
 	})
 	if err == nil || !strings.Contains(err.Error(), "solapadas") {
@@ -616,7 +623,7 @@ func TestUpdateOnboarding_EspaciosConSpaceTemplates_CantidadCero_Rechaza(t *test
 		{Tipo: "cancha", Cantidad: 0, Cancha: true},
 	}
 	err := uc.UpdateSportCenterOnboarding(context.Background(), "auth0|wizard", UpdateOnboardingInput{
-		Step:       OnboardingStepEspacios,
+		Step:      OnboardingStepEspacios,
 		Templates: templates,
 	})
 	if err == nil || !strings.Contains(err.Error(), "cantidad") {

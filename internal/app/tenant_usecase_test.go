@@ -75,8 +75,8 @@ func (m *mockTenantRepo) FindByAdminEmail(ctx context.Context, email string) (*d
 func (m *mockTenantRepo) FindAll(ctx context.Context) ([]domain.SportCenter, error) {
 	return nil, nil
 }
-func (m *mockTenantRepo) FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int, lat, lng *float64, priorityCity string) ([]domain.SportCenter, int64, error) {
-	return nil, 0, nil
+func (m *mockTenantRepo) FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int, lat, lng, radiusKm *float64, priorityCity string) ([]domain.SportCenter, int64, bool, error) {
+	return nil, 0, false, nil
 }
 func (m *mockTenantRepo) FindByUserID(ctx context.Context, userID string) ([]domain.SportCenter, error) {
 	return nil, nil
@@ -87,7 +87,7 @@ func (m *mockTenantRepo) GetCities(ctx context.Context) ([]string, error) {
 func (m *mockTenantRepo) Update(ctx context.Context, center *domain.SportCenter) error {
 	return nil
 }
-func (m *mockTenantRepo) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates) error {
+func (m *mockTenantRepo) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
 	return nil
 }
 func (m *mockTenantRepo) Create(ctx context.Context, center *domain.SportCenter) error {
