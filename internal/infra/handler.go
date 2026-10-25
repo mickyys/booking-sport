@@ -172,6 +172,10 @@ func (h *SportCenterHandler) GetBySlug(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Sport center not found"})
 		return
 	}
+	if !center.IsOperational() {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Sport center not found"})
+		return
+	}
 	cancellationPolicy := gin.H{
 		"hours":             center.CancellationHours,
 		"retention_percent": center.RetentionPercent,
@@ -1526,7 +1530,12 @@ func (h *SpaceHandler) Update(c *gin.Context) {
 	space := body.Space
 
 	if err := h.useCase.Update(c.Request.Context(), id, &space, userID.(string)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		status := http.StatusInternalServerError
+		var appErr *domain.AppError
+		if errors.As(err, &appErr) {
+			status = appErr.StatusCode
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Space updated successfully"})

@@ -123,7 +123,7 @@ func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, 
 	var geoNearBuilder func(withRadius bool) bson.D
 
 	if useGeoNear {
-		query := bson.D{}
+		query := bson.D{{Key: "status", Value: bson.M{"$nin": []string{domain.SportCenterStatusSuspended, domain.SportCenterStatusBlocked}}}}
 		if name != "" {
 			query = append(query, bson.E{
 				Key:   "name",
@@ -173,11 +173,12 @@ func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, 
 			}}},
 			bson.D{{Key: "$sort", Value: bson.D{
 				{Key: "priority", Value: -1},
+				{Key: "featured_priority", Value: -1},
 				{Key: "distance", Value: 1},
 			}}},
 		)
 	} else {
-		matchStage := bson.D{}
+		matchStage := bson.D{{Key: "status", Value: bson.M{"$nin": []string{domain.SportCenterStatusSuspended, domain.SportCenterStatusBlocked}}}}
 
 		if name != "" {
 			matchStage = append(matchStage, bson.E{

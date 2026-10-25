@@ -232,6 +232,13 @@ func ensureBookingIndexes(ctx context.Context, db *mongo.Database) error {
 			Options: options.Index().SetName("idx_bookings_user_id"),
 		},
 		{
+			Keys: bson.D{{Key: "guest_details.email", Value: 1}},
+			Options: options.Index().
+				SetName("idx_bookings_guest_email").
+				SetCollation(emailCollation).
+				SetSparse(true),
+		},
+		{
 			Keys:    bson.D{{Key: "series_id", Value: 1}},
 			Options: options.Index().SetName("idx_bookings_series_id"),
 		},
@@ -579,6 +586,37 @@ func ensureFacilityIndexes(ctx context.Context, db *mongo.Database) error {
 	}
 
 	log.Println("[MONGODB] facilities indexes created")
+	return ensureFacilityBookingIndexes(ctx, db)
+}
+
+func ensureFacilityBookingIndexes(ctx context.Context, db *mongo.Database) error {
+	bookings := db.Collection("facility_bookings")
+	indexes := []mongo.IndexModel{
+		{
+			// Una sola reserva activa por espacio y día.
+			Keys: bson.D{{Key: "space_id", Value: 1}, {Key: "local_date", Value: 1}},
+			Options: options.Index().
+				SetName("uniq_facility_bookings_space_date_active").
+				SetUnique(true).
+				SetPartialFilterExpression(bson.M{"active": true}),
+		},
+		{
+			Keys:    bson.D{{Key: "booking_code", Value: 1}},
+			Options: options.Index().SetName("idx_facility_bookings_code"),
+		},
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}, {Key: "local_date", Value: -1}},
+			Options: options.Index().SetName("idx_facility_bookings_center_date"),
+		},
+		{
+			Keys:    bson.D{{Key: "mp_payment_id", Value: 1}},
+			Options: options.Index().SetName("idx_facility_bookings_mp_payment").SetSparse(true),
+		},
+	}
+	if _, err := bookings.Indexes().CreateMany(ctx, indexes); err != nil {
+		log.Printf("[MONGODB] Error creating facility_bookings indexes: %v", err)
+		return err
+	}
 	return nil
 }
 

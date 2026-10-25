@@ -53,6 +53,19 @@ type ScheduleUseCase struct {
 	blockRepo     BlockRepository
 	spaceRepo     SpaceRepository
 	centerRepo    SportCenterRepository
+	bookedDates   BookedDatesSource
+}
+
+// BookedDatesSource entrega los días de un espacio que ya tienen una reserva
+// activa de día completo (sede/piscina).
+type BookedDatesSource interface {
+	ListActiveDates(ctx context.Context, spaceID primitive.ObjectID, from, to string, now time.Time) ([]string, error)
+}
+
+// SetBookedDatesSource inyecta el origen de días reservados para la
+// disponibilidad pública.
+func (uc *ScheduleUseCase) SetBookedDatesSource(src BookedDatesSource) {
+	uc.bookedDates = src
 }
 
 func NewScheduleUseCase(
@@ -292,12 +305,14 @@ func (uc *ScheduleUseCase) DeleteBlock(ctx context.Context, spaceID primitive.Ob
 // SpaceAvailabilityResponse es la disponibilidad pública de un espacio para
 // una fecha (sin autenticación), útil para facilities (quincho/sede/piscina).
 type SpaceAvailabilityResponse struct {
-	SpaceID  string                    `json:"space_id"`
-	Date     string                    `json:"date"`
-	HasRules bool                      `json:"has_rules"`
-	Closed   bool                      `json:"closed"`
-	Blocked  bool                      `json:"blocked"`
-	Franjas  []domain.ScheduleRuleSlot `json:"franjas"`
+	SpaceID  string `json:"space_id"`
+	Date     string `json:"date"`
+	HasRules bool   `json:"has_rules"`
+	Closed   bool   `json:"closed"`
+	Blocked  bool   `json:"blocked"`
+	// Booked indica que el día ya tiene una reserva de día completo.
+	Booked  bool                      `json:"booked"`
+	Franjas []domain.ScheduleRuleSlot `json:"franjas"`
 }
 
 // PublicAvailability resuelve la disponibilidad de un espacio para una fecha
@@ -350,6 +365,17 @@ func (uc *ScheduleUseCase) PublicAvailabilityRange(ctx context.Context, spaceID 
 			return nil, err
 		}
 		out[d.Format("2006-01-02")] = resp
+	}
+	if uc.bookedDates != nil {
+		booked, err := uc.bookedDates.ListActiveDates(ctx, spaceID, start.Format("2006-01-02"), end.Format("2006-01-02"), time.Now())
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range booked {
+			if resp, ok := out[d]; ok {
+				resp.Booked = true
+			}
+		}
 	}
 	return out, nil
 }

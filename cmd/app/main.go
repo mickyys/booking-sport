@@ -99,6 +99,7 @@ func main() {
 	scheduleRuleRepo := mongo.NewScheduleRuleRepository(db)
 	scheduleExceptionRepo := mongo.NewScheduleExceptionRepository(db)
 	blockRepo := mongo.NewBlockRepository(db)
+	userProfileRepo := mongo.NewUserProfileRepository(db)
 
 	log.Infow("repositories_initialized")
 
@@ -117,6 +118,9 @@ func main() {
 	facilityUC := app.NewFacilityUseCase(facilityRepo, sportCenterRepo)
 	spaceUC := app.NewSpaceUseCase(spaceRepo, sportCenterRepo)
 	scheduleUC := app.NewScheduleUseCase(scheduleRuleRepo, scheduleExceptionRepo, blockRepo, spaceRepo, sportCenterRepo)
+	facilityBookingRepo := mongo.NewFacilityBookingRepository(db)
+	scheduleUC.SetBookedDatesSource(facilityBookingRepo)
+	facilityBookingUC := app.NewFacilityBookingUseCase(facilityBookingRepo, spaceRepo, sportCenterRepo, scheduleUC, mercadopago.NewClient(getEnv("MP_ACCESS_TOKEN", "")))
 	sportCenterUC.SetScheduleResolver(app.NewScheduleResolver(scheduleRuleRepo, scheduleExceptionRepo, blockRepo))
 
 	var notifier app.NotificationService
@@ -209,6 +213,8 @@ func main() {
 	sportCenterHandler := infra.NewSportCenterHandler(sportCenterUC, auth0Mgmt, bookingMailer, facilityUC)
 	courtHandler := infra.NewCourtHandler(courtUC)
 	bookingHandler := infra.NewBookingHandler(bookingUC)
+	bookingHandler.SetFacilityBookings(facilityBookingUC)
+	facilityBookingHandler := infra.NewFacilityBookingHandler(facilityBookingUC)
 	contactHandler := infra.NewContactHandler(bookingMailer)
 
 	mpConnectHandler := infra.NewMPConnectHandler(mpConnectUC)
@@ -219,6 +225,8 @@ func main() {
 	facilityHandler := infra.NewFacilityHandler(facilityUC)
 	spaceHandler := infra.NewSpaceHandler(spaceUC)
 	scheduleHandler := infra.NewScheduleHandler(scheduleUC)
+	userProfileHandler := infra.NewUserProfileHandler(app.NewUserProfileUseCase(userProfileRepo))
+	bookingClaimHandler := infra.NewBookingClaimHandler(bookingRepo)
 
 	log.Infow("handlers_initialized")
 
@@ -290,6 +298,9 @@ func main() {
 	r.GET("/api/sport-centers/:id/facilities", facilityHandler.GetByCenterID)
 	r.GET("/api/sport-centers/slug/:slug/facilities", facilityHandler.GetBySlug)
 	r.POST("/api/facilities/inquiries", facilityHandler.CreateInquiry)
+	// Reservas por día de sedes y piscinas
+	r.POST("/api/facility-bookings", facilityBookingHandler.Create)
+	r.GET("/api/spaces/:id/payment-options", facilityBookingHandler.PaymentOptions)
 	// MercadoPago payment routes
 	r.POST("/api/bookings/mercadopago", bookingHandler.CreateMercadoPagoPayment)
 	r.POST("/api/bookings/mercadopago/webhook", bookingHandler.MercadoPagoWebhook)
@@ -306,12 +317,21 @@ func main() {
 	// MercadoPago Connect (marketplace) - callback público (redirección de MP)
 	r.GET("/api/admin/mercadopago/callback", mpConnectHandler.Callback)
 
+	superAdminRepo := mongo.NewSuperAdminRepository(db)
+	if err := superAdminRepo.EnsureIndexes(context.Background()); err != nil {
+		log.Warnw("superadmin_indexes_failed", "error", err)
+	}
+	superAdminHandler := infra.NewSuperAdminHandler(superAdminRepo)
+
 	// Rutas Protegidas
 	api := r.Group("/api")
 	api.Use(authMiddleware)
 	{
 		// Registro de dispositivos para notificaciones
 		api.POST("/users/devices", bookingHandler.RegisterDevice)
+		// Teléfono guardado del usuario autenticado (precarga en reservas)
+		api.GET("/users/me/phone", userProfileHandler.GetPhone)
+		api.PUT("/users/me/phone", userProfileHandler.SavePhone)
 
 		// Endpoint seguro para obtener schedules con detalles de reservas
 		api.GET("/sport-centers/:id/schedules/bookings", sportCenterHandler.GetSchedulesWithBookings)
@@ -320,6 +340,7 @@ func main() {
 		api.PUT("/admin/my-sport-center/onboarding", sportCenterHandler.UpdateMySportCenterOnboarding)
 		api.GET("/admin/sport-centers/schedules/bookings", sportCenterHandler.GetAdminSchedulesWithBookings)
 		api.GET("/bookings/:id", bookingHandler.GetBookingDetail)
+		api.POST("/bookings/claim", bookingClaimHandler.Claim)
 		api.GET("/bookings/my-bookings", bookingHandler.GetUserBookings)
 		api.GET("/bookings/my-cancelled", bookingHandler.GetUserCancelledBookings)
 		api.GET("/bookings/confirmed/count", bookingHandler.GetConfirmedCount)
@@ -340,6 +361,8 @@ func main() {
 		api.POST("/admin/facilities", facilityHandler.Create)
 		api.PUT("/admin/facilities/:id", facilityHandler.Update)
 		api.DELETE("/admin/facilities/:id", facilityHandler.Delete)
+		api.GET("/admin/facility-bookings", facilityBookingHandler.ListAdmin)
+		api.POST("/admin/facility-bookings/:id/cancel", facilityBookingHandler.CancelAdmin)
 		api.GET("/admin/spaces", spaceHandler.GetAdminSpaces)
 		api.POST("/admin/spaces", spaceHandler.Create)
 		api.PUT("/admin/spaces/:id", spaceHandler.Update)
@@ -374,6 +397,22 @@ func main() {
 		api.GET("/admin/users", sportCenterHandler.GetCenterUsers)
 		api.POST("/admin/users", sportCenterHandler.InviteCenterUser)
 		api.DELETE("/admin/users/:userId", sportCenterHandler.RemoveCenterUser)
+
+		// Panel superadmin (rol "superadmin" en Auth0)
+		sa := api.Group("/superadmin", middleware.RequireSuperAdmin(auth0Mgmt))
+		{
+			sa.GET("/me", func(c *gin.Context) { c.JSON(200, gin.H{"superadmin": true}) })
+			sa.GET("/sport-centers", superAdminHandler.ListCenters)
+			sa.GET("/sport-centers/stats", superAdminHandler.CenterStats)
+			sa.POST("/sport-centers", superAdminHandler.Audit("center.create", "sport_center", "id"), sportCenterHandler.OnboardCreate)
+			sa.GET("/sport-centers/:id", superAdminHandler.GetCenter)
+			sa.PATCH("/sport-centers/:id/settings", superAdminHandler.Audit("center.settings", "sport_center", "id"), sportCenterHandler.UpdateSportCenterSettings)
+			sa.PUT("/sport-centers/:id/status", superAdminHandler.SetStatus)
+			sa.PUT("/sport-centers/:id/featured", superAdminHandler.SetFeatured)
+			sa.GET("/bookings", superAdminHandler.ListBookings)
+			sa.GET("/bookings/export", superAdminHandler.ExportBookings)
+			sa.GET("/audit", superAdminHandler.ListAudit)
+		}
 
 		// MercadoPago Connect (marketplace) routes
 		api.GET("/admin/mercadopago/connect", mpConnectHandler.GetAuthorizationURL)

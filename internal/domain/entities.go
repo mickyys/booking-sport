@@ -89,8 +89,18 @@ type SportCenter struct {
 	Coordinates         Coordinates `bson:"coordinates" json:"coordinates"`
 	// Location es la representación GeoJSON de Coordinates, usada solo para el
 	// índice 2dsphere y $geoNear. No se expone en la API pública.
-	Location              *GeoJSONPoint        `bson:"location,omitempty" json:"-"`
-	IsFeatured            bool                 `bson:"is_featured" json:"is_featured"`
+	Location   *GeoJSONPoint `bson:"location,omitempty" json:"-"`
+	IsFeatured bool          `bson:"is_featured" json:"is_featured"`
+	// FeaturedPriority ordena los destacados (mayor = primero). FeaturedUntil
+	// es la vigencia opcional del destacado.
+	FeaturedPriority int        `bson:"featured_priority,omitempty" json:"featured_priority,omitempty"`
+	FeaturedUntil    *time.Time `bson:"featured_until,omitempty" json:"featured_until,omitempty"`
+	// Status lo gobierna el superadmin: vacío o "active" opera normal;
+	// "suspended" y "blocked" ocultan el centro y impiden nuevas reservas.
+	Status                string               `bson:"status,omitempty" json:"status,omitempty"`
+	StatusReason          string               `bson:"status_reason,omitempty" json:"status_reason,omitempty"`
+	StatusChangedAt       *time.Time           `bson:"status_changed_at,omitempty" json:"status_changed_at,omitempty"`
+	StatusChangedBy       string               `bson:"status_changed_by,omitempty" json:"-"`
 	Distance              float64              `bson:"distance,omitempty" json:"distance,omitempty"`
 	DistanceKm            float64              `bson:"distance_km,omitempty" json:"distance_km,omitempty"`
 	ImageURL              string               `bson:"image_url" json:"image_url"`
@@ -369,6 +379,49 @@ func SpaceToFacility(s *Space) *Facility {
 	}
 }
 
+// FacilityBookingCodePrefix identifica los códigos de reserva de sede/piscina
+// (se comparten con el flujo de pago de Mercado Pago de las canchas).
+const FacilityBookingCodePrefix = "FAC-"
+
+// FacilityBooking es la reserva de un día completo de una sede o piscina.
+// Una compra de varios días genera un documento por día que comparten
+// BookingCode; (space_id, local_date) es único mientras la reserva esté activa,
+// garantizando una sola reserva por día.
+type FacilityBooking struct {
+	ID              primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	BookingCode     string             `bson:"booking_code" json:"booking_code"`
+	SpaceID         primitive.ObjectID `bson:"space_id" json:"space_id"`
+	SportCenterID   primitive.ObjectID `bson:"sport_center_id" json:"sport_center_id"`
+	SpaceName       string             `bson:"space_name" json:"space_name"`
+	SpaceType       FacilityType       `bson:"space_type" json:"space_type"`
+	SportCenterName string             `bson:"sport_center_name" json:"sport_center_name"`
+	LocalDate       string             `bson:"local_date" json:"local_date"`
+	Guests          int                `bson:"guests" json:"guests"`
+	CustomerName    string             `bson:"customer_name" json:"customer_name"`
+	CustomerEmail   string             `bson:"customer_email" json:"customer_email"`
+	CustomerPhone   string             `bson:"customer_phone" json:"customer_phone"`
+	Status          BookingStatus      `bson:"status" json:"status"`
+	// Active es true mientras la reserva ocupa el día; respalda el índice único parcial.
+	Active bool `bson:"active" json:"-"`
+	// PaymentMethod: "mercadopago" (pago online) o "venue" (se paga en el centro).
+	PaymentMethod    string     `bson:"payment_method" json:"payment_method"`
+	Price            float64    `bson:"price" json:"price"`
+	PaidAmount       float64    `bson:"paid_amount" json:"paid_amount"`
+	PendingAmount    float64    `bson:"pending_amount" json:"pending_amount"`
+	IsPartialPayment bool       `bson:"is_partial_payment" json:"is_partial_payment"`
+	MPPreferenceID   string     `bson:"mp_preference_id,omitempty" json:"-"`
+	MPPaymentID      string     `bson:"mp_payment_id,omitempty" json:"-"`
+	ExpiresAt        *time.Time `bson:"expires_at,omitempty" json:"expires_at,omitempty"`
+	CancelledBy      string     `bson:"cancelled_by,omitempty" json:"cancelled_by,omitempty"`
+	CreatedAt        time.Time  `bson:"created_at" json:"created_at"`
+	UpdatedAt        time.Time  `bson:"updated_at" json:"updated_at"`
+}
+
+// IsActive indica si la reserva ocupa el día (pendiente de pago o confirmada).
+func (b *FacilityBooking) IsActive() bool {
+	return b.Status == BookingStatusPending || b.Status == BookingStatusConfirmed
+}
+
 // FacilityInquiry es una solicitud de arriendo de una facility (lead de contacto).
 type FacilityInquiry struct {
 	ID            primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
@@ -491,6 +544,16 @@ type UserDevice struct {
 	OSVersion      string             `bson:"os_version" json:"os_version"`
 	LastActivityAt time.Time          `bson:"last_activity_at" json:"last_activity_at"`
 	CreatedAt      time.Time          `bson:"created_at" json:"created_at"`
+}
+
+// UserProfile guarda datos de contacto de un usuario autenticado (identificado
+// por el sub de Auth0) para precargarlos en futuras reservas.
+type UserProfile struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	Auth0ID   string             `bson:"auth0_id" json:"auth0_id"`
+	Phone     string             `bson:"phone" json:"phone"`
+	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt time.Time          `bson:"updated_at" json:"updated_at"`
 }
 
 type PagedResponse struct {
@@ -833,4 +896,15 @@ func (h *SlotHold) NormalizeSchedule() error {
 	h.Timezone = timezone
 	h.ScheduledAt = scheduledAt
 	return nil
+}
+
+const (
+	SportCenterStatusActive    = "active"
+	SportCenterStatusSuspended = "suspended"
+	SportCenterStatusBlocked   = "blocked"
+)
+
+// IsOperational indica si el centro puede mostrarse y recibir reservas.
+func (c *SportCenter) IsOperational() bool {
+	return c.Status == "" || c.Status == SportCenterStatusActive
 }

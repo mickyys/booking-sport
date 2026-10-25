@@ -350,6 +350,13 @@ func resolveEffectiveUserID(booking *domain.Booking) string {
 }
 
 func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int, userID string) (*domain.SlotHold, *domain.Booking, error) {
+	if uc.courtRepo == nil || uc.centerRepo == nil {
+		// sin repos configurados no se puede verificar el estado del centro
+	} else if court, cerr := uc.courtRepo.FindByID(ctx, courtID); cerr == nil && court != nil {
+		if center, cerr := uc.centerRepo.FindByID(ctx, court.SportCenterID); cerr == nil && center != nil && !center.IsOperational() {
+			return nil, nil, domain.NewConflictError("este centro no está disponible para reservas")
+		}
+	}
 	loc := domain.GetSantiagoLocation()
 	normalizedDate := domain.SantiagoDateStart(date)
 

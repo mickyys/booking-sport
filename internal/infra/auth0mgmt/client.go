@@ -374,6 +374,29 @@ func (c *ManagementClient) CreatePasswordSetupTicket(ctx context.Context, auth0U
 
 // UserHasRole consulta los roles del usuario y verifica que roleID esté
 // asignado.
+// RoleNames retorna los nombres de los roles asignados al usuario en Auth0.
+// Requiere el scope read:roles en la app M2M.
+func (c *ManagementClient) RoleNames(ctx context.Context, auth0UserID string) ([]string, error) {
+	var roles []struct {
+		Name string `json:"name"`
+	}
+	path := "/users/" + url.PathEscape(auth0UserID) + "/roles?per_page=50"
+	if err := c.apiRequest(ctx, http.MethodGet, path, nil, &roles); err != nil {
+		// 403 del endpoint de usuarios (no del endpoint de token): falta el
+		// scope read:users/read:roles para leer roles.
+		if strings.Contains(err.Error(), "respondió 403") && strings.Contains(err.Error(), "/roles") {
+			log.Printf("[AUTH0MGMT] RoleNames 403 crudo (user=%s): %v", auth0UserID, err)
+			return nil, ErrRolesUnreadable
+		}
+		return nil, err
+	}
+	names := make([]string, 0, len(roles))
+	for _, r := range roles {
+		names = append(names, r.Name)
+	}
+	return names, nil
+}
+
 func (c *ManagementClient) UserHasRole(ctx context.Context, auth0UserID, roleID string) (bool, error) {
 	var roles []struct {
 		ID string `json:"id"`

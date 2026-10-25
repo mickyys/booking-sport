@@ -2,6 +2,7 @@ package infra
 
 import (
 	"bytes"
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -26,6 +27,7 @@ import (
 type BookingHandler struct {
 	useCase     *app.BookingUseCase
 	baseHandler *BaseHandler
+	facility    *app.FacilityBookingUseCase
 }
 
 func NewBookingHandler(uc *app.BookingUseCase) *BookingHandler {
@@ -33,6 +35,39 @@ func NewBookingHandler(uc *app.BookingUseCase) *BookingHandler {
 		useCase:     uc,
 		baseHandler: NewBaseHandler(),
 	}
+}
+
+// SetFacilityBookings habilita el procesamiento de pagos y consultas por código
+// de las reservas de sede y piscina, que comparten rutas con las canchas.
+func (h *BookingHandler) SetFacilityBookings(uc *app.FacilityBookingUseCase) {
+	h.facility = uc
+}
+
+// normalizeBookingCode hace la consulta por código insensible a mayúsculas:
+// las reservas de sede se guardan con prefijo "FAC-" en mayúsculas y las de
+// cancha en minúsculas.
+func normalizeBookingCode(code string) string {
+	code = strings.TrimSpace(code)
+	if strings.HasPrefix(strings.ToUpper(code), domain.FacilityBookingCodePrefix) {
+		return strings.ToUpper(code)
+	}
+	return strings.ToLower(code)
+}
+
+func isFacilityBookingCode(code string) bool {
+	return strings.HasPrefix(code, domain.FacilityBookingCodePrefix)
+}
+
+// handlePaymentNotification enruta la notificación de Mercado Pago a la reserva
+// de sede/piscina o de cancha que corresponda.
+func (h *BookingHandler) handlePaymentNotification(ctx context.Context, paymentID string) error {
+	if h.facility != nil {
+		handled, err := h.facility.HandlePaymentNotification(ctx, paymentID)
+		if handled {
+			return err
+		}
+	}
+	return h.useCase.HandleMercadoPagoWebhook(ctx, paymentID)
 }
 
 // GetUserCancelledBookings retorna solo las reservas canceladas del usuario autenticado
@@ -386,9 +421,19 @@ func (h *BookingHandler) CancelBooking(c *gin.Context) {
 }
 
 func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
-	code := c.Param("code")
+	code := normalizeBookingCode(c.Param("code"))
 	if code == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "booking code is required"})
+		return
+	}
+
+	if h.facility != nil && isFacilityBookingCode(code) {
+		bookings, err := h.facility.GetByCode(c.Request.Context(), code)
+		if err != nil {
+			c.JSON(errorStatusCode(err), gin.H{"error": "booking not found"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"type": "facility", "booking_code": code, "bookings": bookings})
 		return
 	}
 
@@ -445,6 +490,10 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 			"court_name":           court.Name,
 			"sport_center_id":      court.SportCenterID,
 			"sport_center_name":    center.Name,
+			"sport_center_slug":    center.Slug,
+			"sport_center_address": center.Address,
+			"sport_center_city":    center.City,
+			"customer_name":        booking.CustomerName,
 			"date":                 booking.Date,
 			"local_date":           booking.LocalDate,
 			"timezone":             booking.Timezone,
@@ -831,7 +880,7 @@ func (h *BookingHandler) MercadoPagoWebhook(c *gin.Context) {
 
 		// Only process payment-related events
 		if event.Type == "payment" || event.Action == "payment.created" || event.Action == "payment.updated" {
-			if processErr := h.useCase.HandleMercadoPagoWebhook(c.Request.Context(), event.Data.ID); processErr != nil {
+			if processErr := h.handlePaymentNotification(c.Request.Context(), event.Data.ID); processErr != nil {
 				// Loggear internamente pero siempre responder 200 para no
 				// provocar reintentos masivos de Mercado Pago.
 				log.Errorw("mp_webhook_processing_error",
@@ -858,7 +907,7 @@ func (h *BookingHandler) MercadoPagoWebhook(c *gin.Context) {
 				"payment_id", id,
 			)
 		}
-		if processErr := h.useCase.HandleMercadoPagoWebhook(c.Request.Context(), id); processErr != nil {
+		if processErr := h.handlePaymentNotification(c.Request.Context(), id); processErr != nil {
 			log.Errorw("mp_webhook_ipn_processing_error",
 				"trace_id", traceID,
 				"request_id", requestID,
@@ -947,6 +996,19 @@ func (h *BookingHandler) MercadoPagoReturn(c *gin.Context) {
 
 	if bookingCode == "" {
 		c.Redirect(http.StatusFound, url+"/booking/failure?error=missing_code")
+		return
+	}
+
+	if h.facility != nil && isFacilityBookingCode(bookingCode) {
+		if paymentID != "" {
+			if err := h.facility.StorePaymentID(c.Request.Context(), bookingCode, paymentID); err != nil {
+				log.Warnw("mp_return_facility_store_payment_id_error", "booking_code", bookingCode, "error", err)
+			}
+			if err := h.handlePaymentNotification(c.Request.Context(), paymentID); err != nil {
+				log.Errorw("mp_return_facility_webhook_error", "payment_id", paymentID, "error", err)
+			}
+		}
+		c.Redirect(http.StatusFound, fmt.Sprintf("%s/booking/status?code=%s", url, bookingCode))
 		return
 	}
 

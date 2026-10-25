@@ -78,7 +78,7 @@ func (h *FacilityHandler) Create(c *gin.Context) {
 	facility.Enabled = true
 
 	if err := h.useCase.Create(c.Request.Context(), &facility); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"facility": facility})
@@ -109,7 +109,7 @@ func (h *FacilityHandler) Update(c *gin.Context) {
 	facility.SportCenterID = existing.SportCenterID
 
 	if err := h.useCase.Update(c.Request.Context(), &facility); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"facility": facility})
