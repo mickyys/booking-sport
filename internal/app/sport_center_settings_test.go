@@ -21,7 +21,7 @@ func (m *settingsCenterRepo) FindByID(ctx context.Context, id primitive.ObjectID
 	return &m.center, nil
 }
 
-func (m *settingsCenterRepo) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
+func (m *settingsCenterRepo) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
 	m.updatedMode = paymentMode
 	m.center.PaymentMode = *paymentMode
 	return nil
@@ -86,7 +86,7 @@ func TestUpdateSettings_ActivaPagoOnlineSincronizaFranjas(t *testing.T) {
 	uc, centerRepo, courtRepo, ruleRepo, disconnector := newSettingsUseCase(PaymentModePayAtCenter)
 
 	mode := PaymentModePayOnline
-	if err := uc.UpdateSettings(context.Background(), centerRepo.center.ID, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, &mode); err != nil {
+	if err := uc.UpdateSettings(context.Background(), centerRepo.center.ID, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, &mode); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -108,7 +108,7 @@ func TestUpdateSettings_DesactivaPagoOnlineBorraCredenciales(t *testing.T) {
 	uc, centerRepo, courtRepo, ruleRepo, disconnector := newSettingsUseCase(PaymentModePayOnline)
 
 	mode := PaymentModePayAtCenter
-	if err := uc.UpdateSettings(context.Background(), centerRepo.center.ID, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, &mode); err != nil {
+	if err := uc.UpdateSettings(context.Background(), centerRepo.center.ID, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, &mode); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -133,7 +133,7 @@ func TestUpdateSettings_MismaModalidadNoSincroniza(t *testing.T) {
 	uc, centerRepo, courtRepo, ruleRepo, disconnector := newSettingsUseCase(PaymentModePayOnline)
 
 	mode := PaymentModePayOnline
-	if err := uc.UpdateSettings(context.Background(), centerRepo.center.ID, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, &mode); err != nil {
+	if err := uc.UpdateSettings(context.Background(), centerRepo.center.ID, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, &mode); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 

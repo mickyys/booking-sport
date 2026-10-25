@@ -166,6 +166,14 @@ func (m *mockCourtRepoForRecurring) FindByID(ctx context.Context, id primitive.O
 	}, nil
 }
 
+func (m *mockCourtRepoForRecurring) FindAnyByID(ctx context.Context, id primitive.ObjectID) (*domain.Court, error) {
+	return m.FindByID(ctx, id)
+}
+
+func (m *mockCourtRepoForRecurring) FindAllByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.Court, error) {
+	return m.FindByCenterID(ctx, centerID)
+}
+
 func (m *mockCourtRepoForRecurring) FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.Court, error) {
 	return nil, nil
 }
@@ -256,7 +264,7 @@ func (m *mockCenterRepoForRecurring) Update(ctx context.Context, center *domain.
 	return nil
 }
 
-func (m *mockCenterRepoForRecurring) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
+func (m *mockCenterRepoForRecurring) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
 	return nil
 }
 

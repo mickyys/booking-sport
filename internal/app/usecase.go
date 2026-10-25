@@ -18,7 +18,7 @@ import (
 type SportCenterRepository interface {
 	Create(ctx context.Context, center *domain.SportCenter) error
 	Update(ctx context.Context, center *domain.SportCenter) error
-	UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error
+	UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error
 	FindByID(ctx context.Context, id primitive.ObjectID) (*domain.SportCenter, error)
 	FindBySlug(ctx context.Context, slug string) (*domain.SportCenter, error)
 	FindBySubdomain(ctx context.Context, subdomain string) (*domain.SportCenter, error)
@@ -87,6 +87,20 @@ type BookingRepository interface {
 	Collection() *mongo.Collection
 }
 
+// PaymentReconcileStore son las operaciones atómicas que necesita la
+// reconciliación de pagos de Mercado Pago. Se descubre por type assertion sobre
+// BookingRepository para no obligar a todos los dobles de prueba a implementarla.
+type PaymentReconcileStore interface {
+	// ClaimPaymentTransition cambia el estado solo si la reserva sigue en
+	// `expected`. Devuelve true únicamente al llamador que ganó la transición.
+	ClaimPaymentTransition(ctx context.Context, id primitive.ObjectID, expected, next domain.BookingStatus, paidAmount, pendingAmount float64, paymentInfo *domain.PaymentInfo, mpPaymentID, mpStatus string) (bool, error)
+	MarkPaymentSync(ctx context.Context, id primitive.ObjectID, mpStatus, mpPaymentID string, at time.Time) error
+	// ClaimConfirmationEmail devuelve true si este llamador debe enviar el correo.
+	ClaimConfirmationEmail(ctx context.Context, id primitive.ObjectID, at time.Time) (bool, error)
+	ReleaseConfirmationEmail(ctx context.Context, id primitive.ObjectID) error
+	FindPendingMercadoPago(ctx context.Context, createdAfter, createdBefore time.Time, limit int) ([]domain.Booking, error)
+}
+
 type RecurringReservationRepository interface {
 	Create(ctx context.Context, reservation *domain.RecurringReservation) error
 	FindByID(ctx context.Context, id primitive.ObjectID) (*domain.RecurringReservation, error)
@@ -144,6 +158,58 @@ type Mailer interface {
 	SendContactEmail(ctx context.Context, to string, name string, email string, phone string, sportCenterName string, message string) error
 	SendCenterOnboardWelcome(ctx context.Context, data CenterWelcomeEmail) error
 	SendCenterInvitation(ctx context.Context, data CenterInvitationEmail) error
+}
+
+// MembershipRepository persiste planes de socios, socios y los artefactos de
+// verificación (código por correo y token temporal).
+type MembershipRepository interface {
+	CreatePlan(ctx context.Context, plan *domain.MembershipPlan) error
+	UpdatePlan(ctx context.Context, plan *domain.MembershipPlan) error
+	FindPlanByID(ctx context.Context, id primitive.ObjectID) (*domain.MembershipPlan, error)
+	FindPlansByCenter(ctx context.Context, centerID primitive.ObjectID) ([]domain.MembershipPlan, error)
+	DeletePlan(ctx context.Context, id primitive.ObjectID) error
+
+	CreateMember(ctx context.Context, member *domain.Member) error
+	UpdateMember(ctx context.Context, member *domain.Member) error
+	FindMemberByID(ctx context.Context, id primitive.ObjectID) (*domain.Member, error)
+	FindMemberByDocument(ctx context.Context, centerID primitive.ObjectID, document string) (*domain.Member, error)
+	FindMembersByCenter(ctx context.Context, centerID primitive.ObjectID) ([]domain.Member, error)
+	DeleteMember(ctx context.Context, id primitive.ObjectID) error
+
+	CreateVerification(ctx context.Context, verification *domain.MemberVerification) error
+	FindVerificationByID(ctx context.Context, id primitive.ObjectID) (*domain.MemberVerification, error)
+	IncrementVerificationAttempts(ctx context.Context, id primitive.ObjectID) error
+	ConsumeVerification(ctx context.Context, id primitive.ObjectID, at time.Time) error
+
+	CreateMemberToken(ctx context.Context, token *domain.MemberToken) error
+	FindMemberTokenByHash(ctx context.Context, hash string) (*domain.MemberToken, error)
+}
+
+// DiscountRepository persiste códigos de descuento, contadores atómicos por
+// usuario y el historial de usos.
+type DiscountRepository interface {
+	CreateCode(ctx context.Context, code *domain.DiscountCode) error
+	CreateCodes(ctx context.Context, codes []domain.DiscountCode) error
+	FindCodeByID(ctx context.Context, id primitive.ObjectID) (*domain.DiscountCode, error)
+	FindCodeByCode(ctx context.Context, centerID primitive.ObjectID, code string) (*domain.DiscountCode, error)
+	FindCodesByCenter(ctx context.Context, centerID primitive.ObjectID) ([]domain.DiscountCode, error)
+	FindCodesByBatch(ctx context.Context, centerID primitive.ObjectID, batchID string) ([]domain.DiscountCode, error)
+	UpdateCodeStatus(ctx context.Context, id primitive.ObjectID, status domain.DiscountCodeStatus) error
+	UpdateBatchStatus(ctx context.Context, centerID primitive.ObjectID, batchID string, status domain.DiscountCodeStatus) error
+	TryIncrementCodeUsed(ctx context.Context, id primitive.ObjectID, maxUses int) (bool, error)
+	ReleaseCodeUsed(ctx context.Context, id primitive.ObjectID) error
+
+	TryReserveCounter(ctx context.Context, centerID primitive.ObjectID, source string, sourceID primitive.ObjectID, identityKey, periodKey string, limit int) (bool, error)
+	FindCounter(ctx context.Context, source string, sourceID primitive.ObjectID, identityKey, periodKey string) (*domain.DiscountUsageCounter, error)
+	ConfirmCounter(ctx context.Context, source string, sourceID primitive.ObjectID, identityKey, periodKey string) error
+	ReleaseCounter(ctx context.Context, source string, sourceID primitive.ObjectID, identityKey, periodKey string) error
+	ReleaseConfirmedCounter(ctx context.Context, source string, sourceID primitive.ObjectID, identityKey, periodKey string) error
+
+	CreateUsage(ctx context.Context, usage *domain.DiscountUsage) error
+	FindUsageByBookingID(ctx context.Context, bookingID primitive.ObjectID) (*domain.DiscountUsage, error)
+	FindUsagesByCodeID(ctx context.Context, codeID primitive.ObjectID) ([]domain.DiscountUsage, error)
+	FindUsagesByCenter(ctx context.Context, centerID primitive.ObjectID, limit int) ([]domain.DiscountUsage, error)
+	UpdateUsageStatus(ctx context.Context, bookingID primitive.ObjectID, status string) error
 }
 
 type UserDeviceRepository interface {
@@ -227,6 +293,7 @@ type EnrichedCourtSchedule struct {
 type CourtScheduleResponse struct {
 	ID       primitive.ObjectID      `json:"id"`
 	Name     string                  `json:"name"`
+	Category domain.SpaceCategory    `json:"category,omitempty"`
 	Schedule []EnrichedCourtSchedule `json:"schedule"`
 }
 
@@ -260,7 +327,7 @@ func (uc *SportCenterUseCase) UpdateGooglePlaceID(ctx context.Context, id primit
 	return u.UpdateGooglePlaceID(ctx, id, placeID)
 }
 
-func (uc *SportCenterUseCase) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
+func (uc *SportCenterUseCase) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
 	if paymentMode != nil && !isValidPaymentMode(*paymentMode) {
 		return ErrInvalidPaymentMode
 	}
@@ -283,7 +350,7 @@ func (uc *SportCenterUseCase) UpdateSettings(ctx context.Context, id primitive.O
 		log.Printf("[MP] Mercado Pago credentials removed for center %s", id.Hex())
 	}
 
-	err = uc.repo.UpdateSettings(ctx, id, slug, cancellationHours, retentionPercent, partialPaymentEnabled, partialPaymentPercent, imageURL, marketplaceFeePercent, isFeatured, branding, address, city, coordinates, paymentMode)
+	err = uc.repo.UpdateSettings(ctx, id, slug, cancellationHours, retentionPercent, partialPaymentEnabled, partialPaymentPercent, imageURL, marketplaceFeePercent, branding, address, city, coordinates, paymentMode)
 	if err != nil {
 		return err
 	}
@@ -629,7 +696,7 @@ func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, c
 	// Fetch courts
 	g.Go(func() error {
 		var err error
-		courts, err = uc.courtRepo.FindByCenterID(ctx, centerID)
+		courts, err = uc.courtRepo.FindAllByCenterID(ctx, centerID)
 		return err
 	})
 
@@ -714,7 +781,12 @@ func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, c
 			recurringHours = make(map[int]*domain.RecurringReservation)
 		}
 
-		baseSlots := uc.courtBaseSlotsForDate(ctx, &court, searchDate)
+		var baseSlots []domain.CourtSchedule
+		if court.IsFacility() {
+			baseSlots = uc.facilityBaseSlotsForDate(ctx, &court, searchDate)
+		} else {
+			baseSlots = uc.courtBaseSlotsForDate(ctx, &court, searchDate)
+		}
 
 		// Recolectar todos los slots primero para detectar overlaps
 		allSlots := []struct {
@@ -802,6 +874,11 @@ func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, c
 			}
 
 			slotTime := time.Date(date.Year(), date.Month(), date.Day(), s.Hour, s.Minutes, 0, 0, loc)
+			if court.IsFacility() {
+				// Una facility de día completo sigue vigente hasta el fin de su día.
+				slotTime = slotTime.AddDate(0, 0, 1)
+				sch.DurationMinutes = facilityDayMinutes
+			}
 			if slotTime.Before(nowInLoc) && sch.Status == "available" {
 				sch.Status = "passed"
 			}
@@ -882,6 +959,7 @@ func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, c
 		result = append(result, CourtScheduleResponse{
 			ID:       court.ID,
 			Name:     court.Name,
+			Category: court.Category,
 			Schedule: schedules,
 		})
 	}
@@ -928,6 +1006,26 @@ func (uc *SportCenterUseCase) courtBaseSlotsForDate(ctx context.Context, court *
 		slots = applyBlocksToSlots(slots, resolved.Blocks)
 	}
 	return slots
+}
+
+// facilityBaseSlotsForDate retorna el bloque único de día completo de una
+// facility (quincho/sede/piscina) para la fecha: libre, o "closed" si el día
+// está bloqueado por el administrador. Un día cerrado por excepción no tiene
+// bloque.
+func (uc *SportCenterUseCase) facilityBaseSlotsForDate(ctx context.Context, court *domain.Court, searchDate time.Time) []domain.CourtSchedule {
+	status := "available"
+	if uc.scheduleResolver != nil {
+		resolved, err := uc.scheduleResolver.ResolveFranjasForDate(ctx, court.ID, searchDate)
+		if err == nil {
+			if resolved.Exception != nil && resolved.Exception.Type == domain.ScheduleExceptionClosed {
+				return []domain.CourtSchedule{}
+			}
+			if len(resolved.Blocks) > 0 {
+				status = "closed"
+			}
+		}
+	}
+	return []domain.CourtSchedule{{Hour: 0, Minutes: 0, Price: court.DayPrice(), Status: status}}
 }
 
 // expandFranjasToSlots expande franjas en bloques reservables de 60 minutos
@@ -1311,6 +1409,10 @@ type CourtRepository interface {
 	Delete(ctx context.Context, id primitive.ObjectID) error
 	FindByID(ctx context.Context, id primitive.ObjectID) (*domain.Court, error)
 	FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.Court, error)
+	// FindAnyByID resuelve cualquier espacio reservable (cancha, quincho, sede
+	// o piscina); FindAllByCenterID lista todos los espacios habilitados.
+	FindAnyByID(ctx context.Context, id primitive.ObjectID) (*domain.Court, error)
+	FindAllByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.Court, error)
 	FindAllPaged(ctx context.Context, page, limit int) ([]domain.Court, int64, error)
 	SyncPartialPaymentSlots(ctx context.Context, centerID primitive.ObjectID, partialPaymentEnabled bool) (int64, error)
 	// SyncPaymentModeSlots alinea el horario legacy del centro con su

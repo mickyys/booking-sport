@@ -1113,7 +1113,7 @@ func (r *BookingRepository) UndoBalancePayment(ctx context.Context, id primitive
 		return err
 	}
 
-	pendingAmount := booking.Price - booking.PaidAmount
+	pendingAmount := booking.ChargedPrice() - booking.PaidAmount
 	if pendingAmount < 0 {
 		pendingAmount = 0
 	}

@@ -41,6 +41,28 @@ type FacilityBookingRepository interface {
 	CancelByID(ctx context.Context, id primitive.ObjectID, cancelledBy string) error
 }
 
+// FacilityConfirmationEmail reúne los datos del correo de confirmación de una
+// reserva de espacio por día completo (una compra, uno o más días).
+type FacilityConfirmationEmail struct {
+	To            string
+	CustomerName  string
+	BookingCode   string
+	CenterName    string
+	SpaceName     string
+	SpaceType     string
+	Dates         []string // yyyy-mm-dd
+	Guests        int
+	Total         float64
+	Paid          float64
+	Pending       float64
+	PaymentMethod string
+}
+
+// FacilityMailer envía el correo de confirmación de espacios por día completo.
+type FacilityMailer interface {
+	SendFacilityBookingConfirmation(ctx context.Context, data FacilityConfirmationEmail) error
+}
+
 // FacilityBookingUseCase gestiona las reservas por día de sedes y piscinas.
 type FacilityBookingUseCase struct {
 	repo       FacilityBookingRepository
@@ -48,6 +70,8 @@ type FacilityBookingUseCase struct {
 	centerRepo SportCenterRepository
 	schedule   *ScheduleUseCase
 	mpClient   *mercadopago.Client
+	mailer     FacilityMailer
+	async      func(func())
 	now        func() time.Time
 }
 
@@ -65,7 +89,50 @@ func NewFacilityBookingUseCase(
 		schedule:   schedule,
 		mpClient:   mpClient,
 		now:        time.Now,
+		async:      func(f func()) { go f() },
 	}
+}
+
+// SetMailer habilita el correo de confirmación (opcional).
+func (uc *FacilityBookingUseCase) SetMailer(m FacilityMailer) { uc.mailer = m }
+
+// notifyConfirmed envía un único correo por compra con todos los días. Un
+// fallo de envío se registra pero nunca afecta a la reserva.
+func (uc *FacilityBookingUseCase) notifyConfirmed(docs []domain.FacilityBooking) {
+	if uc.mailer == nil || len(docs) == 0 || uc.async == nil {
+		return
+	}
+	first := docs[0]
+	if strings.TrimSpace(first.CustomerEmail) == "" {
+		return
+	}
+	data := FacilityConfirmationEmail{
+		To:            first.CustomerEmail,
+		CustomerName:  first.CustomerName,
+		BookingCode:   first.BookingCode,
+		CenterName:    first.SportCenterName,
+		SpaceName:     first.SpaceName,
+		SpaceType:     string(first.SpaceType),
+		Guests:        first.Guests,
+		PaymentMethod: first.PaymentMethod,
+	}
+	for _, d := range docs {
+		data.Dates = append(data.Dates, d.LocalDate)
+		data.Total += d.Price
+		data.Paid += d.PaidAmount
+		data.Pending += d.PendingAmount
+	}
+	sort.Strings(data.Dates)
+	mailer := uc.mailer
+	uc.async(func() {
+		if err := mailer.SendFacilityBookingConfirmation(context.Background(), data); err != nil {
+			logger.FromContext(context.Background()).Errorw("mail_facility_confirmation_error",
+				"msg", fmt.Sprintf("Error al enviar correo de confirmación de la reserva %s", data.BookingCode),
+				"booking_code", data.BookingCode,
+				"error", err,
+			)
+		}
+	})
 }
 
 type CreateFacilityBookingInput struct {
@@ -169,7 +236,7 @@ func (uc *FacilityBookingUseCase) Create(ctx context.Context, in CreateFacilityB
 	if err != nil {
 		return nil, domain.NewNotFoundError("espacio no encontrado")
 	}
-	if !space.Enabled || (space.Category != domain.SpaceCategorySede && space.Category != domain.SpaceCategoryPiscina) {
+	if !space.Enabled || !space.Category.IsFacility() {
 		return nil, domain.NewBadRequestError("este espacio no admite reservas por día")
 	}
 	guests, err := normalizeFacilityGuests(in.Guests)
@@ -213,6 +280,9 @@ func (uc *FacilityBookingUseCase) Create(ctx context.Context, in CreateFacilityB
 	}
 
 	price := space.PricePerDay
+	if price <= 0 {
+		price = space.PriceAllDay
+	}
 	total := price * float64(len(dates))
 	amountToPay := total
 	isPartial := false
@@ -270,6 +340,18 @@ func (uc *FacilityBookingUseCase) Create(ctx context.Context, in CreateFacilityB
 		})
 	}
 
+	if method == FacilityPaymentOnline && len(docs) > 0 {
+		rate := center.MarketplaceFeePercent
+		if rate <= 0 || rate > 100 {
+			rate = defaultMarketplaceFeePercent
+		}
+		perDay := amountToPay / float64(len(docs))
+		for _, d := range docs {
+			d.CommissionRate = rate
+			d.CommissionAmount = marketplaceFeeForAmount(perDay, rate)
+		}
+	}
+
 	if err := uc.repo.CreateMany(ctx, docs); err != nil {
 		if errors.Is(err, domain.ErrBookingSlotTaken) {
 			return nil, domain.NewConflictError("uno de los días seleccionados ya fue reservado")
@@ -294,6 +376,11 @@ func (uc *FacilityBookingUseCase) Create(ctx context.Context, in CreateFacilityB
 		_ = uc.repo.SetPreference(ctx, code, prefID)
 	} else {
 		result.AmountToPay = 0
+		confirmed := make([]domain.FacilityBooking, 0, len(docs))
+		for _, d := range docs {
+			confirmed = append(confirmed, *d)
+		}
+		uc.notifyConfirmed(confirmed)
 	}
 
 	for _, d := range docs {
@@ -476,7 +563,13 @@ func (uc *FacilityBookingUseCase) HandlePaymentNotification(ctx context.Context,
 			return true, nil
 		}
 		paidPerDay := payment.TransactionAmount / float64(len(docs))
-		return true, uc.repo.Confirm(ctx, code, paidPerDay)
+		if err := uc.repo.Confirm(ctx, code, paidPerDay); err != nil {
+			return true, err
+		}
+		if confirmed, err := uc.repo.FindByCode(ctx, code); err == nil {
+			uc.notifyConfirmed(confirmed)
+		}
+		return true, nil
 	case "rejected", "cancelled":
 		return true, uc.repo.CancelByCode(ctx, code, "payment", domain.BookingStatusCancelled)
 	}

@@ -153,3 +153,68 @@ func TestFacilityBookingPaymentModes(t *testing.T) {
 		t.Fatal("pay_at_center no admite pago online")
 	}
 }
+
+func TestFacilityBookingQuinchoUsesAllDayPrice(t *testing.T) {
+	uc, space, _ := newFacilityBookingFixture(PaymentModePayAtCenter, domain.SpaceCategoryQuincho, 20)
+	space.PricePerDay = 0
+	space.PriceAllDay = 55000
+
+	res, err := uc.Create(context.Background(), validInput(space, 8, futureDate(5)))
+	if err != nil {
+		t.Fatalf("un quincho se reserva por día completo: %v", err)
+	}
+	if res.Total != 55000 {
+		t.Fatalf("total = %v, want 55000", res.Total)
+	}
+}
+
+type fakeFacilityMailer struct {
+	sent []FacilityConfirmationEmail
+	err  error
+}
+
+func (f *fakeFacilityMailer) SendFacilityBookingConfirmation(_ context.Context, d FacilityConfirmationEmail) error {
+	f.sent = append(f.sent, d)
+	return f.err
+}
+
+func TestFacilityBookingVenueSendsOneConfirmationEmail(t *testing.T) {
+	uc, space, _ := newFacilityBookingFixture(PaymentModePayAtCenter, domain.SpaceCategoryPiscina, 10)
+	m := &fakeFacilityMailer{}
+	uc.SetMailer(m)
+	uc.async = func(f func()) { f() }
+
+	res, err := uc.Create(context.Background(), validInput(space, 3, futureDate(2), futureDate(3)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.sent) != 1 {
+		t.Fatalf("debe enviarse un correo por compra, got %d", len(m.sent))
+	}
+	got := m.sent[0]
+	if got.BookingCode != res.BookingCode || len(got.Dates) != 2 || got.Total != 20000 || got.Guests != 3 {
+		t.Errorf("datos inesperados: %+v", got)
+	}
+}
+
+func TestFacilityBookingOnlinePendingDoesNotSendEmail(t *testing.T) {
+	uc, space, _ := newFacilityBookingFixture(PaymentModePayOnline, domain.SpaceCategoryPiscina, 10)
+	m := &fakeFacilityMailer{}
+	uc.SetMailer(m)
+	uc.async = func(f func()) { f() }
+
+	// sin cliente de Mercado Pago la preferencia falla, pero nunca debe haber correo
+	_, _ = uc.Create(context.Background(), validInput(space, 2, futureDate(2)))
+	if len(m.sent) != 0 {
+		t.Fatalf("una reserva pendiente de pago no envía correo, got %d", len(m.sent))
+	}
+}
+
+func TestFacilityBookingMailFailureDoesNotFailBooking(t *testing.T) {
+	uc, space, _ := newFacilityBookingFixture(PaymentModePayAtCenter, domain.SpaceCategoryQuincho, 10)
+	uc.SetMailer(&fakeFacilityMailer{err: errors.New("boom")})
+	uc.async = func(f func()) { f() }
+	if _, err := uc.Create(context.Background(), validInput(space, 2, futureDate(2))); err != nil {
+		t.Fatalf("el fallo del correo no debe romper la reserva: %v", err)
+	}
+}

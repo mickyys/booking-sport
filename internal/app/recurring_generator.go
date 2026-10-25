@@ -248,7 +248,7 @@ func (uc *BookingUseCase) generateForRecurring(ctx context.Context, reservation 
 
 		if !courtLoaded {
 			courtLoaded = true
-			court, err = uc.courtRepo.FindByID(ctx, reservation.CourtID)
+			court, err = uc.courtRepo.FindAnyByID(ctx, reservation.CourtID)
 			if err != nil {
 				court = nil
 			}
@@ -344,6 +344,7 @@ func (uc *BookingUseCase) generateForRecurring(ctx context.Context, reservation 
 					_ = uc.holdRepo.Delete(ctx, *pending.HoldID)
 				}
 				_ = uc.repo.MarkExpired(ctx, pending.ID)
+				uc.releaseDiscount(ctx, pending.ID)
 			} else {
 				result.Skipped++
 				result.addIssue(dateStr, "pago pendiente de otro usuario")

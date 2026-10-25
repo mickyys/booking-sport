@@ -254,7 +254,7 @@ func (h *SuperAdminHandler) ExportBookings(c *gin.Context) {
 		_ = w.Write([]string{
 			csvSafe(b.BookingCode), csvSafe(b.SportCenterName), csvSafe(b.CourtName), date,
 			fmt.Sprintf("%02d:%02d", b.Hour, b.Minutes), string(b.Status), csvSafe(b.PaymentMethod),
-			strconv.FormatFloat(b.FinalPrice, 'f', 0, 64), strconv.FormatFloat(b.PaidAmount, 'f', 0, 64),
+			strconv.FormatFloat(b.ChargedPrice(), 'f', 0, 64), strconv.FormatFloat(b.PaidAmount, 'f', 0, 64),
 			strconv.FormatFloat(b.PendingAmount, 'f', 0, 64), csvSafe(client),
 		})
 	}

@@ -87,7 +87,7 @@ func (m *mockTenantRepo) GetCities(ctx context.Context) ([]string, error) {
 func (m *mockTenantRepo) Update(ctx context.Context, center *domain.SportCenter) error {
 	return nil
 }
-func (m *mockTenantRepo) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
+func (m *mockTenantRepo) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
 	return nil
 }
 func (m *mockTenantRepo) Create(ctx context.Context, center *domain.SportCenter) error {

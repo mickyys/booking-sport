@@ -128,3 +128,17 @@ func (b *Booking) EndInstant() time.Time {
 	}
 	return b.StartInstant().Add(time.Duration(b.DurationOrDefault()) * time.Minute)
 }
+
+// ChargedPrice devuelve el monto efectivamente cobrado de una reserva. Las
+// reservas creadas antes de los descuentos no tienen final_price: en ese caso
+// se usa el precio lista para no tratar el cobro como cero. El snapshot de
+// precios distingue ese caso legacy de un descuento real del 100%.
+func (b *Booking) ChargedPrice() float64 {
+	if b == nil {
+		return 0
+	}
+	if b.Pricing != nil || b.FinalPrice > 0 {
+		return b.FinalPrice
+	}
+	return b.Price
+}

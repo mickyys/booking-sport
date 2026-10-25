@@ -39,6 +39,7 @@ type BookingUseCase struct {
 	mongoClient              *mongo.Client
 	mpClient                 *mercadopago.Client
 	scheduleResolver         *ScheduleResolver
+	pricing                  *PricingService
 	occupancy                OccupancyCoordinator
 	occupancyDefault         OccupancyMode
 	policyMu                 sync.Mutex
@@ -49,6 +50,12 @@ type BookingUseCase struct {
 // para resolver precios y validar intervalos al crear reservas.
 func (uc *BookingUseCase) SetScheduleResolver(resolver *ScheduleResolver) {
 	uc.scheduleResolver = resolver
+}
+
+// SetPricingService inyecta el resolvedor central de precios y descuentos.
+// Sin él se mantiene el comportamiento anterior (precio lista).
+func (uc *BookingUseCase) SetPricingService(pricing *PricingService) {
+	uc.pricing = pricing
 }
 
 // SetJobLockRepository inyecta el repositorio de locks distribuidos usado por
@@ -242,7 +249,7 @@ func (uc *BookingUseCase) notifyAdmins(ctx context.Context, booking *domain.Book
 		"status":            string(booking.Status),
 		"payment_method":    booking.PaymentMethod,
 		"payment_status":    paymentStatus,
-		"price":             fmt.Sprintf("%.0f", booking.Price),
+		"price":             fmt.Sprintf("%.0f", booking.ChargedPrice()),
 		"created_at":        booking.CreatedAt.In(loc).Format(time.RFC3339),
 		"sport_center_slug": centerSlug,
 		"center_id":         sportCenterID.Hex(),
@@ -352,7 +359,7 @@ func resolveEffectiveUserID(booking *domain.Booking) string {
 func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int, userID string) (*domain.SlotHold, *domain.Booking, error) {
 	if uc.courtRepo == nil || uc.centerRepo == nil {
 		// sin repos configurados no se puede verificar el estado del centro
-	} else if court, cerr := uc.courtRepo.FindByID(ctx, courtID); cerr == nil && court != nil {
+	} else if court, cerr := uc.courtRepo.FindAnyByID(ctx, courtID); cerr == nil && court != nil {
 		if center, cerr := uc.centerRepo.FindByID(ctx, court.SportCenterID); cerr == nil && center != nil && !center.IsOperational() {
 			return nil, nil, domain.NewConflictError("este centro no está disponible para reservas")
 		}
@@ -450,6 +457,7 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 			uc.holdRepo.Delete(ctx, *pending.HoldID)
 		}
 		uc.repo.MarkExpired(ctx, pending.ID)
+		uc.releaseDiscount(ctx, pending.ID)
 	}
 
 	newHold := &domain.SlotHold{
@@ -529,6 +537,7 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 			)
 			if !deletedHold.BookingID.IsZero() {
 				uc.repo.MarkExpired(ctx, deletedHold.BookingID)
+				uc.releaseDiscount(ctx, deletedHold.BookingID)
 			}
 			return uc.ClaimOrRenewSlot(ctx, courtID, date, hour, minutes, userID)
 		}
@@ -690,6 +699,7 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 	if err != nil {
 		return fmt.Errorf("error updating booking status: %w", err)
 	}
+	uc.releaseDiscount(ctx, id)
 
 	if booking.HoldID != nil {
 		uc.holdRepo.Delete(ctx, *booking.HoldID)
@@ -743,6 +753,7 @@ func (uc *BookingUseCase) DeleteBooking(ctx context.Context, id primitive.Object
 		// la recurrencia para que el generador no la vuelva a crear.
 		uc.markRecurringDateCancelled(ctx, booking.RecurringID, booking.Date)
 	}
+	uc.releaseDiscount(ctx, id)
 	return uc.repo.Delete(ctx, id)
 }
 
@@ -797,7 +808,9 @@ func (uc *BookingUseCase) cancelRecurringOccurrenceBooking(ctx context.Context, 
 			"recurring_id", recurringID.Hex(),
 			"date", date.Format("2006-01-02"),
 		)
+		return
 	}
+	uc.releaseDiscount(ctx, booking.ID)
 }
 
 // RescheduleBooking mueve una reserva confirmada a otra fecha y/u hora. Si se
@@ -831,7 +844,7 @@ func (uc *BookingUseCase) RescheduleBooking(ctx context.Context, id primitive.Ob
 	}
 
 	if courtID != nil && !courtID.IsZero() && *courtID != booking.CourtID {
-		court, err := uc.courtRepo.FindByID(ctx, *courtID)
+		court, err := uc.courtRepo.FindAnyByID(ctx, *courtID)
 		if err != nil {
 			return nil, domain.NewNotFoundError("cancha no encontrada")
 		}
@@ -874,6 +887,7 @@ func (uc *BookingUseCase) RescheduleBooking(ctx context.Context, id primitive.Ob
 				uc.holdRepo.Delete(ctx, *pending.HoldID)
 			}
 			uc.repo.MarkExpired(ctx, pending.ID)
+			uc.releaseDiscount(ctx, pending.ID)
 		} else {
 			return nil, domain.NewConflictError("otro usuario está en proceso de pago para este horario")
 		}
@@ -930,6 +944,10 @@ func (uc *BookingUseCase) RescheduleBooking(ctx context.Context, id primitive.Ob
 // reglas (schedule_rules), resuelve la franja que cubre el intervalo
 // [hora, hora+duración]; si no, usa el horario legacy de la cancha.
 func (uc *BookingUseCase) resolveBookingPrice(ctx context.Context, court *domain.Court, booking *domain.Booking, minutes int) error {
+	if court.IsFacility() {
+		booking.Price = court.DayPrice()
+		return nil
+	}
 	if booking.DurationMinutes <= 0 {
 		booking.DurationMinutes = 60
 	}
@@ -955,6 +973,115 @@ func (uc *BookingUseCase) resolveBookingPrice(ctx context.Context, court *domain
 		}
 	}
 	return fmt.Errorf("hour %02d:%02d not found in schedule", booking.Hour, minutes)
+}
+
+// quoteForBooking resuelve el precio lista y aplica los descuentos vigentes.
+// Si el servicio de precios no está inyectado, conserva el comportamiento
+// anterior (solo precio lista).
+func (uc *BookingUseCase) quoteForBooking(ctx context.Context, court *domain.Court, center *domain.SportCenter, booking *domain.Booking, minutes int) (*QuoteResult, error) {
+	if uc.pricing == nil {
+		return nil, uc.resolveBookingPrice(ctx, court, booking, minutes)
+	}
+	base, err := uc.pricing.BasePrice(ctx, court, booking.Date, booking.Hour, minutes, booking.DurationMinutes)
+	if err != nil {
+		return nil, err
+	}
+	memberID := ""
+	if booking.AdminSource {
+		memberID = booking.MemberID
+	}
+	email := ""
+	if booking.GuestDetails != nil {
+		email = booking.GuestDetails.Email
+	}
+	return uc.pricing.QuoteWithBase(ctx, court, center, base, QuoteInput{
+		CourtID:         court.ID,
+		Date:            booking.Date,
+		Hour:            booking.Hour,
+		Minutes:         minutes,
+		DurationMinutes: booking.DurationMinutes,
+		MemberToken:     booking.MemberToken,
+		MemberID:        memberID,
+		DiscountCode:    booking.DiscountCode,
+		IdentityEmail:   email,
+		IdentityUserID:  booking.UserID,
+		IdentityDevice:  booking.GuestDeviceID,
+	})
+}
+
+// applyQuoteToBooking fija el snapshot de precios que se persiste con la
+// reserva. Price queda como precio lista y FinalPrice como precio cobrado.
+func applyQuoteToBooking(booking *domain.Booking, result *QuoteResult) {
+	if result == nil || result.Quote == nil {
+		booking.FinalPrice = booking.Price
+		return
+	}
+	booking.Price = result.Quote.BasePrice
+	booking.FinalPrice = result.Quote.FinalPrice
+	pricing := &domain.BookingPricing{
+		BasePrice:     result.Quote.BasePrice,
+		DiscountTotal: result.Quote.DiscountTotal,
+		FinalPrice:    result.Quote.FinalPrice,
+		Applied:       result.Quote.Applied,
+		Rejected:      result.Quote.Rejected,
+	}
+	if result.Source == domain.DiscountSourcePlan && !result.MemberID.IsZero() {
+		pricing.MemberID = result.MemberID.Hex()
+	}
+	if result.Source == domain.DiscountSourceCode && !result.SourceID.IsZero() {
+		pricing.CodeID = result.SourceID.Hex()
+	}
+	booking.Pricing = pricing
+}
+
+// applyCommissionSnapshot guarda la comisión de la plataforma para el monto
+// efectivamente cobrado. Es histórica y no se recalcula después.
+func applyCommissionSnapshot(booking *domain.Booking, feePercent int, amount float64) {
+	if booking == nil || booking.Pricing == nil {
+		return
+	}
+	rate := feePercent
+	if rate <= 0 || rate > 100 {
+		rate = defaultMarketplaceFeePercent
+	}
+	booking.Pricing.Commission = &domain.CommissionSnapshot{
+		Rate:   rate,
+		Base:   roundMoney(amount),
+		Amount: marketplaceFeeForAmount(amount, feePercent),
+	}
+}
+
+// reserveDiscount reserva atómicamente el uso del beneficio aplicado. Si el
+// cupo se agotó entre la cotización y la reserva se rechaza la operación para
+// no cobrar un precio distinto al mostrado.
+func (uc *BookingUseCase) reserveDiscount(ctx context.Context, result *QuoteResult, booking *domain.Booking) error {
+	if uc.pricing == nil || result == nil || result.Quote == nil || len(result.Quote.Applied) == 0 {
+		return nil
+	}
+	if booking.ID.IsZero() {
+		booking.ID = primitive.NewObjectID()
+	}
+	if err := uc.pricing.Reserve(ctx, result, booking); err != nil {
+		if errors.Is(err, domain.ErrDiscountUnavailable) {
+			return domain.NewConflictError("el descuento ya no está disponible; actualiza el precio e intenta nuevamente")
+		}
+		return err
+	}
+	return nil
+}
+
+func (uc *BookingUseCase) releaseDiscount(ctx context.Context, bookingID primitive.ObjectID) {
+	if uc.pricing == nil || bookingID.IsZero() {
+		return
+	}
+	_ = uc.pricing.Release(ctx, bookingID)
+}
+
+func (uc *BookingUseCase) confirmDiscount(ctx context.Context, bookingID primitive.ObjectID) {
+	if uc.pricing == nil || bookingID.IsZero() {
+		return
+	}
+	_ = uc.pricing.Confirm(ctx, bookingID)
 }
 
 // checkConfirmedIntervalConflict valida que el intervalo de la reserva no se
@@ -984,13 +1111,66 @@ func (uc *BookingUseCase) checkConfirmedIntervalConflict(ctx context.Context, bo
 	return nil
 }
 
+// facilityDayMinutes es la duración de una reserva de día completo
+// (quincho, sede o piscina): un único bloque 00:00–24:00.
+const facilityDayMinutes = 24 * 60
+
+// applyFacilityDefaults ajusta una reserva a la naturaleza del espacio. Las
+// facilities se reservan por día completo: el bloque siempre parte a las 00:00
+// y dura 24 h. Debe llamarse antes de NormalizeSchedule.
+func applyFacilityDefaults(court *domain.Court, booking *domain.Booking) {
+	if !court.IsFacility() {
+		return
+	}
+	booking.Hour = 0
+	booking.Minutes = 0
+	booking.DurationMinutes = facilityDayMinutes
+	booking.SpaceCategory = court.Category
+	if booking.Guests <= 0 {
+		booking.Guests = 1
+	}
+}
+
+// bookingIsPast indica si el bloque ya pasó. Una facility de día completo sigue
+// vigente durante todo su día.
+func bookingIsPast(court *domain.Court, date time.Time, hour, minutes int, loc *time.Location) bool {
+	now := time.Now().In(loc)
+	if court.IsFacility() {
+		return date.In(loc).Format("2006-01-02") < now.Format("2006-01-02")
+	}
+	return time.Date(date.Year(), date.Month(), date.Day(), hour, minutes, 0, 0, loc).Before(now)
+}
+
+// ensureFacilityDayOpen rechaza el día si el espacio está cerrado por una
+// excepción o bloqueado por el administrador.
+func (uc *BookingUseCase) ensureFacilityDayOpen(ctx context.Context, court *domain.Court, date time.Time) error {
+	if !court.IsFacility() || uc.scheduleResolver == nil {
+		return nil
+	}
+	resolved, err := uc.scheduleResolver.ResolveFranjasForDate(ctx, court.ID, date)
+	if err != nil {
+		return err
+	}
+	if resolved.Exception != nil && resolved.Exception.Type == domain.ScheduleExceptionClosed {
+		return domain.NewConflictError(fmt.Sprintf("el día %s no está disponible", date.Format("02/01/2006")))
+	}
+	if len(resolved.Blocks) > 0 {
+		return domain.NewConflictError(fmt.Sprintf("el día %s está bloqueado", date.Format("02/01/2006")))
+	}
+	return nil
+}
+
 func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *domain.Booking, paymentMethod string) error {
+	court, err := uc.courtRepo.FindAnyByID(ctx, booking.CourtID)
+	if err != nil {
+		return fmt.Errorf("court not found: %w", err)
+	}
+	applyFacilityDefaults(court, booking)
 	if err := booking.NormalizeSchedule(); err != nil {
 		return err
 	}
-	court, err := uc.courtRepo.FindByID(ctx, booking.CourtID)
-	if err != nil {
-		return fmt.Errorf("court not found: %w", err)
+	if err := uc.ensureFacilityDayOpen(ctx, court, booking.Date); err != nil {
+		return err
 	}
 
 	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
@@ -1003,17 +1183,17 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 	// but let's check it for safety or just set it.
 	minutes := booking.Minutes
 
-	if err := uc.resolveBookingPrice(ctx, court, booking, minutes); err != nil {
+	quote, err := uc.quoteForBooking(ctx, court, center, booking, minutes)
+	if err != nil {
 		return err
 	}
 
 	// Check if slot has already passed
-	bookingDateTime := time.Date(booking.Date.Year(), booking.Date.Month(), booking.Date.Day(), booking.Hour, minutes, 0, 0, loc)
-	if bookingDateTime.Before(time.Now().In(loc)) {
+	if bookingIsPast(court, booking.Date, booking.Hour, minutes, loc) {
 		return fmt.Errorf("cannot book a past slot")
 	}
 
-	booking.FinalPrice = booking.Price
+	applyQuoteToBooking(booking, quote)
 	booking.Status = domain.BookingStatusConfirmed
 	booking.BookingCode = generateBookingCode()
 	booking.PaymentMethod = paymentMethod
@@ -1065,14 +1245,21 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 				uc.holdRepo.Delete(ctx, *pending.HoldID)
 			}
 			uc.repo.MarkExpired(ctx, pending.ID)
+			uc.releaseDiscount(ctx, pending.ID)
 		} else {
 			return domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
 		}
 	}
 
-	if err := uc.persistWithOccupancy(ctx, booking, func() error { return uc.repo.Create(ctx, booking) }); err != nil {
+	if err := uc.reserveDiscount(ctx, quote, booking); err != nil {
 		return err
 	}
+	if err := uc.persistWithOccupancy(ctx, booking, func() error { return uc.repo.Create(ctx, booking) }); err != nil {
+		uc.releaseDiscount(ctx, booking.ID)
+		return err
+	}
+	// La reserva interna nace confirmada: el uso del beneficio también.
+	uc.confirmDiscount(ctx, booking.ID)
 
 	log := logger.FromContext(ctx)
 	log.Infow("internal_booking_created",
@@ -1107,7 +1294,7 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 			retentionPercent = 10
 		}
 		paidAmount := booking.PaidAmount
-		pendingAmount := booking.FinalPrice - booking.PaidAmount
+		pendingAmount := booking.ChargedPrice() - booking.PaidAmount
 		go func(b *domain.Booking) {
 			if err := uc.mailer.SendBookingConfirmation(context.Background(), b, cancellationHours, retentionPercent, paidAmount, pendingAmount); err != nil {
 				logger.FromContext(context.Background()).Errorw("mail_booking_confirmation_error",
@@ -1128,7 +1315,7 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 	}
 
 	firstBooking := bookings[0]
-	court, err := uc.courtRepo.FindByID(ctx, firstBooking.CourtID)
+	court, err := uc.courtRepo.FindAnyByID(ctx, firstBooking.CourtID)
 	if err != nil {
 		return nil, fmt.Errorf("court not found: %w", err)
 	}
@@ -1142,27 +1329,33 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 
 	type validatedBooking struct {
 		booking domain.Booking
-		price   float64
+		quote   *QuoteResult
 	}
 
 	validated := make([]validatedBooking, 0, len(bookings))
 
 	for _, b := range bookings {
+		applyFacilityDefaults(court, &b)
 		if err := b.NormalizeSchedule(); err != nil {
 			return nil, err
 		}
-
-		if err := uc.resolveBookingPrice(ctx, court, &b, b.Minutes); err != nil {
+		if err := uc.ensureFacilityDayOpen(ctx, court, b.Date); err != nil {
 			return nil, fmt.Errorf("No disponible: %s - %v", b.Date.Format("02/01/2006"), err)
 		}
 
+		// El batch siempre se crea desde el panel administrativo: se permite
+		// asignar un socio directamente sin verificación por correo.
+		b.AdminSource = true
+		quote, err := uc.quoteForBooking(ctx, court, center, &b, b.Minutes)
+		if err != nil {
+			return nil, fmt.Errorf("No disponible: %s - %v", b.Date.Format("02/01/2006"), err)
+		}
+		applyQuoteToBooking(&b, quote)
+
 		minutes := b.Minutes
-		bookingDateTime := time.Date(b.Date.Year(), b.Date.Month(), b.Date.Day(), b.Hour, minutes, 0, 0, loc)
-		if bookingDateTime.Before(time.Now().In(loc)) {
+		if bookingIsPast(court, b.Date, b.Hour, minutes, loc) {
 			return nil, fmt.Errorf("No disponible: %s - el horario ya pasó", b.Date.Format("02/01/2006"))
 		}
-
-		price := b.Price
 
 		dateStr := b.Date.Format("02/01/2006")
 
@@ -1199,6 +1392,7 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 					uc.holdRepo.Delete(ctx, *pending.HoldID)
 				}
 				uc.repo.MarkExpired(ctx, pending.ID)
+				uc.releaseDiscount(ctx, pending.ID)
 			} else {
 				return nil, fmt.Errorf("No disponible: %s - otro usuario está en proceso de pago", dateStr)
 			}
@@ -1207,8 +1401,6 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 		b.SportCenterID = court.SportCenterID
 		b.SportCenterName = center.Name
 		b.CourtName = court.Name
-		b.Price = price
-		b.FinalPrice = price
 		b.Status = domain.BookingStatusConfirmed
 		b.BookingCode = generateBookingCode()
 		b.PaymentMethod = "internal"
@@ -1225,7 +1417,7 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 			}
 		}
 
-		validated = append(validated, validatedBooking{booking: b, price: price})
+		validated = append(validated, validatedBooking{booking: b, quote: quote})
 	}
 
 	// Atomicidad por espacio: se adquieren todos los intervalos antes de
@@ -1245,6 +1437,20 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 		acquired = append(acquired, &toCreate[i])
 	}
 
+	// Reservar los descuentos antes de insertar. Si un cupo se agotó, se
+	// liberan los ya reservados y los intervalos adquiridos.
+	for i := range toCreate {
+		if err := uc.reserveDiscount(ctx, validated[i].quote, &toCreate[i]); err != nil {
+			for j := 0; j < i; j++ {
+				uc.releaseDiscount(ctx, toCreate[j].ID)
+			}
+			for _, a := range acquired {
+				uc.releaseOccupancy(ctx, a)
+			}
+			return nil, err
+		}
+	}
+
 	created := make([]domain.Booking, 0, len(toCreate))
 	for i := range toCreate {
 		b := &toCreate[i]
@@ -1256,7 +1462,10 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 			err = uc.commitOccupancy(ctx, b, insert)
 		}
 		if err != nil {
-			// Liberar los intervalos que aún no se confirmaron.
+			// Liberar los intervalos y descuentos que aún no se confirmaron.
+			for j := i; j < len(toCreate); j++ {
+				uc.releaseDiscount(ctx, toCreate[j].ID)
+			}
 			for _, rest := range toCreate[i+1:] {
 				r := rest
 				uc.releaseOccupancy(ctx, &r)
@@ -1264,6 +1473,7 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 			return created, fmt.Errorf("error creating booking for %s: %w", b.Date.Format("02/01/2006"), err)
 		}
 		created = append(created, *b)
+		uc.confirmDiscount(ctx, b.ID)
 	}
 
 	log := logger.FromContext(ctx)
@@ -1279,16 +1489,29 @@ func (uc *BookingUseCase) CreateInternalBookingsBatch(ctx context.Context, booki
 }
 
 func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) error {
-	if err := booking.NormalizeSchedule(); err != nil {
-		return err
-	}
-	court, err := uc.courtRepo.FindByID(ctx, booking.CourtID)
+	court, err := uc.courtRepo.FindAnyByID(ctx, booking.CourtID)
 	if err != nil {
 		return fmt.Errorf("court not found: %w", err)
 	}
+	applyFacilityDefaults(court, booking)
+	if err := booking.NormalizeSchedule(); err != nil {
+		return err
+	}
+	if err := uc.ensureFacilityDayOpen(ctx, court, booking.Date); err != nil {
+		return err
+	}
+	if court.IsFacility() && bookingIsPast(court, booking.Date, 0, 0, domain.GetSantiagoLocation()) {
+		return fmt.Errorf("cannot book a past slot")
+	}
 
-	found := false
+	found := court.IsFacility()
+	if found {
+		booking.Price = court.DayPrice()
+	}
 	for _, s := range court.Schedule {
+		if court.IsFacility() {
+			break
+		}
 		if s.Hour == booking.Hour && s.Minutes == booking.Minutes {
 			if s.Status != "available" {
 				return fmt.Errorf("hour %02d:%02d is not available", booking.Hour, booking.Minutes)
@@ -1311,7 +1534,14 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 		return fmt.Errorf("sport center not found: %w", err)
 	}
 
-	booking.FinalPrice = booking.Price
+	// Se aplican los descuentos también en reservas que se pagan en el centro:
+	// el precio mostrado en el checkout debe ser el que se cobra.
+	quote, err := uc.quoteForBooking(ctx, court, center, booking, booking.Minutes)
+	if err != nil {
+		return err
+	}
+	applyQuoteToBooking(booking, quote)
+
 	booking.Status = domain.BookingStatusConfirmed
 	booking.BookingCode = generateBookingCode()
 	booking.PaymentMethod = "presential"
@@ -1359,14 +1589,22 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 				uc.holdRepo.Delete(ctx, *pendingBooking.HoldID)
 			}
 			uc.repo.MarkExpired(ctx, pendingBooking.ID)
+			uc.releaseDiscount(ctx, pendingBooking.ID)
 		} else {
 			return domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
 		}
 	}
 
-	if err := uc.persistWithOccupancy(ctx, booking, func() error { return uc.repo.Create(ctx, booking) }); err != nil {
+	if err := uc.reserveDiscount(ctx, quote, booking); err != nil {
 		return err
 	}
+	if err := uc.persistWithOccupancy(ctx, booking, func() error { return uc.repo.Create(ctx, booking) }); err != nil {
+		uc.releaseDiscount(ctx, booking.ID)
+		return err
+	}
+	// La reserva queda confirmada de inmediato (se paga en el centro): el uso
+	// del beneficio pasa a confirmado para que el límite por persona cuente.
+	uc.confirmDiscount(ctx, booking.ID)
 
 	log.Infow("booking_created",
 		"msg", fmt.Sprintf("Booking creado exitosamente: %s en %s (%s) para el %s a las %02d:%02d hrs — código %s",
@@ -1406,7 +1644,7 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 			retentionPercent = 10
 		}
 		paidAmount := booking.PaidAmount
-		pendingAmount := booking.FinalPrice - booking.PaidAmount
+		pendingAmount := booking.ChargedPrice() - booking.PaidAmount
 		go func(b *domain.Booking) {
 			if err := uc.mailer.SendBookingConfirmation(context.Background(), b, cancellationHours, retentionPercent, paidAmount, pendingAmount); err != nil {
 				logger.FromContext(context.Background()).Errorw("mail_booking_confirmation_error",
@@ -1520,7 +1758,7 @@ var ErrRecurringReservationExists = fmt.Errorf("ya existe una reserva recurrente
 func (uc *BookingUseCase) CreateRecurringReservation(ctx context.Context, reservation *domain.RecurringReservation, date time.Time) error {
 	log := logger.FromContext(ctx)
 
-	court, err := uc.courtRepo.FindByID(ctx, reservation.CourtID)
+	court, err := uc.courtRepo.FindAnyByID(ctx, reservation.CourtID)
 	if err != nil {
 		log.Errorw("create_recurring_reservation_failed",
 			"reason", "court_not_found",
@@ -1762,7 +2000,7 @@ func (uc *BookingUseCase) GetRecurringReservationByID(ctx context.Context, id pr
 		return nil, err
 	}
 
-	court, err := uc.courtRepo.FindByID(ctx, reservation.CourtID)
+	court, err := uc.courtRepo.FindAnyByID(ctx, reservation.CourtID)
 	if err != nil {
 		return nil, fmt.Errorf("court not found: %w", err)
 	}
@@ -1876,7 +2114,7 @@ func (uc *BookingUseCase) GetRecurringReservationsByCourt(ctx context.Context, c
 		return nil, err
 	}
 
-	court, err := uc.courtRepo.FindByID(ctx, courtID)
+	court, err := uc.courtRepo.FindAnyByID(ctx, courtID)
 	if err != nil {
 		return nil, fmt.Errorf("court not found: %w", err)
 	}

@@ -57,6 +57,10 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 		return err
 	}
 
+	if err := ensureMembershipIndexes(ctx, db); err != nil {
+		return err
+	}
+
 	log.Println("[MONGODB] All indexes created successfully")
 	return nil
 }
@@ -243,6 +247,10 @@ func ensureBookingIndexes(ctx context.Context, db *mongo.Database) error {
 			Options: options.Index().SetName("idx_bookings_series_id"),
 		},
 		{
+			Keys:    bson.D{{Key: "group_code", Value: 1}},
+			Options: options.Index().SetName("idx_bookings_group_code").SetSparse(true),
+		},
+		{
 			Keys: bson.D{
 				{Key: "sport_center_id", Value: 1},
 				{Key: "created_at", Value: -1},
@@ -329,6 +337,14 @@ func ensureBookingIndexes(ctx context.Context, db *mongo.Database) error {
 		{
 			Keys:    bson.D{{Key: "hold_id", Value: 1}},
 			Options: options.Index().SetName("idx_bookings_hold_id"),
+		},
+		{
+			Keys: bson.D{
+				{Key: "status", Value: 1},
+				{Key: "payment_method", Value: 1},
+				{Key: "created_at", Value: 1},
+			},
+			Options: options.Index().SetName("idx_bookings_status_payment_created"),
 		},
 		{
 			Keys:    bson.D{{Key: "recurring_id", Value: 1}},
@@ -667,5 +683,134 @@ func ensureScheduleIndexes(ctx context.Context, db *mongo.Database) error {
 	}
 
 	log.Println("[MONGODB] schedule indexes created")
+	return nil
+}
+
+// ensureMembershipIndexes crea los índices de socios, códigos de descuento y
+// contadores de uso. El índice único de documentos por centro es la garantía
+// de aislamiento multi-tenant.
+func ensureMembershipIndexes(ctx context.Context, db *mongo.Database) error {
+	plans := db.Collection("membership_plans")
+	planIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}, {Key: "active", Value: 1}},
+			Options: options.Index().SetName("idx_membership_plans_center_active"),
+		},
+	}
+	if _, err := plans.Indexes().CreateMany(ctx, planIndexes); err != nil {
+		log.Printf("[MONGODB] Error creating membership_plans indexes: %v", err)
+		return err
+	}
+
+	members := db.Collection("members")
+	memberIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}, {Key: "document_number", Value: 1}},
+			Options: options.Index().SetName("idx_members_center_document").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}, {Key: "email", Value: 1}},
+			Options: options.Index().SetName("idx_members_center_email"),
+		},
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}, {Key: "status", Value: 1}},
+			Options: options.Index().SetName("idx_members_center_status"),
+		},
+	}
+	if _, err := members.Indexes().CreateMany(ctx, memberIndexes); err != nil {
+		log.Printf("[MONGODB] Error creating members indexes: %v", err)
+		return err
+	}
+
+	codes := db.Collection("discount_codes")
+	codeIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}, {Key: "code", Value: 1}},
+			Options: options.Index().SetName("idx_discount_codes_center_code").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}, {Key: "batch_id", Value: 1}},
+			Options: options.Index().SetName("idx_discount_codes_center_batch"),
+		},
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}, {Key: "status", Value: 1}},
+			Options: options.Index().SetName("idx_discount_codes_center_status"),
+		},
+	}
+	if _, err := codes.Indexes().CreateMany(ctx, codeIndexes); err != nil {
+		log.Printf("[MONGODB] Error creating discount_codes indexes: %v", err)
+		return err
+	}
+
+	counters := db.Collection("discount_usage_counters")
+	counterIndexes := []mongo.IndexModel{
+		{
+			Keys: bson.D{
+				{Key: "source", Value: 1},
+				{Key: "source_id", Value: 1},
+				{Key: "identity_key", Value: 1},
+				{Key: "period_key", Value: 1},
+			},
+			Options: options.Index().SetName("idx_discount_counters_unique").SetUnique(true),
+		},
+	}
+	if _, err := counters.Indexes().CreateMany(ctx, counterIndexes); err != nil {
+		log.Printf("[MONGODB] Error creating discount_usage_counters indexes: %v", err)
+		return err
+	}
+
+	usages := db.Collection("discount_usages")
+	usageIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "booking_id", Value: 1}},
+			Options: options.Index().SetName("idx_discount_usages_booking").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "source_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("idx_discount_usages_source"),
+		},
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("idx_discount_usages_center"),
+		},
+	}
+	if _, err := usages.Indexes().CreateMany(ctx, usageIndexes); err != nil {
+		log.Printf("[MONGODB] Error creating discount_usages indexes: %v", err)
+		return err
+	}
+
+	verifications := db.Collection("member_verifications")
+	verificationIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "expires_at", Value: 1}},
+			Options: options.Index().SetName("idx_member_verifications_ttl").SetExpireAfterSeconds(0),
+		},
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}, {Key: "member_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("idx_member_verifications_member"),
+		},
+	}
+	if _, err := verifications.Indexes().CreateMany(ctx, verificationIndexes); err != nil {
+		log.Printf("[MONGODB] Error creating member_verifications indexes: %v", err)
+		return err
+	}
+
+	tokens := db.Collection("member_tokens")
+	tokenIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "token_hash", Value: 1}},
+			Options: options.Index().SetName("idx_member_tokens_hash").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "expires_at", Value: 1}},
+			Options: options.Index().SetName("idx_member_tokens_ttl").SetExpireAfterSeconds(0),
+		},
+	}
+	if _, err := tokens.Indexes().CreateMany(ctx, tokenIndexes); err != nil {
+		log.Printf("[MONGODB] Error creating member_tokens indexes: %v", err)
+		return err
+	}
+
+	log.Println("[MONGODB] membership indexes created")
 	return nil
 }

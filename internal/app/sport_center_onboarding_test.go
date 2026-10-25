@@ -356,7 +356,7 @@ func TestUpdateOnboarding_Finalizar_MaterializaEspaciosYReglas(t *testing.T) {
 					},
 				},
 			},
-			{Tipo: "quincho", Cantidad: 1, PriceAllDay: 50000, PriceHalfDay: 30000},
+			{Tipo: "quincho", Cantidad: 1, PriceAllDay: 50000},
 			{Tipo: "sede", Cantidad: 1, PricePerDay: 20000, PricePerMonth: 400000},
 		},
 	})

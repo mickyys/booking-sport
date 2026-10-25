@@ -162,7 +162,6 @@ type SpaceTemplate struct {
 	Rules []ScheduleRule `bson:"rules,omitempty" json:"rules,omitempty"`
 	// Valores de arriendo para facilities (quincho/sede/piscina).
 	PriceAllDay   float64 `bson:"price_all_day,omitempty" json:"price_all_day,omitempty"`
-	PriceHalfDay  float64 `bson:"price_half_day,omitempty" json:"price_half_day,omitempty"`
 	PricePerDay   float64 `bson:"price_per_day,omitempty" json:"price_per_day,omitempty"`
 	PricePerMonth float64 `bson:"price_per_month,omitempty" json:"price_per_month,omitempty"`
 }
@@ -219,10 +218,9 @@ type Facility struct {
 	Enabled       bool               `bson:"enabled" json:"enabled"`
 
 	// Quincho
-	PriceAllDay  float64 `bson:"price_all_day,omitempty" json:"price_all_day,omitempty"`
-	PriceHalfDay float64 `bson:"price_half_day,omitempty" json:"price_half_day,omitempty"`
-	OpenHour     int     `bson:"open_hour,omitempty" json:"open_hour,omitempty"`
-	CloseHour    int     `bson:"close_hour,omitempty" json:"close_hour,omitempty"`
+	PriceAllDay float64 `bson:"price_all_day,omitempty" json:"price_all_day,omitempty"`
+	OpenHour    int     `bson:"open_hour,omitempty" json:"open_hour,omitempty"`
+	CloseHour   int     `bson:"close_hour,omitempty" json:"close_hour,omitempty"`
 
 	// Sede / Piscina
 	PricePerDay     float64 `bson:"price_per_day,omitempty" json:"price_per_day,omitempty"`
@@ -277,10 +275,9 @@ type Space struct {
 	Features []string     `bson:"features,omitempty" json:"features,omitempty"`
 
 	// Quincho
-	PriceAllDay  float64 `bson:"price_all_day,omitempty" json:"price_all_day,omitempty"`
-	PriceHalfDay float64 `bson:"price_half_day,omitempty" json:"price_half_day,omitempty"`
-	OpenHour     int     `bson:"open_hour,omitempty" json:"open_hour,omitempty"`
-	CloseHour    int     `bson:"close_hour,omitempty" json:"close_hour,omitempty"`
+	PriceAllDay float64 `bson:"price_all_day,omitempty" json:"price_all_day,omitempty"`
+	OpenHour    int     `bson:"open_hour,omitempty" json:"open_hour,omitempty"`
+	CloseHour   int     `bson:"close_hour,omitempty" json:"close_hour,omitempty"`
 
 	// Sede / Piscina
 	PricePerDay     float64 `bson:"price_per_day,omitempty" json:"price_per_day,omitempty"`
@@ -338,7 +335,6 @@ func SpaceFromFacility(f *Facility) *Space {
 		Area:            f.Area,
 		Features:        f.Features,
 		PriceAllDay:     f.PriceAllDay,
-		PriceHalfDay:    f.PriceHalfDay,
 		OpenHour:        f.OpenHour,
 		CloseHour:       f.CloseHour,
 		PricePerDay:     f.PricePerDay,
@@ -365,7 +361,6 @@ func SpaceToFacility(s *Space) *Facility {
 		Features:        s.Features,
 		Enabled:         s.Enabled,
 		PriceAllDay:     s.PriceAllDay,
-		PriceHalfDay:    s.PriceHalfDay,
 		OpenHour:        s.OpenHour,
 		CloseHour:       s.CloseHour,
 		PricePerDay:     s.PricePerDay,
@@ -404,11 +399,15 @@ type FacilityBooking struct {
 	// Active es true mientras la reserva ocupa el día; respalda el índice único parcial.
 	Active bool `bson:"active" json:"-"`
 	// PaymentMethod: "mercadopago" (pago online) o "venue" (se paga en el centro).
-	PaymentMethod    string     `bson:"payment_method" json:"payment_method"`
-	Price            float64    `bson:"price" json:"price"`
-	PaidAmount       float64    `bson:"paid_amount" json:"paid_amount"`
-	PendingAmount    float64    `bson:"pending_amount" json:"pending_amount"`
-	IsPartialPayment bool       `bson:"is_partial_payment" json:"is_partial_payment"`
+	PaymentMethod    string  `bson:"payment_method" json:"payment_method"`
+	Price            float64 `bson:"price" json:"price"`
+	PaidAmount       float64 `bson:"paid_amount" json:"paid_amount"`
+	PendingAmount    float64 `bson:"pending_amount" json:"pending_amount"`
+	IsPartialPayment bool    `bson:"is_partial_payment" json:"is_partial_payment"`
+	// CommissionRate/CommissionAmount: comisión de la plataforma sobre lo cobrado
+	// online por este día. Solo aplica al cobro por Mercado Pago.
+	CommissionRate   int        `bson:"commission_rate,omitempty" json:"-"`
+	CommissionAmount float64    `bson:"commission_amount,omitempty" json:"-"`
 	MPPreferenceID   string     `bson:"mp_preference_id,omitempty" json:"-"`
 	MPPaymentID      string     `bson:"mp_payment_id,omitempty" json:"-"`
 	ExpiresAt        *time.Time `bson:"expires_at,omitempty" json:"expires_at,omitempty"`
@@ -454,6 +453,26 @@ type Court struct {
 	CreatedAt     time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt     time.Time          `bson:"updated_at" json:"updated_at"`
 	Schedule      []CourtSchedule    `bson:"schedule" json:"schedule"`
+	// Category y PricePerDay se completan al resolver un espacio no-cancha
+	// (quincho/sede/piscina) como unidad reservable. Vacío = cancha.
+	Category    SpaceCategory `bson:"category,omitempty" json:"category,omitempty"`
+	PricePerDay float64       `bson:"price_per_day,omitempty" json:"-"`
+	PriceAllDay float64       `bson:"price_all_day,omitempty" json:"-"`
+}
+
+// DayPrice es el precio de arrendar la facility por un día completo: sedes y
+// piscinas lo guardan en price_per_day y los quinchos en price_all_day.
+func (c *Court) DayPrice() float64 {
+	if c.PricePerDay > 0 {
+		return c.PricePerDay
+	}
+	return c.PriceAllDay
+}
+
+// IsFacility indica si el espacio reservable es un quincho, sede o piscina
+// (reserva de día completo) en lugar de una cancha por hora.
+func (c *Court) IsFacility() bool {
+	return c != nil && c.Category.IsFacility()
 }
 
 type CourtSchedule struct {
@@ -673,41 +692,64 @@ type Booking struct {
 	Hour           int    `bson:"hour" json:"hour"`
 	Minutes        int    `bson:"minutes" json:"minutes"`
 	// DurationMinutes es la duración de la reserva en minutos. 0 o 60 implica 1 hora.
-	DurationMinutes       int                   `bson:"duration_minutes,omitempty" json:"duration_minutes,omitempty"`
-	FinalPrice            float64               `bson:"final_price" json:"final_price"`
-	Price                 float64               `bson:"price" json:"price"`
-	PaidAmount            float64               `bson:"paid_amount" json:"paid_amount"`
-	PendingAmount         float64               `bson:"pending_amount" json:"pending_amount"`
-	IsPartialPayment      bool                  `bson:"is_partial_payment" json:"is_partial_payment"`
-	PartialPaymentPaid    bool                  `bson:"partial_payment_paid" json:"partial_payment_paid"`
-	Status                BookingStatus         `bson:"status" json:"status"`
-	BookingCode           string                `bson:"booking_code,omitempty" json:"booking_code,omitempty"`
-	PaymentMethod         string                `bson:"payment_method,omitempty" json:"payment_method,omitempty"`
-	PaymentID             string                `bson:"payment_id,omitempty" json:"payment_id,omitempty"`
-	FintocPaymentID       string                `bson:"fintoc_payment_id,omitempty" json:"fintoc_payment_id,omitempty"`
-	FintocPaymentIntentID string                `bson:"fintoc_payment_intent_id,omitempty" json:"fintoc_payment_intent_id,omitempty"`
-	MPPreferenceID        string                `bson:"mp_preference_id,omitempty" json:"mp_preference_id,omitempty"`
-	MPPaymentID           string                `bson:"mp_payment_id,omitempty" json:"mp_payment_id,omitempty"`
-	PaymentInfo           *PaymentInfo          `bson:"payment_info,omitempty" json:"payment_info,omitempty"`
-	Refunds               []Refund              `bson:"refunds,omitempty" json:"refunds,omitempty"`
-	CancelledBy           string                `bson:"cancelled_by,omitempty" json:"cancelled_by,omitempty"`
-	CancellationReason    string                `bson:"cancellation_reason,omitempty" json:"cancellation_reason,omitempty"`
-	CustomerName          string                `bson:"customer_name,omitempty" json:"customer_name,omitempty"`
-	CustomerPhone         string                `bson:"customer_phone,omitempty" json:"customer_phone,omitempty"`
-	SeriesID              string                `bson:"series_id,omitempty" json:"series_id,omitempty"`
-	SeriesStatus          RecurringSeriesStatus `bson:"series_status,omitempty" json:"series_status,omitempty"`
-	SeriesFinishedAt      *time.Time            `bson:"series_finished_at,omitempty" json:"series_finished_at,omitempty"`
-	SeriesFinishedBy      string                `bson:"series_finished_by,omitempty" json:"series_finished_by,omitempty"`
-	SeriesFinishReason    string                `bson:"series_finish_reason,omitempty" json:"series_finish_reason,omitempty"`
-	RecurringID           string                `bson:"recurring_id,omitempty" json:"recurring_id,omitempty"`
-	ModifiedBy            string                `bson:"modified_by,omitempty" json:"modified_by,omitempty"`
-	ModifiedAt            *time.Time            `bson:"modified_at,omitempty" json:"modified_at,omitempty"`
-	HoldID                *primitive.ObjectID   `bson:"hold_id,omitempty" json:"hold_id,omitempty"`
-	LockExpiresAt         *time.Time            `bson:"lock_expires_at,omitempty" json:"lock_expires_at,omitempty"`
-	Version               int                   `bson:"version" json:"version"`
-	ExpiredAt             *time.Time            `bson:"expired_at,omitempty" json:"expired_at,omitempty"`
-	CreatedAt             time.Time             `bson:"created_at" json:"created_at"`
-	UpdatedAt             time.Time             `bson:"updated_at" json:"updated_at"`
+	DurationMinutes       int           `bson:"duration_minutes,omitempty" json:"duration_minutes,omitempty"`
+	FinalPrice            float64       `bson:"final_price" json:"final_price"`
+	Price                 float64       `bson:"price" json:"price"`
+	PaidAmount            float64       `bson:"paid_amount" json:"paid_amount"`
+	PendingAmount         float64       `bson:"pending_amount" json:"pending_amount"`
+	IsPartialPayment      bool          `bson:"is_partial_payment" json:"is_partial_payment"`
+	PartialPaymentPaid    bool          `bson:"partial_payment_paid" json:"partial_payment_paid"`
+	Status                BookingStatus `bson:"status" json:"status"`
+	BookingCode           string        `bson:"booking_code,omitempty" json:"booking_code,omitempty"`
+	PaymentMethod         string        `bson:"payment_method,omitempty" json:"payment_method,omitempty"`
+	PaymentID             string        `bson:"payment_id,omitempty" json:"payment_id,omitempty"`
+	FintocPaymentID       string        `bson:"fintoc_payment_id,omitempty" json:"fintoc_payment_id,omitempty"`
+	FintocPaymentIntentID string        `bson:"fintoc_payment_intent_id,omitempty" json:"fintoc_payment_intent_id,omitempty"`
+	MPPreferenceID        string        `bson:"mp_preference_id,omitempty" json:"mp_preference_id,omitempty"`
+	MPPaymentID           string        `bson:"mp_payment_id,omitempty" json:"mp_payment_id,omitempty"`
+	PaymentInfo           *PaymentInfo  `bson:"payment_info,omitempty" json:"payment_info,omitempty"`
+	// MPStatus es el último estado de pago observado en Mercado Pago.
+	MPStatus                string     `bson:"mp_status,omitempty" json:"mp_status,omitempty"`
+	LastPaymentSyncAt       *time.Time `bson:"last_payment_sync_at,omitempty" json:"last_payment_sync_at,omitempty"`
+	ConfirmationEmailSentAt *time.Time `bson:"confirmation_email_sent_at,omitempty" json:"-"`
+	// Pricing es el snapshot inmutable de precios (precio lista, descuentos y
+	// comisión) aplicado al crear la reserva. No se recalcula después.
+	Pricing *BookingPricing `bson:"pricing,omitempty" json:"pricing,omitempty"`
+	// MemberToken y DiscountCode son entradas transitorias del checkout: se
+	// usan para cotizar y reservar, pero nunca se persisten en la reserva.
+	MemberToken  string `bson:"-" json:"member_token,omitempty"`
+	DiscountCode string `bson:"-" json:"discount_code,omitempty"`
+	// MemberID solo se acepta en el flujo administrativo (reserva creada por
+	// el organizador). El handler público lo ignora.
+	MemberID string `bson:"-" json:"member_id,omitempty"`
+	// AdminSource marca que la reserva se creó desde el panel. No se persiste.
+	AdminSource        bool                  `bson:"-" json:"-"`
+	Refunds            []Refund              `bson:"refunds,omitempty" json:"refunds,omitempty"`
+	CancelledBy        string                `bson:"cancelled_by,omitempty" json:"cancelled_by,omitempty"`
+	CancellationReason string                `bson:"cancellation_reason,omitempty" json:"cancellation_reason,omitempty"`
+	CustomerName       string                `bson:"customer_name,omitempty" json:"customer_name,omitempty"`
+	CustomerPhone      string                `bson:"customer_phone,omitempty" json:"customer_phone,omitempty"`
+	SeriesID           string                `bson:"series_id,omitempty" json:"series_id,omitempty"`
+	SeriesStatus       RecurringSeriesStatus `bson:"series_status,omitempty" json:"series_status,omitempty"`
+	SeriesFinishedAt   *time.Time            `bson:"series_finished_at,omitempty" json:"series_finished_at,omitempty"`
+	SeriesFinishedBy   string                `bson:"series_finished_by,omitempty" json:"series_finished_by,omitempty"`
+	SeriesFinishReason string                `bson:"series_finish_reason,omitempty" json:"series_finish_reason,omitempty"`
+	RecurringID        string                `bson:"recurring_id,omitempty" json:"recurring_id,omitempty"`
+	ModifiedBy         string                `bson:"modified_by,omitempty" json:"modified_by,omitempty"`
+	ModifiedAt         *time.Time            `bson:"modified_at,omitempty" json:"modified_at,omitempty"`
+	HoldID             *primitive.ObjectID   `bson:"hold_id,omitempty" json:"hold_id,omitempty"`
+	LockExpiresAt      *time.Time            `bson:"lock_expires_at,omitempty" json:"lock_expires_at,omitempty"`
+	Version            int                   `bson:"version" json:"version"`
+	ExpiredAt          *time.Time            `bson:"expired_at,omitempty" json:"expired_at,omitempty"`
+	// SpaceCategory es la categoría del espacio al reservar ("" = cancha).
+	SpaceCategory SpaceCategory `bson:"space_category,omitempty" json:"space_category,omitempty"`
+	// Guests es la cantidad de personas (sedes/piscinas).
+	Guests int `bson:"guests,omitempty" json:"guests,omitempty"`
+	// GroupCode agrupa los días de una misma compra multi-día de una facility
+	// (cada día conserva su propio booking_code único).
+	GroupCode string    `bson:"group_code,omitempty" json:"group_code,omitempty"`
+	CreatedAt time.Time `bson:"created_at" json:"created_at"`
+	UpdatedAt time.Time `bson:"updated_at" json:"updated_at"`
 }
 
 func (b *Booking) NormalizeSchedule() error {
@@ -730,6 +772,11 @@ type PaymentInfo struct {
 	Installments      int     `bson:"installments,omitempty" json:"installments,omitempty"`
 	InstallmentAmount float64 `bson:"installment_amount,omitempty" json:"installment_amount,omitempty"`
 	NetReceivedAmount float64 `bson:"net_received_amount,omitempty" json:"net_received_amount,omitempty"`
+	// CommissionRate y CommissionAmount guardan la comisión de ReservaloYA
+	// aplicada al monto cobrado en esta transacción. Es histórica: no se
+	// recalcula si el centro cambia su porcentaje.
+	CommissionRate   int     `bson:"commission_rate,omitempty" json:"commission_rate,omitempty"`
+	CommissionAmount float64 `bson:"commission_amount,omitempty" json:"commission_amount,omitempty"`
 }
 
 type MockPaymentResult struct {

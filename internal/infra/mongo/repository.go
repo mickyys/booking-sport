@@ -382,7 +382,7 @@ func (r *SportCenterRepository) UpdateGooglePlaceID(ctx context.Context, id prim
 	return err
 }
 
-func (r *SportCenterRepository) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
+func (r *SportCenterRepository) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
 	updateData := bson.M{
 		"updated_at": time.Now(),
 	}
@@ -410,9 +410,6 @@ func (r *SportCenterRepository) UpdateSettings(ctx context.Context, id primitive
 	}
 	if paymentMode != nil {
 		updateData["payment_mode"] = *paymentMode
-	}
-	if isFeatured != nil {
-		updateData["is_featured"] = *isFeatured
 	}
 	if address != nil {
 		updateData["address"] = *address
@@ -589,6 +586,36 @@ func (r *CourtRepository) FindByID(ctx context.Context, id primitive.ObjectID) (
 		return nil, err
 	}
 	return &court, nil
+}
+
+// FindAnyByID resuelve cualquier espacio reservable (cancha, quincho, sede o
+// piscina) como unidad de reserva. A diferencia de FindByID, no filtra por
+// categoría y completa Category/PricePerDay para los espacios de día completo.
+func (r *CourtRepository) FindAnyByID(ctx context.Context, id primitive.ObjectID) (*domain.Court, error) {
+	var court domain.Court
+	if err := r.collection.FindOne(ctx, bson.M{"_id": id}).Decode(&court); err != nil {
+		return nil, err
+	}
+	return &court, nil
+}
+
+// FindAllByCenterID lista todos los espacios habilitados del centro (canchas y
+// facilities) para la agenda de administración.
+func (r *CourtRepository) FindAllByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.Court, error) {
+	cursor, err := r.collection.Find(ctx, bson.M{
+		"sport_center_id": centerID,
+		"enabled":         bson.M{"$ne": false},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var courts []domain.Court
+	if err = cursor.All(ctx, &courts); err != nil {
+		return nil, err
+	}
+	return courts, nil
 }
 
 func (r *CourtRepository) Update(ctx context.Context, court *domain.Court) error {

@@ -70,6 +70,13 @@ func (b *Booking) PrepareForWrite(defaultLocation *time.Location) error {
 	b.DurationMinutes = b.DurationOrDefault()
 	b.EndsAt = b.ScheduledAt.UTC().
 		Add(time.Duration(b.DurationMinutes) * time.Minute)
+	if b.SpaceCategory.IsFacility() {
+		// Un día completo termina en la próxima medianoche local: en días con
+		// cambio de horario (23/25 h) sumar 24 h solaparía o dejaría un hueco
+		// con la reserva del día siguiente.
+		local := b.ScheduledAt.In(loc)
+		b.EndsAt = time.Date(local.Year(), local.Month(), local.Day()+1, 0, 0, 0, 0, loc).UTC()
+	}
 
 	return nil
 }

@@ -264,7 +264,7 @@ func validarTemplates(input []domain.SpaceTemplate) ([]domain.SpaceTemplate, err
 				return nil, fmt.Errorf("horarios de %s: %v", p.Tipo, err)
 			}
 		} else {
-			if p.PricePerDay < 0 || p.PricePerMonth < 0 || p.PriceAllDay < 0 || p.PriceHalfDay < 0 {
+			if p.PricePerDay < 0 || p.PricePerMonth < 0 || p.PriceAllDay < 0 {
 				return nil, fmt.Errorf("valores de %s no pueden ser negativos", p.Tipo)
 			}
 		}
@@ -353,7 +353,6 @@ func (uc *SportCenterUseCase) materializeSpaces(ctx context.Context, centerID pr
 				switch category {
 				case domain.SpaceCategoryQuincho:
 					space.PriceAllDay = p.PriceAllDay
-					space.PriceHalfDay = p.PriceHalfDay
 				default: // sede / piscina
 					space.PricePerDay = p.PricePerDay
 					space.PricePerMonth = p.PricePerMonth

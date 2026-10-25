@@ -104,7 +104,6 @@ func (uc *SpaceUseCase) Update(ctx context.Context, id primitive.ObjectID, updat
 	existing.Area = updated.Area
 	existing.Features = updated.Features
 	existing.PriceAllDay = updated.PriceAllDay
-	existing.PriceHalfDay = updated.PriceHalfDay
 	existing.OpenHour = updated.OpenHour
 	existing.CloseHour = updated.CloseHour
 	existing.PricePerDay = updated.PricePerDay
@@ -122,7 +121,6 @@ func (uc *SpaceUseCase) Update(ctx context.Context, id primitive.ObjectID, updat
 		existing.Area = ""
 		existing.Features = nil
 		existing.PriceAllDay = 0
-		existing.PriceHalfDay = 0
 		existing.OpenHour = 0
 		existing.CloseHour = 0
 		existing.PricePerDay = 0
@@ -140,7 +138,6 @@ func (uc *SpaceUseCase) Update(ctx context.Context, id primitive.ObjectID, updat
 		existing.DepositMonths = 0
 	default: // sede / piscina
 		existing.PriceAllDay = 0
-		existing.PriceHalfDay = 0
 		existing.OpenHour = 0
 		existing.CloseHour = 0
 	}

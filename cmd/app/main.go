@@ -118,9 +118,7 @@ func main() {
 	facilityUC := app.NewFacilityUseCase(facilityRepo, sportCenterRepo)
 	spaceUC := app.NewSpaceUseCase(spaceRepo, sportCenterRepo)
 	scheduleUC := app.NewScheduleUseCase(scheduleRuleRepo, scheduleExceptionRepo, blockRepo, spaceRepo, sportCenterRepo)
-	facilityBookingRepo := mongo.NewFacilityBookingRepository(db)
-	scheduleUC.SetBookedDatesSource(facilityBookingRepo)
-	facilityBookingUC := app.NewFacilityBookingUseCase(facilityBookingRepo, spaceRepo, sportCenterRepo, scheduleUC, mercadopago.NewClient(getEnv("MP_ACCESS_TOKEN", "")))
+	legacyFacilityBookingRepo := mongo.NewFacilityBookingRepository(db)
 	sportCenterUC.SetScheduleResolver(app.NewScheduleResolver(scheduleRuleRepo, scheduleExceptionRepo, blockRepo))
 
 	var notifier app.NotificationService
@@ -138,6 +136,8 @@ func main() {
 	}
 
 	var bookingMailer app.Mailer
+	var facilityMailer app.FacilityMailer
+	var memberVerificationMailer app.MemberVerificationMailer
 	mailgunAPIKey := os.Getenv("MAILGUN_API_KEY")
 	mailgunDomain := os.Getenv("MAILGUN_DOMAIN")
 	mailgunFrom := os.Getenv("MAILGUN_FROM")
@@ -148,7 +148,10 @@ func main() {
 
 	if mailgunAPIKey != "" && mailgunDomain != "" && mailgunFrom != "" {
 		mgMailer := mg.NewMailgunMailer(mailgunAPIKey, mailgunDomain, mailgunFrom, mailgunTemplate, mailgunTemplatePaid, mailgunTemplateCancel, mailgunTemplateWelcomeCenter)
+		mgMailer.SetFacilityTemplate(os.Getenv("MAILGUN_TEMPLATE_FACILITY"))
 		bookingMailer = mgMailer
+		facilityMailer = mgMailer
+		memberVerificationMailer = mgMailer
 		log.Infow("mailgun_initialized",
 			"domain", mailgunDomain,
 			"from", logger.MaskEmail(mailgunFrom),
@@ -158,8 +161,18 @@ func main() {
 	}
 
 	bookingUC := app.NewBookingUseCase(bookingRepo, holdRepo, courtRepo, sportCenterRepo, userRepo, userDeviceRepo, bookingMailer, notifier, recurringReservationRepo, client, mercadopago.NewClient(getEnv("MP_ACCESS_TOKEN", "")))
-	bookingUC.SetScheduleResolver(app.NewScheduleResolver(scheduleRuleRepo, scheduleExceptionRepo, blockRepo))
+	bookingResolver := app.NewScheduleResolver(scheduleRuleRepo, scheduleExceptionRepo, blockRepo)
+	bookingUC.SetScheduleResolver(bookingResolver)
 	bookingUC.SetJobLockRepository(jobLockRepo)
+
+	// Socios y códigos de descuento
+	membershipRepo := mongo.NewMembershipRepository(db)
+	discountRepo := mongo.NewDiscountRepository(db)
+	membershipUC := app.NewMembershipUseCase(membershipRepo, sportCenterRepo)
+	discountUC := app.NewDiscountUseCase(discountRepo, sportCenterRepo)
+	memberVerificationUC := app.NewMemberVerificationService(membershipRepo, sportCenterRepo, memberVerificationMailer)
+	pricingService := app.NewPricingService(courtRepo, sportCenterRepo, spaceRepo, bookingResolver, membershipRepo, discountRepo)
+	bookingUC.SetPricingService(pricingService)
 
 	if getEnv("BOOKING_REDIS_AUTHORITY", "false") == "true" {
 		maxDuration, err := time.ParseDuration(getEnv("BOOKING_MAX_DURATION", "24h"))
@@ -212,10 +225,26 @@ func main() {
 	}
 	sportCenterHandler := infra.NewSportCenterHandler(sportCenterUC, auth0Mgmt, bookingMailer, facilityUC)
 	courtHandler := infra.NewCourtHandler(courtUC)
+	// Sedes y piscinas se reservan por día completo y viven en `bookings`, igual
+	// que las canchas. `FACILITY_BOOKINGS_STORE=legacy` vuelve a la colección
+	// anterior; mientras tanto el store lee también las reservas legacy.
+	var facilityBookingStore app.FacilityBookingRepository = app.NewBookingBackedFacilityStore(bookingUC, legacyFacilityBookingRepo)
+	if getEnv("FACILITY_BOOKINGS_STORE", "bookings") == "legacy" {
+		facilityBookingStore = legacyFacilityBookingRepo
+	}
+	scheduleUC.SetBookedDatesSource(facilityBookingStore)
+	facilityBookingUC := app.NewFacilityBookingUseCase(facilityBookingStore, spaceRepo, sportCenterRepo, scheduleUC, mercadopago.NewClient(getEnv("MP_ACCESS_TOKEN", "")))
+	if facilityMailer != nil {
+		facilityBookingUC.SetMailer(facilityMailer)
+	}
+
 	bookingHandler := infra.NewBookingHandler(bookingUC)
 	bookingHandler.SetFacilityBookings(facilityBookingUC)
 	facilityBookingHandler := infra.NewFacilityBookingHandler(facilityBookingUC)
 	contactHandler := infra.NewContactHandler(bookingMailer)
+	membershipHandler := infra.NewMembershipHandler(membershipUC, memberVerificationUC, sportCenterRepo)
+	discountHandler := infra.NewDiscountHandler(discountUC, membershipUC)
+	pricingHandler := infra.NewPricingHandler(pricingService)
 
 	mpConnectHandler := infra.NewMPConnectHandler(mpConnectUC)
 
@@ -312,6 +341,11 @@ func main() {
 	r.POST("/api/bookings/code/:code/cancel", bookingHandler.CancelByBookingCode)
 	r.POST("/api/bookings", bookingHandler.CreateBooking)
 	r.POST("/api/contact", contactHandler.Submit)
+
+	// Verificación de socios y cotización con descuentos (público, sin login)
+	r.POST("/api/members/verify/request", membershipHandler.RequestVerification)
+	r.POST("/api/members/verify/confirm", membershipHandler.ConfirmVerification)
+	r.POST("/api/pricing/quote", pricingHandler.Quote)
 	// Disponibilidad pública de un espacio (usado por facilities: quincho/sede/piscina)
 	r.GET("/api/spaces/:id/availability", scheduleHandler.PublicAvailability)
 	// MercadoPago Connect (marketplace) - callback público (redirección de MP)
@@ -379,6 +413,23 @@ func main() {
 		api.DELETE("/admin/spaces/:id/blocks/:blockId", scheduleHandler.DeleteBlock)
 		api.POST("/admin/bookings/internal", bookingHandler.CreateInternalBooking)
 		api.POST("/admin/bookings/internal/batch", bookingHandler.CreateInternalBookingsBatch)
+
+		// Socios y códigos de descuento
+		api.GET("/admin/membership/plans", membershipHandler.ListPlans)
+		api.POST("/admin/membership/plans", membershipHandler.CreatePlan)
+		api.PUT("/admin/membership/plans/:id", membershipHandler.UpdatePlan)
+		api.DELETE("/admin/membership/plans/:id", membershipHandler.DeletePlan)
+		api.GET("/admin/members", membershipHandler.ListMembers)
+		api.POST("/admin/members", membershipHandler.CreateMember)
+		api.PUT("/admin/members/:id", membershipHandler.UpdateMember)
+		api.DELETE("/admin/members/:id", membershipHandler.DeleteMember)
+		api.GET("/admin/discount-codes", discountHandler.ListCodes)
+		api.POST("/admin/discount-codes", discountHandler.CreateCode)
+		api.POST("/admin/discount-codes/batch", discountHandler.CreateBatch)
+		api.GET("/admin/discount-codes/export", discountHandler.ExportCodes)
+		api.POST("/admin/discount-codes/:id/void", discountHandler.VoidCode)
+		api.POST("/admin/discount-codes/batches/:batchId/void", discountHandler.VoidBatch)
+		api.GET("/admin/discount-usages", discountHandler.ListUsages)
 		api.POST("/admin/bookings/:id/pay-balance", bookingHandler.MarkPartialPaymentAsPaid)
 		api.PATCH("/admin/bookings/:id/undo-pay-balance", bookingHandler.UndoBalancePayment)
 		api.PATCH("/admin/bookings/:id/reschedule", bookingHandler.RescheduleBooking)

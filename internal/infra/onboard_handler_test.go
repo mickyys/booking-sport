@@ -52,7 +52,7 @@ func (m *mockCenterRepoForOnboardHandler) Update(ctx context.Context, center *do
 	m.lastUpdated = center
 	return nil
 }
-func (m *mockCenterRepoForOnboardHandler) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
+func (m *mockCenterRepoForOnboardHandler) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
 	m.settingsCalls++
 	m.lastPaymentMode = paymentMode
 	return nil

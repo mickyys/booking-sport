@@ -316,7 +316,7 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 
 	maxRefundAmount := booking.PaidAmount
 	if !booking.IsPartialPayment {
-		maxRefundAmount = (booking.Price * float64(refundPercentage)) / 100
+		maxRefundAmount = (booking.ChargedPrice() * float64(refundPercentage)) / 100
 	}
 
 	// Nueva estructura de respuesta para evitar exponer IDs sensibles y agregar nombres
@@ -336,7 +336,9 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 			"duration_minutes":     booking.DurationOrDefault(),
 			"hour":                 booking.Hour,
 			"minutes":              booking.Minutes,
-			"price":                booking.Price,
+			"price":                booking.ChargedPrice(),
+			"list_price":           booking.Price,
+			"pricing":              booking.Pricing,
 			"status":               booking.Status,
 			"payment_method":       booking.PaymentMethod,
 			"booking_code":         booking.BookingCode,
@@ -479,7 +481,7 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 
 	maxRefundAmount := booking.PaidAmount
 	if !booking.IsPartialPayment {
-		maxRefundAmount = (booking.Price * float64(refundPercentage)) / 100
+		maxRefundAmount = (booking.ChargedPrice() * float64(refundPercentage)) / 100
 	}
 
 	response := gin.H{
@@ -502,7 +504,9 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 			"duration_minutes":     booking.DurationOrDefault(),
 			"hour":                 booking.Hour,
 			"minutes":              booking.Minutes,
-			"price":                booking.Price,
+			"price":                booking.ChargedPrice(),
+			"list_price":           booking.Price,
+			"pricing":              booking.Pricing,
 			"status":               booking.Status,
 			"payment_method":       booking.PaymentMethod,
 			"booking_code":         booking.BookingCode,
@@ -562,6 +566,9 @@ func (h *BookingHandler) CreateInternalBooking(c *gin.Context) {
 		return
 	}
 	booking.Booking.SeriesID = booking.SeriesID
+	// La reserva interna la crea un administrador: puede asignar un socio sin
+	// verificación por correo.
+	booking.Booking.AdminSource = true
 	// Asegurar que minutes tenga valor por defecto
 	if booking.Booking.Minutes == 0 {
 		booking.Booking.Minutes = 0
@@ -623,6 +630,11 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 		return
 	}
 	booking.Booking.SeriesID = booking.SeriesID
+
+	// Flujo público: el socio solo se acredita con el token emitido tras
+	// verificar el correo. Nunca se acepta un member_id enviado por el cliente.
+	booking.Booking.MemberID = ""
+	booking.Booking.AdminSource = false
 
 	if booking.Partial {
 		booking.Booking.IsPartialPayment = true
@@ -776,6 +788,8 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 	}
 
 	input.Booking.GuestDeviceID = c.GetString("guest_device_id")
+	input.Booking.MemberID = ""
+	input.Booking.AdminSource = false
 
 	initPoint, err := h.useCase.CreateMercadoPagoPayment(c.Request.Context(), &input.Booking, input.Partial)
 	if err != nil {

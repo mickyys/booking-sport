@@ -37,7 +37,7 @@ func (uc *BookingUseCase) processMercadoPagoRefund(ctx context.Context, booking 
 	if booking.IsPartialPayment {
 		refundAmount = booking.PaidAmount
 	} else {
-		retentionAmount := (booking.Price * float64(100-refundPercentage)) / 100
+		retentionAmount := (booking.ChargedPrice() * float64(100-refundPercentage)) / 100
 		refundAmount = booking.PaidAmount - retentionAmount
 		if refundAmount <= 0 {
 			log.Infow("booking_cancel_no_refund",

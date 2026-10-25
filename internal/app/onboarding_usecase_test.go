@@ -55,7 +55,7 @@ func (m *mockCenterRepoForOnboarding) Update(ctx context.Context, center *domain
 	return nil
 }
 
-func (m *mockCenterRepoForOnboarding) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, isFeatured *bool, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
+func (m *mockCenterRepoForOnboarding) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
 	m.settingsCalls++
 	m.lastPaymentMode = paymentMode
 	return nil

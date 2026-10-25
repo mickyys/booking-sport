@@ -492,7 +492,6 @@ func (h *SportCenterHandler) UpdateSportCenterSettings(c *gin.Context) {
 		PartialPaymentPercent *int                        `json:"partial_payment_percent"`
 		ImageURL              *string                     `json:"image_url"`
 		MarketplaceFeePercent *int                        `json:"marketplace_fee_percent"`
-		IsFeatured            *bool                       `json:"is_featured"`
 		Branding              *domain.SportCenterBranding `json:"branding"`
 		Address               *string                     `json:"address"`
 		City                  *string                     `json:"city"`
@@ -516,7 +515,7 @@ func (h *SportCenterHandler) UpdateSportCenterSettings(c *gin.Context) {
 		}
 	}
 
-	if err := h.useCase.UpdateSettings(c.Request.Context(), id, body.Slug, body.CancellationHours, body.RetentionPercent, body.PartialPaymentEnabled, body.PartialPaymentPercent, body.ImageURL, body.MarketplaceFeePercent, body.IsFeatured, body.Branding, body.Address, body.City, body.Coordinates, body.PaymentMode); err != nil {
+	if err := h.useCase.UpdateSettings(c.Request.Context(), id, body.Slug, body.CancellationHours, body.RetentionPercent, body.PartialPaymentEnabled, body.PartialPaymentPercent, body.ImageURL, body.MarketplaceFeePercent, body.Branding, body.Address, body.City, body.Coordinates, body.PaymentMode); err != nil {
 		if errors.Is(err, app.ErrInvalidPaymentMode) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return

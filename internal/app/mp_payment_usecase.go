@@ -28,6 +28,27 @@ func marketplaceFeeForAmount(amount float64, feePercent int) float64 {
 	return math.Round(fee*100) / 100
 }
 
+// computeAmountToPay resuelve cuánto se cobra ahora: el total o el abono
+// configurado por el centro. Se usa tanto en el primer intento de pago como
+// al reintentar una reserva pendiente con un descuento recalculado.
+func computeAmountToPay(price float64, usePartialPayment bool, partialPaymentEnabled *bool, center *domain.SportCenter) (float64, bool) {
+	if !usePartialPayment {
+		return price, false
+	}
+	enabled := center.PartialPaymentEnabled
+	if partialPaymentEnabled != nil {
+		enabled = *partialPaymentEnabled
+	}
+	if !enabled {
+		return price, false
+	}
+	percent := center.PartialPaymentPercent
+	if percent <= 0 || percent > 100 {
+		percent = 50
+	}
+	return (price * float64(percent)) / 100, true
+}
+
 // buildPreferenceMetadata construye la metadata asociada a una preferencia de
 // pago, útil para auditar y correlacionar en el webhook.
 func buildPreferenceMetadata(bookingCode, courtName, centerName, centerID string, hour int, date time.Time, isPartial bool) map[string]any {
@@ -42,14 +63,30 @@ func buildPreferenceMetadata(bookingCode, courtName, centerName, centerID string
 	}
 }
 
+// slotTimeLabel describe el horario de la reserva para títulos de pago.
+func slotTimeLabel(court *domain.Court, hour int) string {
+	if court.IsFacility() {
+		return "día completo"
+	}
+	return fmt.Sprintf("%02d:00 hrs", hour)
+}
+
 func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking *domain.Booking, usePartialPayment bool) (string, error) {
-	court, err := uc.courtRepo.FindByID(ctx, booking.CourtID)
+	court, err := uc.courtRepo.FindAnyByID(ctx, booking.CourtID)
 	if err != nil {
 		return "", fmt.Errorf("court not found: %w", err)
 	}
 
 	loc := domain.GetSantiagoLocation()
 	booking.Date = time.Date(booking.Date.In(loc).Year(), booking.Date.In(loc).Month(), booking.Date.In(loc).Day(), 0, 0, 0, 0, loc)
+
+	applyFacilityDefaults(court, booking)
+	if err := booking.NormalizeSchedule(); err != nil {
+		return "", err
+	}
+	if err := uc.ensureFacilityDayOpen(ctx, court, booking.Date); err != nil {
+		return "", err
+	}
 
 	minutes := booking.Minutes
 	if booking.DurationMinutes <= 0 {
@@ -60,8 +97,21 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	resolved := false
 	var partialPaymentEnabled *bool
 
+	// Las facilities se cobran por día completo: el precio vive en el espacio y
+	// el pago online lo gobierna la modalidad del centro, no las franjas.
+	if court.IsFacility() {
+		if bookingIsPast(court, booking.Date, 0, 0, loc) {
+			return "", fmt.Errorf("cannot book a past slot")
+		}
+		if court.DayPrice() <= 0 {
+			return "", fmt.Errorf("este espacio no tiene precio configurado para pago online")
+		}
+		price = court.DayPrice()
+		resolved = true
+	}
+
 	// Resolución por reglas (si el espacio tiene schedule_rules)
-	if uc.scheduleResolver != nil {
+	if !resolved && uc.scheduleResolver != nil {
 		franja, hasRules, err := uc.scheduleResolver.FindFranjaForBooking(ctx, court.ID, booking.Date, booking.Hour, minutes, booking.DurationMinutes)
 		if err != nil {
 			return "", err
@@ -127,29 +177,23 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		return "", fmt.Errorf("online payments are disabled for this sport center")
 	}
 
-	amountToPay := price
-	isPartial := false
-
-	if usePartialPayment {
-		partialEnabled := false
-		if partialPaymentEnabled != nil {
-			partialEnabled = *partialPaymentEnabled
-		} else {
-			partialEnabled = center.PartialPaymentEnabled
+	var quote *QuoteResult
+	if uc.pricing != nil {
+		quote, err = uc.quoteForBooking(ctx, court, center, booking, minutes)
+		if err != nil {
+			return "", err
 		}
-
-		if partialEnabled {
-			percent := center.PartialPaymentPercent
-			if percent <= 0 || percent > 100 {
-				percent = 50
-			}
-			amountToPay = (price * float64(percent)) / 100
-			isPartial = true
-		}
+		applyQuoteToBooking(booking, quote)
+		price = booking.FinalPrice
 	}
 
-	booking.Price = price
-	booking.FinalPrice = price
+	amountToPay, isPartial := computeAmountToPay(price, usePartialPayment, partialPaymentEnabled, center)
+
+	if quote == nil {
+		booking.Price = price
+		booking.FinalPrice = price
+	}
+	applyCommissionSnapshot(booking, center.MarketplaceFeePercent, amountToPay)
 	booking.PaidAmount = 0
 	booking.PendingAmount = price
 	booking.IsPartialPayment = isPartial
@@ -193,8 +237,33 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		existingBooking.GuestDetails = booking.GuestDetails
 		existingBooking.CustomerName = booking.CustomerName
 		existingBooking.CustomerPhone = booking.CustomerPhone
-		existingBooking.FinalPrice = price
-		existingBooking.Price = price
+		// Se libera el uso anterior antes de recotizar: el contador por
+		// persona incluye esta misma reserva y, sin liberarlo, un código de un
+		// solo uso se rechazaría al reintentar el pago.
+		previousQuote := quote
+		uc.releaseDiscount(ctx, existingBooking.ID)
+		if uc.pricing != nil {
+			quote, err = uc.quoteForBooking(ctx, court, center, booking, minutes)
+			if err != nil {
+				if previousQuote != nil {
+					_ = uc.reserveDiscount(ctx, previousQuote, existingBooking)
+				}
+				return "", err
+			}
+			applyQuoteToBooking(booking, quote)
+			price = booking.FinalPrice
+			amountToPay, isPartial = computeAmountToPay(price, usePartialPayment, partialPaymentEnabled, center)
+		}
+		if quote != nil {
+			applyQuoteToBooking(existingBooking, quote)
+			if err := uc.reserveDiscount(ctx, quote, existingBooking); err != nil {
+				return "", err
+			}
+		} else {
+			existingBooking.FinalPrice = price
+			existingBooking.Price = price
+		}
+		applyCommissionSnapshot(existingBooking, center.MarketplaceFeePercent, amountToPay)
 		existingBooking.PaidAmount = 0
 		existingBooking.PendingAmount = price
 		existingBooking.IsPartialPayment = isPartial
@@ -238,9 +307,9 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		failureURL := fmt.Sprintf("%s/booking/failure", urlFrontend)
 		pendingURL := fmt.Sprintf("%s?code=%s", urlPaymentCallback, existingBooking.BookingCode)
 
-		title := fmt.Sprintf("Reserva %s - %s - %s %02d:00 hrs", court.Name, center.Name, existingBooking.Date.Format("02/01/2006"), existingBooking.Hour)
+		title := fmt.Sprintf("Reserva %s - %s - %s %s", court.Name, center.Name, existingBooking.Date.Format("02/01/2006"), slotTimeLabel(court, existingBooking.Hour))
 		if isPartial {
-			title = fmt.Sprintf("Abono Reserva %s - %s - %s %02d:00 hrs", court.Name, center.Name, existingBooking.Date.Format("02/01/2006"), existingBooking.Hour)
+			title = fmt.Sprintf("Abono Reserva %s - %s - %s %s", court.Name, center.Name, existingBooking.Date.Format("02/01/2006"), slotTimeLabel(court, existingBooking.Hour))
 		}
 		externalRef := existingBooking.BookingCode
 		payerName, payerSurname := splitFullName(existingBooking.CustomerName)
@@ -279,9 +348,15 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		uc.holdRepo.Delete(ctx, hold.ID)
 		return "", err
 	}
+	if err := uc.reserveDiscount(ctx, quote, booking); err != nil {
+		uc.holdRepo.Delete(ctx, hold.ID)
+		uc.releaseOccupancy(ctx, booking)
+		return "", err
+	}
 	if err := uc.repo.Create(ctx, booking); err != nil {
 		uc.holdRepo.Delete(ctx, hold.ID)
 		uc.releaseOccupancy(ctx, booking)
+		uc.releaseDiscount(ctx, booking.ID)
 		return "", err
 	}
 
@@ -297,9 +372,9 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	failureURL := fmt.Sprintf("%s/booking/failure", urlFrontend)
 	pendingURL := fmt.Sprintf("%s?code=%s", urlPaymentCallback, booking.BookingCode)
 
-	title := fmt.Sprintf("Reserva %s - %s - %s %02d:00 hrs", court.Name, center.Name, booking.Date.Format("02/01/2006"), booking.Hour)
+	title := fmt.Sprintf("Reserva %s - %s - %s %s", court.Name, center.Name, booking.Date.Format("02/01/2006"), slotTimeLabel(court, booking.Hour))
 	if isPartial {
-		title = fmt.Sprintf("Abono Reserva %s - %s - %s %02d:00 hrs", court.Name, center.Name, booking.Date.Format("02/01/2006"), booking.Hour)
+		title = fmt.Sprintf("Abono Reserva %s - %s - %s %s", court.Name, center.Name, booking.Date.Format("02/01/2006"), slotTimeLabel(court, booking.Hour))
 	}
 	externalRef := booking.BookingCode
 	payerName, payerSurname := splitFullName(booking.CustomerName)
@@ -350,12 +425,13 @@ func (uc *BookingUseCase) MockConfirmPayment(ctx context.Context, bookingCode, s
 
 	switch status {
 	case "approved":
+		amount := booking.ChargedPrice()
 		paymentInfo := &domain.PaymentInfo{
 			PaymentMethodID:   "mock_credit_card",
 			PaymentMethodType: "credit_card",
 			Installments:      1,
-			InstallmentAmount: booking.Price,
-			NetReceivedAmount: booking.Price,
+			InstallmentAmount: amount,
+			NetReceivedAmount: amount,
 			CardLastFour:      "2580",
 			CardholderName:    "Test User",
 		}
@@ -367,9 +443,10 @@ func (uc *BookingUseCase) MockConfirmPayment(ctx context.Context, bookingCode, s
 		if err := uc.beginConfirm(ctx, booking); err != nil {
 			return nil, fmt.Errorf("failed to confirm booking: %w", err)
 		}
-		if err := uc.repo.ConfirmPayment(ctx, booking.ID, domain.BookingStatusConfirmed, booking.Price, 0, paymentInfo); err != nil {
+		if err := uc.repo.ConfirmPayment(ctx, booking.ID, domain.BookingStatusConfirmed, amount, 0, paymentInfo); err != nil {
 			return nil, fmt.Errorf("failed to confirm booking: %w", err)
 		}
+		uc.confirmDiscount(ctx, booking.ID)
 		uc.finishConfirm(ctx, booking)
 
 	case "rejected":
@@ -377,9 +454,10 @@ func (uc *BookingUseCase) MockConfirmPayment(ctx context.Context, bookingCode, s
 			return nil, fmt.Errorf("failed to store mock payment id: %w", err)
 		}
 
-		if err := uc.repo.ConfirmPayment(ctx, booking.ID, domain.BookingStatusCancelled, 0, booking.Price, nil); err != nil {
+		if err := uc.repo.ConfirmPayment(ctx, booking.ID, domain.BookingStatusCancelled, 0, booking.ChargedPrice(), nil); err != nil {
 			return nil, fmt.Errorf("failed to cancel booking: %w", err)
 		}
+		uc.releaseDiscount(ctx, booking.ID)
 		uc.releaseOccupancy(ctx, booking)
 
 	default:
@@ -478,10 +556,11 @@ func (uc *BookingUseCase) HandleMercadoPagoWebhook(ctx context.Context, paymentI
 	}
 
 	paidAmount := 0.0
-	pendingAmount := booking.Price
+	charged := booking.ChargedPrice()
+	pendingAmount := charged
 	if newStatus == domain.BookingStatusConfirmed {
 		paidAmount = payment.TransactionAmount
-		pendingAmount = booking.Price - paidAmount
+		pendingAmount = charged - paidAmount
 		if pendingAmount < 0 {
 			pendingAmount = 0
 		}
@@ -515,6 +594,17 @@ func (uc *BookingUseCase) HandleMercadoPagoWebhook(ctx context.Context, paymentI
 		}
 	}
 
+	if newStatus == domain.BookingStatusConfirmed {
+		// La comisión se calcula sobre el monto realmente cobrado por MP, no
+		// sobre el estimado al crear la preferencia.
+		rate := center.MarketplaceFeePercent
+		if rate <= 0 || rate > 100 {
+			rate = defaultMarketplaceFeePercent
+		}
+		paymentInfo.CommissionRate = rate
+		paymentInfo.CommissionAmount = marketplaceFeeForAmount(paidAmount, rate)
+	}
+
 	if err := uc.repo.ConfirmPayment(ctx, booking.ID, newStatus, paidAmount, pendingAmount, paymentInfo); err != nil {
 		return fmt.Errorf("error updating booking status: %w", err)
 	}
@@ -527,8 +617,10 @@ func (uc *BookingUseCase) HandleMercadoPagoWebhook(ctx context.Context, paymentI
 		}
 	}
 	if newStatus == domain.BookingStatusConfirmed {
+		uc.confirmDiscount(ctx, booking.ID)
 		uc.finishConfirm(ctx, booking)
 	} else {
+		uc.releaseDiscount(ctx, booking.ID)
 		uc.releaseOccupancy(ctx, booking)
 	}
 
@@ -641,6 +733,7 @@ func (uc *BookingUseCase) ValidateMercadoPagoPaymentAndGetCode(ctx context.Conte
 			if err := uc.repo.Update(ctx, booking); err != nil {
 				return booking.BookingCode, fmt.Errorf("error updating booking: %w", err)
 			}
+			uc.confirmDiscount(ctx, booking.ID)
 			uc.finishConfirm(ctx, booking)
 			if booking.HoldID != nil {
 				uc.holdRepo.Delete(ctx, *booking.HoldID)
@@ -655,7 +748,7 @@ func (uc *BookingUseCase) ValidateMercadoPagoPaymentAndGetCode(ctx context.Conte
 					retentionPercent = 10
 				}
 				paidAmount := booking.PaidAmount
-				pendingAmount := booking.FinalPrice - booking.PaidAmount
+				pendingAmount := booking.ChargedPrice() - booking.PaidAmount
 				go func() {
 					if err := uc.mailer.SendBookingConfirmation(context.Background(), booking, cancellationHours, retentionPercent, paidAmount, pendingAmount); err != nil {
 						logger.FromContext(context.Background()).Errorw("mail_booking_confirmation_error",
@@ -707,7 +800,7 @@ func (uc *BookingUseCase) SyncPendingBookingPaymentStatus(ctx context.Context, b
 			booking.Status = domain.BookingStatusConfirmed
 			booking.MPPaymentID = fmt.Sprintf("%d", p.ID)
 			booking.PaidAmount = p.TransactionAmount
-			booking.PendingAmount = booking.Price - p.TransactionAmount
+			booking.PendingAmount = booking.ChargedPrice() - p.TransactionAmount
 			if booking.PendingAmount < 0 {
 				booking.PendingAmount = 0
 			}
@@ -716,6 +809,7 @@ func (uc *BookingUseCase) SyncPendingBookingPaymentStatus(ctx context.Context, b
 			if err := uc.repo.Update(ctx, booking); err != nil {
 				return fmt.Errorf("error updating booking status from sync: %w", err)
 			}
+			uc.confirmDiscount(ctx, booking.ID)
 			uc.finishConfirm(ctx, booking)
 
 			if booking.HoldID != nil {

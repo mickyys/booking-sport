@@ -13,6 +13,11 @@ var ErrBookingSlotTaken = errors.New("booking slot already taken")
 // escritura. El llamador debe releer y reintentar la transición.
 var ErrVersionConflict = errors.New("booking version conflict")
 
+// ErrDiscountUnavailable indica que el descuento dejó de estar disponible
+// entre la cotización y la reserva (cupo agotado, límite por usuario o
+// vigencia). La reserva puede continuar sin el beneficio.
+var ErrDiscountUnavailable = errors.New("discount no longer available")
+
 type AppError struct {
 	Message    string
 	StatusCode int
