@@ -516,6 +516,8 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 			"pending_amount":       booking.PendingAmount,
 			"is_partial_payment":   booking.IsPartialPayment,
 			"partial_payment_paid": booking.PartialPaymentPaid,
+			"mp_status":            booking.MPStatus,
+			"last_payment_sync_at": booking.LastPaymentSyncAt,
 		},
 		"hours_until_match": hoursUntilMatch,
 		"can_cancel":        canCancel,
@@ -967,6 +969,10 @@ func (h *BookingHandler) MockMercadoPagoConfirm(c *gin.Context) {
 }
 
 func (h *BookingHandler) SyncConfirmedPayment(c *gin.Context) {
+	if secret := os.Getenv("INTERNAL_API_SECRET"); secret != "" && c.GetHeader("X-Internal-Token") != secret {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
 	var req struct {
 		BookingCode     string  `json:"booking_code"`
 		MPPaymentID     string  `json:"mp_payment_id"`
@@ -1026,7 +1032,6 @@ func (h *BookingHandler) MercadoPagoReturn(c *gin.Context) {
 		return
 	}
 
-	// Si tenemos payment_id, guardarlo en la reserva antes de procesar el webhook
 	if paymentID != "" {
 		if err := h.useCase.StoreMPPaymentID(c.Request.Context(), bookingCode, paymentID); err != nil {
 			log.Warnw("mp_return_store_payment_id_error",
@@ -1035,26 +1040,77 @@ func (h *BookingHandler) MercadoPagoReturn(c *gin.Context) {
 				"error", err,
 			)
 		}
-		if err := h.useCase.HandleMercadoPagoWebhook(c.Request.Context(), paymentID); err != nil {
-			log.Errorw("mp_return_webhook_error",
-				"payment_id", paymentID,
-				"error", err,
-			)
-		}
 	}
 
-	code, err := h.useCase.ValidateMercadoPagoPaymentAndGetCode(c.Request.Context(), bookingCode)
-	if err != nil {
-		log.Warnw("mp_return_validation_error",
+	if _, err := h.useCase.ReconcileMercadoPagoPayment(c.Request.Context(), bookingCode); err != nil {
+		log.Warnw("mp_return_reconcile_error",
 			"booking_code", bookingCode,
 			"error", err,
 		)
-		c.Redirect(http.StatusFound, url+"/booking/failure?error=validation_failed")
-		return
 	}
 
-	redirectURL := fmt.Sprintf("%s/booking/status?code=%s", url, code)
+	redirectURL := fmt.Sprintf("%s/booking/status?code=%s", url, bookingCode)
 	c.Redirect(http.StatusFound, redirectURL)
+}
+
+// GetPaymentStatus consulta Mercado Pago por booking_code, actualiza la reserva
+// si el pago ya fue aprobado y devuelve el estado real del pago.
+func (h *BookingHandler) GetPaymentStatus(c *gin.Context) {
+	code := normalizeBookingCode(c.Param("code"))
+	if code == "" || isFacilityBookingCode(code) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid booking code"})
+		return
+	}
+	res, err := h.useCase.ReconcileMercadoPagoPaymentThrottled(c.Request.Context(), code)
+	if res == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "booking not found"})
+		return
+	}
+	if err != nil {
+		h.baseHandler.GetLogger(c).Warnw("payment_status_reconcile_error", "booking_code", code, "error", err)
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+// AdminVerifyPayment permite a un admin del centro forzar la verificación del pago.
+func (h *BookingHandler) AdminVerifyPayment(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid booking id"})
+		return
+	}
+	userID, _ := c.Get("user_id")
+	uid, _ := userID.(string)
+	booking, err := h.useCase.GetByID(c.Request.Context(), id)
+	if err != nil || booking == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "booking not found"})
+		return
+	}
+	center, err := h.useCase.GetSportCenterByID(c.Request.Context(), booking.SportCenterID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "sport center not found"})
+		return
+	}
+	allowed := false
+	for _, u := range center.Users {
+		if u == uid {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+	res, err := h.useCase.ReconcileMercadoPagoPayment(c.Request.Context(), booking.BookingCode)
+	if res == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not verify payment"})
+		return
+	}
+	if err != nil {
+		h.baseHandler.GetLogger(c).Warnw("admin_verify_payment_error", "booking_code", booking.BookingCode, "error", err)
+	}
+	c.JSON(http.StatusOK, res)
 }
 
 func (h *BookingHandler) MarkPartialPaymentAsPaid(c *gin.Context) {

@@ -13,12 +13,12 @@ import (
 func (r *BookingRepository) ClaimPaymentTransition(ctx context.Context, id primitive.ObjectID, expected, next domain.BookingStatus, paidAmount, pendingAmount float64, paymentInfo *domain.PaymentInfo, mpPaymentID, mpStatus string) (bool, error) {
 	now := time.Now()
 	set := bson.M{
-		"status":                next,
-		"paid_amount":           paidAmount,
-		"pending_amount":        pendingAmount,
-		"updated_at":            now,
-		"last_payment_sync_at":  now,
-		"mp_status":             mpStatus,
+		"status":               next,
+		"paid_amount":          paidAmount,
+		"pending_amount":       pendingAmount,
+		"updated_at":           now,
+		"last_payment_sync_at": now,
+		"mp_status":            mpStatus,
 	}
 	if mpPaymentID != "" {
 		set["mp_payment_id"] = mpPaymentID

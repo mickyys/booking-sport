@@ -562,8 +562,12 @@ func (uc *BookingUseCase) GetByBookingCode(ctx context.Context, code string) (*d
 	}
 
 	if booking.Status == domain.BookingStatusPending && booking.PaymentMethod == "mercadopago" {
-		uc.SyncPendingBookingPaymentStatus(ctx, booking)
-		booking, _ = uc.repo.FindByBookingCode(ctx, code)
+		if _, err := uc.ReconcileMercadoPagoPaymentThrottled(ctx, code); err != nil {
+			logger.FromContext(ctx).Warnw("mp_get_by_code_reconcile_error", "booking_code", code, "error", err)
+		}
+		if refreshed, ferr := uc.repo.FindByBookingCode(ctx, code); ferr == nil && refreshed != nil {
+			booking = refreshed
+		}
 	}
 
 	return booking, nil

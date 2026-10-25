@@ -164,6 +164,13 @@ func main() {
 	bookingResolver := app.NewScheduleResolver(scheduleRuleRepo, scheduleExceptionRepo, blockRepo)
 	bookingUC.SetScheduleResolver(bookingResolver)
 	bookingUC.SetJobLockRepository(jobLockRepo)
+	if getEnv("MP_RECONCILE_ENABLED", "true") != "false" {
+		mpInterval, err := time.ParseDuration(getEnv("MP_RECONCILE_INTERVAL", "3m"))
+		if err != nil || mpInterval <= 0 {
+			mpInterval = 3 * time.Minute
+		}
+		go bookingUC.RunPaymentReconcileLoop(context.Background(), jobLockRepo, mpInterval)
+	}
 
 	// Socios y códigos de descuento
 	membershipRepo := mongo.NewMembershipRepository(db)
@@ -338,6 +345,7 @@ func main() {
 	r.POST("/api/internal/sync-payment", bookingHandler.SyncConfirmedPayment)
 	r.POST("/api/internal/jobs/recurring-generate", bookingHandler.GenerateRecurringBookingsInternal)
 	r.GET("/api/bookings/code/:code", bookingHandler.GetByBookingCode)
+	r.GET("/api/bookings/code/:code/payment-status", bookingHandler.GetPaymentStatus)
 	r.POST("/api/bookings/code/:code/cancel", bookingHandler.CancelByBookingCode)
 	r.POST("/api/bookings", bookingHandler.CreateBooking)
 	r.POST("/api/contact", contactHandler.Submit)
@@ -430,6 +438,7 @@ func main() {
 		api.POST("/admin/discount-codes/:id/void", discountHandler.VoidCode)
 		api.POST("/admin/discount-codes/batches/:batchId/void", discountHandler.VoidBatch)
 		api.GET("/admin/discount-usages", discountHandler.ListUsages)
+		api.POST("/admin/bookings/:id/verify-payment", bookingHandler.AdminVerifyPayment)
 		api.POST("/admin/bookings/:id/pay-balance", bookingHandler.MarkPartialPaymentAsPaid)
 		api.PATCH("/admin/bookings/:id/undo-pay-balance", bookingHandler.UndoBalancePayment)
 		api.PATCH("/admin/bookings/:id/reschedule", bookingHandler.RescheduleBooking)
