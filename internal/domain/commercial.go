@@ -27,7 +27,6 @@ const (
 	ProviderStatusNotConnected = "NOT_CONNECTED"
 	ProviderStatusConnected    = "CONNECTED"
 	ProviderStatusError        = "ERROR"
-	ProviderStatusRetired      = "RETIRED"
 )
 
 // Origen de la comisión efectiva.
@@ -98,9 +97,6 @@ type Subscription struct {
 type OnlinePayment struct {
 	Commission      *CommissionConfig `bson:"commission,omitempty" json:"commission,omitempty"`
 	PaymentProvider *PaymentProvider  `bson:"payment_provider,omitempty" json:"payment_provider,omitempty"`
-	// RetiredProviders conserva el histórico de proveedores dados de baja
-	// (Fintoc); no se usan para cobrar.
-	RetiredProviders []PaymentProvider `bson:"retired_providers,omitempty" json:"retired_providers,omitempty"`
 }
 
 // CommissionConfig distingue "sin valor" (Value nil) de un 0% explícito.

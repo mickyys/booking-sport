@@ -2,6 +2,7 @@
 
 Diseño de referencia: `docs/refactor-modelo-comercial.md` (raíz del workspace).
 Informe de análisis: `docs/analisis-migracion-modelo-comercial.md` (raíz del workspace).
+Guía de ejecución en producción (comandos, verificación y rollback): `docs/runbook-migracion-produccion.md`.
 
 Base del análisis: copia local `sport_booking_prod` (contenedor `booking_sport_db`), restaurada desde `sport_booking` en Atlas el 2026-10-25. Los conteos coinciden con producción en las 7 colecciones.
 
@@ -12,7 +13,7 @@ Base del análisis: copia local `sport_booking_prod` (contenedor `booking_sport_
 | 1 | Club Union Catolica | `PAY_AT_CENTER` |
 | 2 | Comisión | Centros migrados: 0%. Centros nuevos: 7% por defecto |
 | 3 | Suscripción mensual | Monto 0 |
-| 4 | Fintoc | Se retira. Sus reservas no se migran y se eliminan (con respaldo en `migration_backups`) |
+| 4 | Fintoc | Se retira. Sus reservas y sus credenciales se eliminan (reservas con respaldo en `migration_backups`; credenciales sin copia, solo `mongodump` externo) |
 | 5 | Cobro de suscripción | Mercado Pago |
 | 6 | Centros existentes | Siguen publicados; no se les exige suscripción en el primer despliegue |
 
@@ -72,7 +73,7 @@ Nota: Orellana paga 7% hasta activar el flag `COMMERCIAL_MODEL_ENFORCED` y 0% de
 | bookings | 1375 sin modificaciones |
 | recurring_reservations | 85 sin modificaciones |
 | courts / spaces | 6 sin modificaciones de horarios ni precios |
-| credenciales MP y Fintoc | sin modificaciones |
+| credenciales Mercado Pago | sin modificaciones (las de Fintoc se eliminan) |
 | `payment_mode` y `status` de centros | sin modificaciones salvo Catolica (`payment_mode=pay_at_center`) |
 
 Segunda ejecución de la migración: 0 cambios.
@@ -107,7 +108,7 @@ Catolica:
 
 Todo comando del proceso (`migrate-*`, `remove-*` y `audit-*`) deja un archivo de log con el tag `[Migrate]`, además de mostrarlo en consola:
 
-- Ubicación: `logs/migrations/` (cambiable con `MIGRATE_LOG_DIR`), un archivo por ejecución: `migrate-<comando>-<AAAAMMDD-HHMMSS>.log` (hora UTC). La carpeta está ignorada por git (`logs/`).
+- Ubicación: `logs/migrations/` (cambiable con `MIGRATE_LOG_DIR`), un archivo por ejecución: `migrate-<comando>-<AAAAMMDD-HHMMSS>-<pid>.log` (hora UTC). La carpeta está ignorada por git (`logs/`).
 - Cada línea empieza con `[Migrate]`, incluida la salida de `fmt.Printf` de las auditorías.
 - Al inicio registra `INICIO` (comando, pid, host), la ruta del archivo y la configuración (`MONGO_URI` con usuario y contraseña ocultos y solo variables permitidas como `APPLY`, `DRY_RUN`, `ROLLBACK`, `CENTER_ID`, `SPACE_IDS`). Nunca registra tokens ni secretos.
 - Al terminar bien registra `FIN` con la duración. **Un archivo sin línea `FIN` es una ejecución fallida**: su última línea es el error.
@@ -119,7 +120,7 @@ Todo comando del proceso (`migrate-*`, `remove-*` y `audit-*`) deja un archivo d
 ### Fase 0 — Preparación (hecha)
 - Copia local `sport_booking_prod` y verificación de conteos.
 - `cmd/migrate-commercial-model` con dry-run, apply, idempotencia y rollback, probada.
-- Ajustado: comisión 0% explícito para migrados, `OVERRIDES` (Catolica), suscripción LEGACY monto 0, Fintoc `RETIRED`.
+- Ajustado: comisión 0% explícito para migrados, `OVERRIDES` (Catolica), suscripción LEGACY monto 0, sin marca de Fintoc.
 
 ### Fase 1 — Migraciones previas (copia local, luego producción)
 Siempre con dry-run primero.
@@ -129,6 +130,10 @@ export MONGO_URI=mongodb://localhost:27017 MONGO_DB=sport_booking_prod
 make audit-indexes
 make audit-bookings
 go run ./cmd/remove-fintoc-bookings && APPLY=true go run ./cmd/remove-fintoc-bookings
+# mongodump de sport_centers y luego:
+go run ./cmd/remove-fintoc-credentials && APPLY=true go run ./cmd/remove-fintoc-credentials
+export BOOKING_CODES=633c7e11,3a46b3e1,b5427ce4 RECURRING_IDS=69e6ca4e5526854c22ccd068
+go run ./cmd/migrate-resolve-duplicates && APPLY=true go run ./cmd/migrate-resolve-duplicates
 go run ./cmd/migrate-spaces
 go run ./cmd/migrate-geo
 DRY_RUN=true go run ./cmd/migrate-schedule-rules && go run ./cmd/migrate-schedule-rules
@@ -156,8 +161,10 @@ No usar `FORCE=true` sin `SPACE_IDS`: rehace también las reglas de los quinchos
 **Reservas de Fintoc (`remove-fintoc-bookings`).** Se ejecuta ANTES de las demás migraciones de reservas (el backfill y la generación no deben considerarlas). Elimina las reservas con `payment_method=fintoc` o `fintoc_payment_id`/`fintoc_payment_intent_id`; en Orellana son 16 (11 confirmadas por $255.000, 2 canceladas y 3 expiradas, marzo-abril 2026, sin fechas futuras). Cada documento se copia antes a `migration_backups` (tag `fintoc-bookings-v1`).
 - Dry-run por defecto; `APPLY=true go run ./cmd/remove-fintoc-bookings` aplica; `ROLLBACK=true APPLY=true` restaura desde `migration_backups`. Idempotente.
 - Aborta si hay reservas Fintoc confirmadas con fecha futura (`FORCE_FUTURE=true` lo permite).
-- No borra las credenciales Fintoc de `sport_centers` ni cambia nada más.
+- No borra las credenciales Fintoc de `sport_centers` (eso lo hace `remove-fintoc-credentials`).
 - Orden recomendado en producción: respaldo de `bookings`, `remove-fintoc-bookings`, y luego el resto de la Fase 1.
+
+**Credenciales de Fintoc (`remove-fintoc-credentials`).** Elimina de `sport_centers` el campo `fintoc` (llaves `sk_*` y secretos de webhook en texto plano; solo Orellana lo tenía) y la marca `commercial.online_payment.retired_providers`. No toca Mercado Pago ni otros campos. Por seguridad no copia los secretos a otra colección ni los escribe en el log (solo nombres de claves), por lo que **no tiene rollback**: hacer un `mongodump` de `sport_centers` antes de aplicar. Dry-run por defecto, idempotente y con verificación final. Como las llaves vivas existieron en texto plano, conviene además revocarlas en el panel de Fintoc.
 
 **Generación inicial de recurrentes (`migrate-recurring-bookings`).** Último paso de la Fase 1. Genera las primeras 4 semanas de todas las recurrentes activas con el mismo generador que el job diario, vinculando cada reserva a su serie con `recurring_id`. Las reservas de la migración anterior usan `series_id` (otro mecanismo) y no se tocan; si una ocurrencia choca con una reserva existente, el generador la omite y queda en `generation_issues`.
 
@@ -177,20 +184,19 @@ No usar `FORCE=true` sin `SPACE_IDS`: rehace también las reglas de los quinchos
 
 Ejecutarlo siempre DESPUÉS de `migrate-spaces`, `migrate-schedule-rules` y `migrate-booking-schedule-fields` (necesita `local_date`) y antes de cualquier nueva ejecución de `migrate-spaces`, que volvería a marcar esos espacios como `cancha`. Falla si hay dos reservas activas el mismo día en un quincho (resolver duplicados antes). La `description` del espacio ("Horario 19 a 22 hrs") es texto del administrador y no se modifica: revisarla con el centro.
 
-**Bloqueo conocido en `migrate-booking-schedule-fields` (reservas duplicadas).** El backfill normaliza `date` y choca con los índices únicos de reservas confirmadas si hay dos en el mismo horario (el error es `E11000 ... idx_bookings_unique_confirmed_slot_v2`). Hay 5 reservas confirmadas en 2 horarios duplicados en la cancha `69c095fd28c02626758a5b62` de Orellana. Antes del apply hay que cancelar las duplicadas, con respaldo previo de `bookings`:
+**Bloqueo conocido en `migrate-booking-schedule-fields` (reservas duplicadas).** El backfill normaliza `date` y choca con los índices únicos de reservas confirmadas si hay dos en el mismo horario (el error es `E11000 ... idx_bookings_unique_confirmed_slot_v2`). Hay 5 reservas confirmadas en 2 horarios duplicados en la cancha `69c095fd28c02626758a5b62` de Orellana. Antes del apply hay que cancelar las duplicadas, con `migrate-resolve-duplicates` (dry-run por defecto, respaldo en `migration_backups` con tag `duplicates-v1`, `ROLLBACK=true APPLY=true` restaura):
 
 | Horario | Conservar | Cancelar |
 |---|---|---|
 | 2026-05-13 21:00 | `916b3524` | `633c7e11`, `3a46b3e1` |
 | 2026-05-18 22:00 | `30d5c5c9` | `b5427ce4` |
 
-```js
-db.bookings.updateMany(
-  { booking_code: { $in: ["633c7e11", "3a46b3e1", "b5427ce4"] }, status: "confirmed" },
-  { $set: { status: "cancelled", cancelled_by: "migration:phase1",
-    cancellation_reason: "Reserva duplicada del mismo horario detectada en la migración de esquema (fase 1)",
-    updated_at: new Date() } })
+```bash
+BOOKING_CODES=633c7e11,3a46b3e1,b5427ce4 RECURRING_IDS=69e6ca4e5526854c22ccd068 \
+  APPLY=true go run ./cmd/migrate-resolve-duplicates
 ```
+
+Las canceladas quedan con `status=cancelled`, `cancelled_by=migration:phase1` y el motivo. El mismo comando cancela la recurrente duplicada de "Alonso" (ver abajo).
 
 Si en producción aparecen más duplicados, el apply fallará con el mismo error: revisar primero con un agrupamiento por (`court_id`, día civil, `hora`, `minutes`) sobre las reservas confirmadas.
 
@@ -212,7 +218,7 @@ APPLY=true DEFAULT_COMMISSION=0 OVERRIDES=69e054444604771de4b6f745=PAY_AT_CENTER
 ```
 - Orellana: `PAY_ONLINE`, comisión 0% explícito, Mercado Pago `CONNECTED`.
 - Catolica: `PAY_AT_CENTER`, suscripción monto 0, se fija `payment_mode=pay_at_center`, credenciales conservadas.
-- Fintoc: proveedor marcado `RETIRED`; las credenciales de `sport_centers` no se tocan. Las reservas de Fintoc se eliminan antes de migrar con `remove-fintoc-bookings`.
+- Fintoc: ya no se marca nada en `commercial`. Sus reservas y credenciales se eliminan antes de migrar con `remove-fintoc-bookings` y `remove-fintoc-credentials`.
 - Respaldo previo de `sport_centers` antes del apply.
 
 ### Fase 4 — Backend
@@ -282,7 +288,8 @@ Esperado: bookings 1375, recurring 85, sin `commercial` 0, 0 centros con `review
   - Webhook público: `POST /api/subscriptions/mercadopago/webhook`.
   - Variables: `COMMERCIAL_MODEL_ENFORCED`, `SUBSCRIPTION_MONTHLY_AMOUNT` (CLP, sin él no se crean suscripciones), `SUBSCRIPTION_BACK_URL`.
 - Fase 1 aplicada en `sport_booking`: `spaces` = 6, `schedule_rules` = 7, 0 centros sin timezone y 1375 reservas con `scheduled_at`. Se canceló `633c7e11`, `3a46b3e1` y `b5427ce4` (duplicadas); respaldo previo de `bookings` fuera del repo. `audit-bookings` sin hallazgos. También se canceló la recurrente duplicada `69e6ca4e5526854c22ccd068` (queda activa `69e6d7041313560aaf6f8ef7`): 49 activas, 25 finalizadas y 11 canceladas en `recurring_reservations`, sin duplicadas activas.
+- La migración completa se volvió a ejecutar desde cero (reset de `sport_booking` desde `sport_booking_prod` y todos los pasos en orden, con logs `[Migrate]`) con el mismo resultado: 1555 reservas, 196 con `recurring_id`, 6 espacios, 7 reglas, comisión 0% en Orellana y Catolica PAY_AT_CENTER.
 - `migrate-geo` y `migrate-quincho-day` aplicados en `sport_booking`: Catolica queda con 1 cancha y 3 quinchos por día completo (`courts_count`=1). Verificado por API: `/facilities` lista los 3 quinchos, la disponibilidad es de día completo y 2026-08-09 aparece reservado.
 - `migrate-recurring-bookings` aplicado en `sport_booking`: 196 reservas con `recurring_id` (26-10 al 21-11), 0 omitidas, 0 fallos, segunda corrida sin cambios.
-- Fintoc: 16 reservas eliminadas de `sport_booking` (respaldo en `migration_backups`); los campos `fintoc_*` se quitaron de `Booking` y del request de `SyncConfirmedPayment`. Las credenciales Fintoc de `sport_centers` siguen sin tocar.
+- Fintoc: 16 reservas eliminadas de `sport_booking` (respaldo en `migration_backups`); los campos `fintoc_*` se quitaron de `Booking` y del request de `SyncConfirmedPayment`. Las credenciales Fintoc de `sport_centers` también se eliminaron (`remove-fintoc-credentials`).
 - Pendiente: la Fase 5 (frontend).

@@ -2,7 +2,7 @@
 // sport_centers (ver docs/refactor-modelo-comercial.md, sección 7 y 8).
 //
 // Sólo AGREGA el campo `commercial`; no modifica reservas, espacios, horarios,
-// precios ni credenciales (Mercado Pago, Fintoc), y no cambia `status`. Sólo
+// precios ni credenciales (Mercado Pago), y no cambia `status`. Sólo
 // cambia `payment_mode` en los centros indicados en OVERRIDES. Es idempotente:
 // centros con `commercial` ya existente se omiten.
 //
@@ -10,7 +10,8 @@
 //   - Comisión de centros migrados: DEFAULT_COMMISSION (0 por defecto), con
 //     source=CENTER (0% explícito). Un fee propio > 0 se conserva.
 //   - PAY_AT_CENTER: suscripción ACTIVE, plan LEGACY, monto 0.
-//   - Fintoc se marca RETIRED en online_payment.retired_providers; no se borra.
+//   - Fintoc ya no forma parte del modelo: sus reservas y credenciales se
+//     eliminan con remove-fintoc-bookings y remove-fintoc-credentials.
 //   - OVERRIDES=<id>=<PAY_ONLINE|PAY_AT_CENTER>[,<id>=...] fuerza la modalidad
 //     por decisión del administrador y fija `payment_mode` legacy.
 //
@@ -157,9 +158,6 @@ func main() {
 			online := bson.M{
 				"commission":       bson.M{"type": "PERCENTAGE", "value": rate, "source": "CENTER"},
 				"payment_provider": bson.M{"provider": "MERCADO_PAGO", "status": status},
-			}
-			if _, ok := raw["fintoc"]; ok {
-				online["retired_providers"] = bson.A{bson.M{"provider": "FINTOC", "status": "RETIRED"}}
 			}
 			commercial["online_payment"] = online
 		case "PAY_AT_CENTER":

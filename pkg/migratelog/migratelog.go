@@ -1,6 +1,6 @@
 // Package migratelog deja un archivo de log, con el tag [Migrate], de todo lo
 // que hace un comando de migración. Cada ejecución crea su propio archivo
-// (migrate-<comando>-<fecha UTC>.log) en MIGRATE_LOG_DIR (por defecto
+// (migrate-<comando>-<fecha UTC>-<pid>.log) en MIGRATE_LOG_DIR (por defecto
 // logs/migrations) y duplica la salida en la consola.
 //
 // Uso al inicio de main():
@@ -37,7 +37,7 @@ const Tag = "[Migrate]"
 var envKeys = []string{
 	"MONGO_DB", "APPLY", "DRY_RUN", "ROLLBACK", "FORCE", "FORCE_FUTURE", "DROP_ORIGINAL",
 	"CENTER_ID", "SPACE_IDS", "NAME_PATTERN", "DEFAULT_COMMISSION", "OVERRIDES", "TIMEZONE",
-	"SINCE", "FROM", "TO", "LIMIT", "API_BASE_URL", "STRICT",
+	"SINCE", "FROM", "TO", "LIMIT", "API_BASE_URL", "STRICT", "BOOKING_CODES", "RECURRING_IDS",
 }
 
 // Start abre el archivo de log, redirige log y stdout y devuelve la función
@@ -52,7 +52,7 @@ func start(command string, stdout, stderr *os.File) func() {
 		dir = filepath.Join("logs", "migrations")
 	}
 	began := time.Now().UTC()
-	name := fmt.Sprintf("migrate-%s-%s.log", strings.TrimPrefix(command, "migrate-"), began.Format("20060102-150405"))
+	name := fmt.Sprintf("migrate-%s-%s-%d.log", strings.TrimPrefix(command, "migrate-"), began.Format("20060102-150405"), os.Getpid())
 	path := filepath.Join(dir, name)
 
 	var file *os.File
