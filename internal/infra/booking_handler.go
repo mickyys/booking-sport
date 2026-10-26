@@ -974,11 +974,10 @@ func (h *BookingHandler) SyncConfirmedPayment(c *gin.Context) {
 		return
 	}
 	var req struct {
-		BookingCode     string  `json:"booking_code"`
-		MPPaymentID     string  `json:"mp_payment_id"`
-		FintocPaymentID string  `json:"fintoc_payment_id"`
-		PaidAmount      float64 `json:"paid_amount"`
-		PendingAmount   float64 `json:"pending_amount"`
+		BookingCode   string  `json:"booking_code"`
+		MPPaymentID   string  `json:"mp_payment_id"`
+		PaidAmount    float64 `json:"paid_amount"`
+		PendingAmount float64 `json:"pending_amount"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

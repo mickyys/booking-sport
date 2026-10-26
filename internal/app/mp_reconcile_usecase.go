@@ -184,12 +184,9 @@ func (uc *BookingUseCase) applyApprovedPayment(ctx context.Context, store Paymen
 			"msg", fmt.Sprintf("Pago aprobado para booking %s pero el horario ya no está disponible; se reembolsará", booking.BookingCode),
 			"booking_code", booking.BookingCode, "payment_id", paymentIDStr)
 	} else {
-		rate := center.MarketplaceFeePercent
-		if rate <= 0 || rate > 100 {
-			rate = defaultMarketplaceFeePercent
-		}
+		rate := centerCommissionRate(center)
 		paymentInfo.CommissionRate = rate
-		paymentInfo.CommissionAmount = marketplaceFeeForAmount(paidAmount, rate)
+		paymentInfo.CommissionAmount = commissionFee(paidAmount, rate)
 	}
 
 	claimPending := pendingAmount

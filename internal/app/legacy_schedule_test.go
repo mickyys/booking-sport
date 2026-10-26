@@ -52,6 +52,49 @@ func TestBuildRulesFromLegacyCourtSchedulePerDay(t *testing.T) {
 	}
 }
 
+func TestBuildRulesFromLegacyCourtScheduleDaySlotAddsToGeneral(t *testing.T) {
+	wednesday := intPtr(3)
+	rules := BuildRulesFromLegacyCourtSchedule([]domain.CourtSchedule{
+		{Hour: 16, Minutes: 0, Price: 20000, Status: "available"},
+		{Hour: 17, Minutes: 0, Price: 20000, Status: "available"},
+		{Hour: 18, Minutes: 0, Price: 25000, Status: "available"},
+		{Hour: 19, Minutes: 0, Price: 25000, Status: "available"},
+		{Hour: 20, Minutes: 0, Price: 25000, Status: "closed"},
+		{Hour: 17, Minutes: 30, Price: 25000, Status: "available", DayOfWeek: wednesday},
+	})
+
+	if len(rules) != 2 {
+		t.Fatalf("expected general + wednesday rules, got %d", len(rules))
+	}
+	general, wed := rules[0], rules[1]
+	if len(general.DaysOfWeek) != 7 || len(general.Slots) != 4 {
+		t.Fatalf("general rule must stay intact, got days=%v franjas=%d", general.DaysOfWeek, len(general.Slots))
+	}
+	if len(wed.DaysOfWeek) != 1 || wed.DaysOfWeek[0] != 3 {
+		t.Fatalf("expected rule for wednesday, got %v", wed.DaysOfWeek)
+	}
+	// 17:00-18:00 y 18:00-19:00 se solapan con 17:30-18:30 y se ocultan,
+	// igual que en el modelo legacy; el resto de los generales se conserva.
+	got := []string{}
+	for _, s := range wed.Slots {
+		got = append(got, s.StartTime)
+	}
+	want := []string{"16:00", "17:30", "19:00"}
+	if len(got) != len(want) {
+		t.Fatalf("wednesday franjas = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("wednesday franjas = %v, want %v", got, want)
+		}
+	}
+	for _, s := range wed.Slots {
+		if s.StartTime == "17:30" && (s.EndTime != "18:30" || s.Price != 25000) {
+			t.Errorf("unexpected specific franja %+v", s)
+		}
+	}
+}
+
 func TestBuildRulesFromLegacyCourtScheduleSkipsMidnightOverflow(t *testing.T) {
 	rules := BuildRulesFromLegacyCourtSchedule([]domain.CourtSchedule{
 		{Hour: 23, Minutes: 30, Price: 10000, Status: "available"},

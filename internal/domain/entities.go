@@ -140,6 +140,11 @@ type SportCenter struct {
 	// FirstMonthFree activa la oferta "primer mes gratis" para nuevos clientes
 	// (RES-26).
 	FirstMonthFree bool `bson:"first_month_free" json:"first_month_free"`
+	// Commercial es el modelo comercial (modalidad, suscripción, comisión).
+	// Opcional: si falta, el centro opera como antes. No se serializa en las
+	// respuestas públicas del centro (la comisión es información comercial);
+	// se expone por los endpoints /admin/commercial y /superadmin.
+	Commercial *Commercial `bson:"commercial,omitempty" json:"-"`
 	// SpaceTemplates es un borrador transitorio de la configuración de
 	// espacios definida en la etapa "Espacios" del wizard (RES-24). Se persiste
 	// para retomar el wizard tras una recarga y se materializa en la colección
@@ -692,22 +697,20 @@ type Booking struct {
 	Hour           int    `bson:"hour" json:"hour"`
 	Minutes        int    `bson:"minutes" json:"minutes"`
 	// DurationMinutes es la duración de la reserva en minutos. 0 o 60 implica 1 hora.
-	DurationMinutes       int           `bson:"duration_minutes,omitempty" json:"duration_minutes,omitempty"`
-	FinalPrice            float64       `bson:"final_price" json:"final_price"`
-	Price                 float64       `bson:"price" json:"price"`
-	PaidAmount            float64       `bson:"paid_amount" json:"paid_amount"`
-	PendingAmount         float64       `bson:"pending_amount" json:"pending_amount"`
-	IsPartialPayment      bool          `bson:"is_partial_payment" json:"is_partial_payment"`
-	PartialPaymentPaid    bool          `bson:"partial_payment_paid" json:"partial_payment_paid"`
-	Status                BookingStatus `bson:"status" json:"status"`
-	BookingCode           string        `bson:"booking_code,omitempty" json:"booking_code,omitempty"`
-	PaymentMethod         string        `bson:"payment_method,omitempty" json:"payment_method,omitempty"`
-	PaymentID             string        `bson:"payment_id,omitempty" json:"payment_id,omitempty"`
-	FintocPaymentID       string        `bson:"fintoc_payment_id,omitempty" json:"fintoc_payment_id,omitempty"`
-	FintocPaymentIntentID string        `bson:"fintoc_payment_intent_id,omitempty" json:"fintoc_payment_intent_id,omitempty"`
-	MPPreferenceID        string        `bson:"mp_preference_id,omitempty" json:"mp_preference_id,omitempty"`
-	MPPaymentID           string        `bson:"mp_payment_id,omitempty" json:"mp_payment_id,omitempty"`
-	PaymentInfo           *PaymentInfo  `bson:"payment_info,omitempty" json:"payment_info,omitempty"`
+	DurationMinutes    int           `bson:"duration_minutes,omitempty" json:"duration_minutes,omitempty"`
+	FinalPrice         float64       `bson:"final_price" json:"final_price"`
+	Price              float64       `bson:"price" json:"price"`
+	PaidAmount         float64       `bson:"paid_amount" json:"paid_amount"`
+	PendingAmount      float64       `bson:"pending_amount" json:"pending_amount"`
+	IsPartialPayment   bool          `bson:"is_partial_payment" json:"is_partial_payment"`
+	PartialPaymentPaid bool          `bson:"partial_payment_paid" json:"partial_payment_paid"`
+	Status             BookingStatus `bson:"status" json:"status"`
+	BookingCode        string        `bson:"booking_code,omitempty" json:"booking_code,omitempty"`
+	PaymentMethod      string        `bson:"payment_method,omitempty" json:"payment_method,omitempty"`
+	PaymentID          string        `bson:"payment_id,omitempty" json:"payment_id,omitempty"`
+	MPPreferenceID     string        `bson:"mp_preference_id,omitempty" json:"mp_preference_id,omitempty"`
+	MPPaymentID        string        `bson:"mp_payment_id,omitempty" json:"mp_payment_id,omitempty"`
+	PaymentInfo        *PaymentInfo  `bson:"payment_info,omitempty" json:"payment_info,omitempty"`
 	// MPStatus es el último estado de pago observado en Mercado Pago.
 	MPStatus                string     `bson:"mp_status,omitempty" json:"mp_status,omitempty"`
 	LastPaymentSyncAt       *time.Time `bson:"last_payment_sync_at,omitempty" json:"last_payment_sync_at,omitempty"`
@@ -953,5 +956,8 @@ const (
 
 // IsOperational indica si el centro puede mostrarse y recibir reservas.
 func (c *SportCenter) IsOperational() bool {
+	if c.Commercial != nil && c.Commercial.Published != nil && !*c.Commercial.Published {
+		return false
+	}
 	return c.Status == "" || c.Status == SportCenterStatusActive
 }

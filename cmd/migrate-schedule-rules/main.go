@@ -4,10 +4,12 @@ import (
 	"context"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/hamp/booking-sport/internal/app"
 	"github.com/hamp/booking-sport/internal/domain"
+	"github.com/hamp/booking-sport/pkg/migratelog"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -29,7 +31,11 @@ import (
 //	MONGO_URI=mongodb://localhost:27017 go run ./cmd/migrate-schedule-rules
 //	DRY_RUN=true MONGO_URI=... go run ./cmd/migrate-schedule-rules
 //	FORCE=true MONGO_URI=... go run ./cmd/migrate-schedule-rules
+//
+// SPACE_IDS=<id1,id2> limita la migración a esos espacios (útil con FORCE para
+// regenerar solo las reglas de un espacio sin tocar el resto).
 func main() {
+	defer migratelog.Start("migrate-schedule-rules")()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -60,7 +66,20 @@ func main() {
 
 	var migrated, skipped, errors, totalSlots int
 
-	cursor, err := spacesColl.Find(ctx, bson.M{})
+	spaceFilter := bson.M{}
+	if v := os.Getenv("SPACE_IDS"); v != "" {
+		ids := bson.A{}
+		for _, part := range strings.Split(v, ",") {
+			id, err := primitive.ObjectIDFromHex(strings.TrimSpace(part))
+			if err != nil {
+				log.Fatalf("SPACE_IDS inválido: %v", err)
+			}
+			ids = append(ids, id)
+		}
+		spaceFilter["_id"] = bson.M{"$in": ids}
+	}
+
+	cursor, err := spacesColl.Find(ctx, spaceFilter)
 	if err != nil {
 		log.Fatalf("Error reading spaces: %v", err)
 	}

@@ -47,18 +47,19 @@ func TestBuildRulesGeneralAndSpecific(t *testing.T) {
 	if !reflect.DeepEqual(monday.DaysOfWeek, []int{1}) {
 		t.Errorf("expected monday rule days=[1], got %v", monday.DaysOfWeek)
 	}
-	if len(monday.Slots) != 2 {
-		t.Fatalf("expected 2 monday franjas, got %d", len(monday.Slots))
+	// En el modelo legacy los slots de un día se suman a los generales, así que
+	// la regla del lunes incluye 09:00 y 10:00 además de 15:30 y 17:00, ordenados.
+	want := [][2]string{{"09:00", "10:00"}, {"10:00", "11:00"}, {"15:30", "16:30"}, {"17:00", "18:00"}}
+	if len(monday.Slots) != len(want) {
+		t.Fatalf("expected %d monday franjas, got %d", len(want), len(monday.Slots))
 	}
-	// Debe ordenarse por hora: 15:30 y luego 17:00
-	if monday.Slots[0].StartTime != "15:30" || monday.Slots[0].EndTime != "16:30" {
-		t.Errorf("unexpected monday first franja: %s-%s", monday.Slots[0].StartTime, monday.Slots[0].EndTime)
+	for i, w := range want {
+		if monday.Slots[i].StartTime != w[0] || monday.Slots[i].EndTime != w[1] {
+			t.Errorf("monday franja %d = %s-%s, want %s-%s", i, monday.Slots[i].StartTime, monday.Slots[i].EndTime, w[0], w[1])
+		}
 	}
-	if monday.Slots[1].StartTime != "17:00" || monday.Slots[1].EndTime != "18:00" {
-		t.Errorf("unexpected monday second franja: %s-%s", monday.Slots[1].StartTime, monday.Slots[1].EndTime)
-	}
-	if monday.Slots[0].Price != 20000 {
-		t.Errorf("expected price 20000, got %v", monday.Slots[0].Price)
+	if monday.Slots[2].Price != 20000 || monday.Slots[0].Price != 10000 {
+		t.Errorf("unexpected prices: general %v, specific %v", monday.Slots[0].Price, monday.Slots[2].Price)
 	}
 }
 

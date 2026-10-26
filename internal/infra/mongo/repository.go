@@ -123,7 +123,10 @@ func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, 
 	var geoNearBuilder func(withRadius bool) bson.D
 
 	if useGeoNear {
-		query := bson.D{{Key: "status", Value: bson.M{"$nin": []string{domain.SportCenterStatusSuspended, domain.SportCenterStatusBlocked}}}}
+		query := bson.D{
+			{Key: "status", Value: bson.M{"$nin": []string{domain.SportCenterStatusSuspended, domain.SportCenterStatusBlocked}}},
+			{Key: "commercial.published", Value: bson.M{"$ne": false}},
+		}
 		if name != "" {
 			query = append(query, bson.E{
 				Key:   "name",
@@ -178,7 +181,10 @@ func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, 
 			}}},
 		)
 	} else {
-		matchStage := bson.D{{Key: "status", Value: bson.M{"$nin": []string{domain.SportCenterStatusSuspended, domain.SportCenterStatusBlocked}}}}
+		matchStage := bson.D{
+			{Key: "status", Value: bson.M{"$nin": []string{domain.SportCenterStatusSuspended, domain.SportCenterStatusBlocked}}},
+			{Key: "commercial.published", Value: bson.M{"$ne": false}},
+		}
 
 		if name != "" {
 			matchStage = append(matchStage, bson.E{
@@ -478,6 +484,26 @@ func (r *SportCenterRepository) UpdateMercadoPagoConfig(ctx context.Context, id 
 		},
 	})
 	return err
+}
+
+// UpdateCommercialFields hace $set de rutas "commercial.*". Rechaza cualquier
+// otra ruta para no escribir fuera del subdocumento comercial.
+func (r *SportCenterRepository) UpdateCommercialFields(ctx context.Context, id primitive.ObjectID, fields map[string]interface{}) error {
+	set := bson.M{"updated_at": time.Now()}
+	for k, v := range fields {
+		if !strings.HasPrefix(k, "commercial.") {
+			return fmt.Errorf("campo fuera de commercial: %s", k)
+		}
+		set[k] = v
+	}
+	res, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": set})
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return mongodb.ErrNoDocuments
+	}
+	return nil
 }
 
 func (r *SportCenterRepository) GetCities(ctx context.Context) ([]string, error) {

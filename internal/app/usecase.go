@@ -1188,6 +1188,13 @@ func (uc *SportCenterUseCase) CreateSportCenterOnboard(ctx context.Context, name
 		UpdatedAt:         now,
 	}
 
+	// Con el modelo comercial activo, un centro nuevo nace sin publicar y
+	// con la comisión por defecto; se publica con CommercialUseCase.Publish.
+	if CommercialModelEnforced() {
+		unpublished := false
+		center.Commercial = &domain.Commercial{Published: &unpublished}
+	}
+
 	// If we got valid coordinates, store them as a GeoJSON point.
 	if lat != 0 || lng != 0 {
 		center.Coordinates = domain.Coordinates{Lat: lat, Lng: lng}
@@ -1317,6 +1324,9 @@ func (uc *SportCenterUseCase) UpdateSportCenter(ctx context.Context, id primitiv
 	// Campos operativos del coordinador: sólo los cambia el comando de corte.
 	updatedCenter.OccupancyAuthority = existing.OccupancyAuthority
 	updatedCenter.OccupancyGeneration = existing.OccupancyGeneration
+	// El modelo comercial (modalidad, suscripción, comisión, publicación) solo
+	// cambia por CommercialUseCase; este PUT reemplaza el documento completo.
+	updatedCenter.Commercial = existing.Commercial
 
 	if updatedCenter.Timezone == "" {
 		updatedCenter.Timezone = existing.Timezone
@@ -1739,4 +1749,10 @@ func (uc *CourtUseCase) GetSportCenterSchedulesWithBookings(ctx context.Context,
 		})
 	}
 	return result, nil
+}
+
+// SetPaymentMode cambia solo la modalidad legacy del centro, con las mismas
+// consecuencias que el panel de ajustes (franjas y credenciales de MP).
+func (uc *SportCenterUseCase) SetPaymentMode(ctx context.Context, id primitive.ObjectID, mode string) error {
+	return uc.UpdateSettings(ctx, id, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, &mode)
 }

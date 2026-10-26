@@ -1040,18 +1040,14 @@ func applyQuoteToBooking(booking *domain.Booking, result *QuoteResult) {
 
 // applyCommissionSnapshot guarda la comisión de la plataforma para el monto
 // efectivamente cobrado. Es histórica y no se recalcula después.
-func applyCommissionSnapshot(booking *domain.Booking, feePercent int, amount float64) {
+func applyCommissionSnapshot(booking *domain.Booking, ratePercent int, amount float64) {
 	if booking == nil || booking.Pricing == nil {
 		return
 	}
-	rate := feePercent
-	if rate <= 0 || rate > 100 {
-		rate = defaultMarketplaceFeePercent
-	}
 	booking.Pricing.Commission = &domain.CommissionSnapshot{
-		Rate:   rate,
+		Rate:   ratePercent,
 		Base:   roundMoney(amount),
-		Amount: marketplaceFeeForAmount(amount, feePercent),
+		Amount: commissionFee(amount, ratePercent),
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/hamp/booking-sport/pkg/migratelog"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -24,6 +25,7 @@ import (
 //	MONGO_URI=mongodb://localhost:27017 go run ./cmd/migrate-spaces
 //	DROP_ORIGINAL=true MONGO_URI=... go run ./cmd/migrate-spaces
 func main() {
+	defer migratelog.Start("migrate-spaces")()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 

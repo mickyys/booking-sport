@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hamp/booking-sport/pkg/migratelog"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -56,6 +57,7 @@ var expectedIndexes = map[string][]string{
 }
 
 func main() {
+	defer migratelog.Start("audit-indexes")()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 

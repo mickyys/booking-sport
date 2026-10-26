@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/hamp/booking-sport/pkg/migratelog"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -20,6 +21,7 @@ type tenantSeed struct {
 }
 
 func main() {
+	defer migratelog.Start("migrate-tenants")()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 

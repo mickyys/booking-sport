@@ -13,12 +13,14 @@ import (
 	"os"
 	"time"
 
+	"github.com/hamp/booking-sport/pkg/migratelog"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 func main() {
+	defer migratelog.Start("remove-half-day")()
 	apply := flag.Bool("apply", false, "escribe los cambios (por defecto solo cuenta)")
 	flag.Parse()
 

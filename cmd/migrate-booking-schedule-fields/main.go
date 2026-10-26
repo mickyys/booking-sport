@@ -29,6 +29,7 @@ import (
 
 	"github.com/hamp/booking-sport/internal/domain"
 	"github.com/hamp/booking-sport/internal/domain/civil"
+	"github.com/hamp/booking-sport/pkg/migratelog"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -69,6 +70,7 @@ func (s *stats) skip(reason string) {
 }
 
 func main() {
+	defer migratelog.Start("migrate-booking-schedule-fields")()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 

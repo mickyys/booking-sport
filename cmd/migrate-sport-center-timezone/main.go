@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/hamp/booking-sport/internal/domain"
+	"github.com/hamp/booking-sport/pkg/migratelog"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -42,6 +43,7 @@ type center struct {
 }
 
 func main() {
+	defer migratelog.Start("migrate-sport-center-timezone")()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 

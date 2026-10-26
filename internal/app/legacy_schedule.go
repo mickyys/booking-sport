@@ -16,14 +16,24 @@ import (
 // BuildRulesFromLegacyCourtSchedule agrupa los slots legacy por día de la
 // semana y genera una regla por grupo. Los slots sin `day_of_week` se agrupan
 // en una regla general para los 7 días.
+//
+// En el modelo legacy un slot con `day_of_week` se SUMA a los generales de ese
+// día (y oculta los generales que se solapan con él). En el modelo de reglas la
+// más específica REEMPLAZA a la general, por lo que la regla de un día
+// específico incluye también los slots generales que no se solapan con los
+// suyos; de lo contrario ese día perdería todos sus horarios generales.
 func BuildRulesFromLegacyCourtSchedule(slots []domain.CourtSchedule) []domain.ScheduleRule {
 	if len(slots) == 0 {
 		return nil
 	}
 
+	type timedSlot struct {
+		slot       domain.ScheduleRuleSlot
+		start, end int
+	}
 	type group struct {
 		days  []int
-		slots []domain.ScheduleRuleSlot
+		slots []timedSlot
 	}
 
 	groups := make(map[string]*group)
@@ -57,25 +67,54 @@ func BuildRulesFromLegacyCourtSchedule(slots []domain.CourtSchedule) []domain.Sc
 			groups[key] = g
 			order = append(order, key)
 		}
-		g.slots = append(g.slots, domain.ScheduleRuleSlot{
-			StartTime:             formatLegacyMinutes(start),
-			EndTime:               formatLegacyMinutes(end),
-			Price:                 s.Price,
-			PaymentRequired:       s.PaymentRequired,
-			PaymentOptional:       s.PaymentOptional,
-			PartialPaymentEnabled: s.PartialPaymentEnabled,
+		g.slots = append(g.slots, timedSlot{
+			start: start,
+			end:   end,
+			slot: domain.ScheduleRuleSlot{
+				StartTime:             formatLegacyMinutes(start),
+				EndTime:               formatLegacyMinutes(end),
+				Price:                 s.Price,
+				PaymentRequired:       s.PaymentRequired,
+				PaymentOptional:       s.PaymentOptional,
+				PartialPaymentEnabled: s.PartialPaymentEnabled,
+			},
 		})
+	}
+
+	if general, ok := groups["general"]; ok {
+		for key, g := range groups {
+			if key == "general" {
+				continue
+			}
+			specific := g.slots
+			for _, gs := range general.slots {
+				overlaps := false
+				for _, sp := range specific {
+					if gs.start < sp.end && sp.start < gs.end {
+						overlaps = true
+						break
+					}
+				}
+				if !overlaps {
+					g.slots = append(g.slots, gs)
+				}
+			}
+		}
 	}
 
 	rules := make([]domain.ScheduleRule, 0, len(order))
 	for _, key := range order {
 		g := groups[key]
 		sort.Slice(g.slots, func(i, j int) bool {
-			return g.slots[i].StartTime < g.slots[j].StartTime
+			return g.slots[i].start < g.slots[j].start
 		})
+		ruleSlots := make([]domain.ScheduleRuleSlot, len(g.slots))
+		for i, ts := range g.slots {
+			ruleSlots[i] = ts.slot
+		}
 		rules = append(rules, domain.ScheduleRule{
 			DaysOfWeek: append([]int(nil), g.days...),
-			Slots:      g.slots,
+			Slots:      ruleSlots,
 			Active:     true,
 		})
 	}

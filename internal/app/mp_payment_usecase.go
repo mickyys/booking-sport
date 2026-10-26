@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"math"
 	"os"
 	"strings"
 	"time"
@@ -11,19 +10,6 @@ import (
 	"github.com/hamp/booking-sport/internal/domain"
 	"github.com/hamp/booking-sport/pkg/mercadopago"
 )
-
-const defaultMarketplaceFeePercent = 7
-
-// marketplaceFeeForAmount calcula la comisión de la plataforma en moneda local
-// aplicando el porcentaje configurado por el centro. Si el porcentaje es
-// inválido (<=0 o >100) se usa el default del 7%.
-func marketplaceFeeForAmount(amount float64, feePercent int) float64 {
-	if feePercent <= 0 || feePercent > 100 {
-		feePercent = defaultMarketplaceFeePercent
-	}
-	fee := (amount * float64(feePercent)) / 100
-	return math.Round(fee*100) / 100
-}
 
 // computeAmountToPay resuelve cuánto se cobra ahora: el total o el abono
 // configurado por el centro. Se usa tanto en el primer intento de pago como
@@ -190,7 +176,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		booking.Price = price
 		booking.FinalPrice = price
 	}
-	applyCommissionSnapshot(booking, center.MarketplaceFeePercent, amountToPay)
+	applyCommissionSnapshot(booking, centerCommissionRate(center), amountToPay)
 	booking.PaidAmount = 0
 	booking.PendingAmount = price
 	booking.IsPartialPayment = isPartial
@@ -260,7 +246,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 			existingBooking.FinalPrice = price
 			existingBooking.Price = price
 		}
-		applyCommissionSnapshot(existingBooking, center.MarketplaceFeePercent, amountToPay)
+		applyCommissionSnapshot(existingBooking, centerCommissionRate(center), amountToPay)
 		existingBooking.PaidAmount = 0
 		existingBooking.PendingAmount = price
 		existingBooking.IsPartialPayment = isPartial
@@ -323,7 +309,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 			PendingURL:      pendingURL,
 			NotificationURL: notificationURL,
 			ExpirationDate:  &lockExpires,
-			MarketplaceFee:  marketplaceFeeForAmount(amountToPay, center.MarketplaceFeePercent),
+			MarketplaceFee:  commissionFee(amountToPay, centerCommissionRate(center)),
 			Metadata:        buildPreferenceMetadata(existingBooking.BookingCode, court.Name, center.Name, center.ID.Hex(), existingBooking.Hour, existingBooking.Date, isPartial),
 		}
 
@@ -388,7 +374,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		PendingURL:      pendingURL,
 		NotificationURL: notificationURL,
 		ExpirationDate:  &lockExpires,
-		MarketplaceFee:  marketplaceFeeForAmount(amountToPay, center.MarketplaceFeePercent),
+		MarketplaceFee:  commissionFee(amountToPay, centerCommissionRate(center)),
 		Metadata:        buildPreferenceMetadata(booking.BookingCode, court.Name, center.Name, center.ID.Hex(), booking.Hour, booking.Date, isPartial),
 	}
 

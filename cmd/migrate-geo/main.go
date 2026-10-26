@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/hamp/booking-sport/pkg/migratelog"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -13,6 +14,7 @@ import (
 )
 
 func main() {
+	defer migratelog.Start("migrate-geo")()
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 

@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/hamp/booking-sport/internal/domain"
+	"github.com/hamp/booking-sport/pkg/migratelog"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -99,6 +100,7 @@ type summary struct {
 }
 
 func main() {
+	defer migratelog.Start("audit-bookings")()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 

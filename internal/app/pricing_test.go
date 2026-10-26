@@ -655,11 +655,11 @@ func TestPricingCommissionSnapshot(t *testing.T) {
 		t.Fatalf("commission = %+v, want rate 10 base 27000 amount 2700", booking.Pricing.Commission)
 	}
 
-	// Un porcentaje inválido cae al default del 7%.
-	fallback := &domain.Booking{Pricing: &domain.BookingPricing{}}
-	applyCommissionSnapshot(fallback, 0, 10000)
-	if fallback.Pricing.Commission.Rate != defaultMarketplaceFeePercent || fallback.Pricing.Commission.Amount != 700 {
-		t.Fatalf("fallback commission = %+v, want 7%% of 10000", fallback.Pricing.Commission)
+	// Un 0% explícito no se reemplaza por el default.
+	zero := &domain.Booking{Pricing: &domain.BookingPricing{}}
+	applyCommissionSnapshot(zero, 0, 10000)
+	if zero.Pricing.Commission.Rate != 0 || zero.Pricing.Commission.Amount != 0 {
+		t.Fatalf("zero commission = %+v, want 0%% of 10000", zero.Pricing.Commission)
 	}
 
 	// Sin snapshot de precios no se inventa una comisión.

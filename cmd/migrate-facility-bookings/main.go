@@ -21,12 +21,14 @@ import (
 
 	"github.com/hamp/booking-sport/internal/app"
 	"github.com/hamp/booking-sport/internal/domain"
+	"github.com/hamp/booking-sport/pkg/migratelog"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 func main() {
+	defer migratelog.Start("migrate-facility-bookings")()
 	apply := flag.Bool("apply", false, "escribe en bookings (por defecto solo simula)")
 	flag.Parse()
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	_ "time/tzdata"
@@ -224,6 +225,21 @@ func main() {
 		log.Infow("occupancy_coordinator_enabled")
 	}
 
+	app.SetCommercialModelEnforced(getEnv("COMMERCIAL_MODEL_ENFORCED", "false") == "true")
+	subscriptionAmount, err := strconv.ParseFloat(getEnv("SUBSCRIPTION_MONTHLY_AMOUNT", "0"), 64)
+	if err != nil || subscriptionAmount < 0 {
+		log.Fatalw("invalid_subscription_monthly_amount", "error", err)
+	}
+	commercialUC := app.NewCommercialUseCase(
+		sportCenterRepo, spaceRepo, scheduleRuleRepo, sportCenterUC,
+		mercadopago.NewClient(getEnv("MP_ACCESS_TOKEN", "")),
+		app.CommercialConfig{
+			SubscriptionAmount: subscriptionAmount,
+			SubscriptionBack:   getEnv("SUBSCRIPTION_BACK_URL", getEnv("URL_FRONTEND", "http://localhost:3000")+"/admin/onboarding?subscription=return"),
+		},
+	)
+	log.Infow("commercial_model", "enforced", app.CommercialModelEnforced(), "subscription_amount", subscriptionAmount)
+
 	log.Infow("use_cases_initialized")
 
 	auth0Mgmt := auth0mgmt.NewManagementClient()
@@ -254,6 +270,7 @@ func main() {
 	pricingHandler := infra.NewPricingHandler(pricingService)
 
 	mpConnectHandler := infra.NewMPConnectHandler(mpConnectUC)
+	commercialHandler := infra.NewCommercialHandler(commercialUC)
 
 	tenantUC := app.NewTenantUseCase(sportCenterRepo)
 	tenantHandler := infra.NewTenantHandler(tenantUC)
@@ -358,6 +375,8 @@ func main() {
 	r.GET("/api/spaces/:id/availability", scheduleHandler.PublicAvailability)
 	// MercadoPago Connect (marketplace) - callback público (redirección de MP)
 	r.GET("/api/admin/mercadopago/callback", mpConnectHandler.Callback)
+	// Webhook de suscripciones (preapproval) de Mercado Pago
+	r.POST("/api/subscriptions/mercadopago/webhook", commercialHandler.SubscriptionWebhook)
 
 	superAdminRepo := mongo.NewSuperAdminRepository(db)
 	if err := superAdminRepo.EnsureIndexes(context.Background()); err != nil {
@@ -469,10 +488,22 @@ func main() {
 			sa.PATCH("/sport-centers/:id/settings", superAdminHandler.Audit("center.settings", "sport_center", "id"), sportCenterHandler.UpdateSportCenterSettings)
 			sa.PUT("/sport-centers/:id/status", superAdminHandler.SetStatus)
 			sa.PUT("/sport-centers/:id/featured", superAdminHandler.SetFeatured)
+			sa.GET("/sport-centers/:id/commercial", commercialHandler.AdminGet)
+			sa.PUT("/sport-centers/:id/commercial/mode", superAdminHandler.Audit("center.commercial_mode", "sport_center", "id"), commercialHandler.AdminSetMode)
+			sa.PUT("/sport-centers/:id/commercial/commission", superAdminHandler.Audit("center.commission", "sport_center", "id"), commercialHandler.AdminSetCommission)
+			sa.POST("/sport-centers/:id/commercial/publish", superAdminHandler.Audit("center.publish", "sport_center", "id"), commercialHandler.AdminPublish)
 			sa.GET("/bookings", superAdminHandler.ListBookings)
 			sa.GET("/bookings/export", superAdminHandler.ExportBookings)
 			sa.GET("/audit", superAdminHandler.ListAudit)
 		}
+
+		// Modelo comercial del centro del usuario autenticado
+		api.GET("/admin/commercial", commercialHandler.Get)
+		api.PUT("/admin/commercial/mode", commercialHandler.SetMode)
+		api.GET("/admin/commercial/publish-check", commercialHandler.PublishCheck)
+		api.POST("/admin/commercial/publish", commercialHandler.Publish)
+		api.GET("/admin/commercial/subscription", commercialHandler.GetSubscription)
+		api.POST("/admin/commercial/subscription", commercialHandler.StartSubscription)
 
 		// MercadoPago Connect (marketplace) routes
 		api.GET("/admin/mercadopago/connect", mpConnectHandler.GetAuthorizationURL)

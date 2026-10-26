@@ -341,14 +341,11 @@ func (uc *FacilityBookingUseCase) Create(ctx context.Context, in CreateFacilityB
 	}
 
 	if method == FacilityPaymentOnline && len(docs) > 0 {
-		rate := center.MarketplaceFeePercent
-		if rate <= 0 || rate > 100 {
-			rate = defaultMarketplaceFeePercent
-		}
+		rate := centerCommissionRate(center)
 		perDay := amountToPay / float64(len(docs))
 		for _, d := range docs {
 			d.CommissionRate = rate
-			d.CommissionAmount = marketplaceFeeForAmount(perDay, rate)
+			d.CommissionAmount = commissionFee(perDay, rate)
 		}
 	}
 
@@ -430,7 +427,7 @@ func (uc *FacilityBookingUseCase) createPreference(
 		PendingURL:      successURL,
 		NotificationURL: notificationURL,
 		ExpirationDate:  expiresAt,
-		MarketplaceFee:  marketplaceFeeForAmount(amountToPay, center.MarketplaceFeePercent),
+		MarketplaceFee:  commissionFee(amountToPay, centerCommissionRate(center)),
 		Metadata: map[string]any{
 			"booking_code": first.BookingCode,
 			"space":        space.Name,
