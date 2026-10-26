@@ -42,6 +42,22 @@ type MailgunMailer struct {
 	templateCancel        string
 	templateWelcomeCenter string
 	templateFacility      string
+	onSent                func(ctx context.Context, bookingCode, messageID string)
+}
+
+// SetOnSent registra un callback que se invoca cuando Mailgun acepta un correo
+// de confirmación (reserva o espacio). Sirve para dejar la marca en la reserva.
+func (m *MailgunMailer) SetOnSent(fn func(ctx context.Context, bookingCode, messageID string)) {
+	m.onSent = fn
+}
+
+func (m *MailgunMailer) markSent(bookingCode, messageID string) {
+	if m.onSent == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	m.onSent(ctx, bookingCode, messageID)
 }
 
 func NewMailgunMailer(apiKey, domain, from, templateConfirm, templateConfirmPaid, templateCancel, templateWelcomeCenter string) *MailgunMailer {
@@ -166,6 +182,7 @@ func (m *MailgunMailer) SendBookingConfirmation(ctx context.Context, booking *do
 		"message_id", id,
 		"template", templateToUse,
 	)
+	m.markSent(booking.BookingCode, id)
 	return nil
 }
 
@@ -252,6 +269,7 @@ func (m *MailgunMailer) SendFacilityBookingConfirmation(ctx context.Context, dat
 		logger.GetLogger().Infow("mailgun_email_sent",
 			"msg", fmt.Sprintf("Correo de confirmación de espacio enviado a %s para %s", logger.MaskEmail(data.To), data.BookingCode),
 			"booking_code", data.BookingCode, "message_id", id, "template", tpl)
+		m.markSent(data.BookingCode, id)
 	}
 	return nil
 }

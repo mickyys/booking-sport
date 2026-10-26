@@ -690,6 +690,10 @@ type Booking struct {
 	// escribió el documento. 0/ausente = legacy (date + hour + minutes),
 	// 2 = UTC canónico (scheduled_at + ends_at).
 	ScheduleSchemaVersion int `bson:"schedule_schema_version,omitempty" json:"schedule_schema_version,omitempty"`
+
+	// ConfirmationEmailMessageID es el id de Mailgun del correo de confirmación;
+	// junto a ConfirmationEmailSentAt deja constancia del envío.
+	ConfirmationEmailMessageID string `bson:"confirmation_email_message_id,omitempty" json:"-"`
 	// OccupancyID/OccupancyToken vinculan la reserva con su intervalo en el
 	// coordinador de ocupación. El token es secreto: nunca se serializa a JSON.
 	OccupancyID    string `bson:"occupancy_id,omitempty" json:"-"`

@@ -150,6 +150,11 @@ func main() {
 	if mailgunAPIKey != "" && mailgunDomain != "" && mailgunFrom != "" {
 		mgMailer := mg.NewMailgunMailer(mailgunAPIKey, mailgunDomain, mailgunFrom, mailgunTemplate, mailgunTemplatePaid, mailgunTemplateCancel, mailgunTemplateWelcomeCenter)
 		mgMailer.SetFacilityTemplate(os.Getenv("MAILGUN_TEMPLATE_FACILITY"))
+		mgMailer.SetOnSent(func(ctx context.Context, bookingCode, messageID string) {
+			if err := bookingRepo.MarkConfirmationEmailSent(ctx, bookingCode, messageID); err != nil {
+				log.Warnw("mark_confirmation_email_failed", "booking_code", bookingCode, "error", err)
+			}
+		})
 		bookingMailer = mgMailer
 		facilityMailer = mgMailer
 		memberVerificationMailer = mgMailer
