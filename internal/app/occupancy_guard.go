@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"sync/atomic"
 	"time"
 
@@ -44,11 +45,27 @@ const (
 	occupancyCommitTTL = 2 * time.Minute
 	// MaxBookingDuration bounds a single booking interval.
 	MaxBookingDuration = domain.MaxBookingDuration
-	// mpHoldTTL is how long an interval stays held while the customer pays.
-	mpHoldTTL = 15 * time.Minute
+	// defaultMPHoldTTL is how long an interval stays held while the customer pays.
+	defaultMPHoldTTL = 15 * time.Minute
 	// occupancyPolicyTTL is how long a center's mode/generation is cached.
 	occupancyPolicyTTL = 30 * time.Second
 )
+
+// mpHoldTTL es el tiempo que se retiene un horario mientras el cliente paga.
+// Se puede acortar con BOOKING_MP_HOLD_TTL (p. ej. "1m") para probar la
+// expiración del bloqueo; mínimo 10s. Valores inválidos usan el valor por defecto.
+var mpHoldTTL = holdTTLFromEnv(os.Getenv("BOOKING_MP_HOLD_TTL"))
+
+func holdTTLFromEnv(raw string) time.Duration {
+	if raw == "" {
+		return defaultMPHoldTTL
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 10*time.Second {
+		return defaultMPHoldTTL
+	}
+	return d
+}
 
 // ErrLatePaymentConflict means a payment was approved after the hold expired
 // and the interval has since been taken by someone else.

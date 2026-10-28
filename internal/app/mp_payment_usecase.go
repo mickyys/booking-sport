@@ -261,7 +261,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 				Minutes:   booking.Minutes,
 				UserID:    effectiveUserID,
 				BookingID: existingBooking.ID,
-				ExpiresAt: time.Now().Add(15 * time.Minute),
+				ExpiresAt: time.Now().Add(mpHoldTTL),
 				CreatedAt: time.Now(),
 			}
 			claimed, err := uc.holdRepo.TryClaimSlot(ctx, newHold)
@@ -321,6 +321,13 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		existingBooking.MPPreferenceID = result.ID
 		uc.repo.Update(ctx, existingBooking)
 		return result.InitPoint, nil
+	}
+
+	if price <= 0 && quote != nil && quote.Quote.DiscountTotal > 0 {
+		if err := uc.confirmFullyDiscountedBooking(ctx, booking, hold, quote); err != nil {
+			return "", err
+		}
+		return "", nil
 	}
 
 	lockExpires := hold.ExpiresAt
@@ -386,6 +393,30 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	booking.MPPreferenceID = result.ID
 
 	return result.InitPoint, nil
+}
+
+// confirmFullyDiscountedBooking confirma directamente una reserva cuyo total queda
+// en $0 por un beneficio (cupón o socio): no hay nada que cobrar en Mercado Pago.
+func (uc *BookingUseCase) confirmFullyDiscountedBooking(ctx context.Context, booking *domain.Booking, hold *domain.SlotHold, quote *QuoteResult) error {
+	booking.Status = domain.BookingStatusConfirmed
+	booking.PaymentMethod = "coupon"
+	booking.PaidAmount = 0
+	booking.PendingAmount = 0
+	booking.IsPartialPayment = false
+	booking.HoldID = nil
+	booking.LockExpiresAt = nil
+	booking.UpdatedAt = time.Now()
+
+	if err := uc.reserveDiscount(ctx, quote, booking); err != nil {
+		return err
+	}
+	if err := uc.persistWithOccupancy(ctx, booking, func() error { return uc.repo.Create(ctx, booking) }); err != nil {
+		uc.releaseDiscount(ctx, booking.ID)
+		return err
+	}
+	uc.confirmDiscount(ctx, booking.ID)
+	uc.holdRepo.Delete(ctx, hold.ID)
+	return nil
 }
 
 // StoreMPPaymentID guarda el mp_payment_id en la reserva a partir del booking code.

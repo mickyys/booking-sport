@@ -802,6 +802,7 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"init_point":   initPoint,
 		"booking_code": input.Booking.BookingCode,
+		"confirmed":    initPoint == "",
 	})
 }
 

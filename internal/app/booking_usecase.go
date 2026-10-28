@@ -376,7 +376,7 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 	}
 
 	now := time.Now().In(loc)
-	expiresAt := now.Add(15 * time.Minute)
+	expiresAt := now.Add(mpHoldTTL)
 
 	log := logger.FromContext(ctx)
 
