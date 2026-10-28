@@ -125,11 +125,11 @@ func (s *FirebaseNotificationService) SendPushNotification(ctx context.Context, 
 		)
 		for idx, resp := range response.Responses {
 			if !resp.Success {
-			log.Warnw("push_notification_token_failed",
-				"msg", fmt.Sprintf("Token FCM #%d falló en envío de notificación", idx),
-				"token_index", idx,
-				"error", resp.Error,
-			)
+				log.Warnw("push_notification_token_failed",
+					"msg", fmt.Sprintf("Token FCM #%d falló en envío de notificación", idx),
+					"token_index", idx,
+					"error", resp.Error,
+				)
 			}
 		}
 	} else {

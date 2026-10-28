@@ -3,13 +3,14 @@ package mercadopago
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	mp "github.com/mercadopago/sdk-go/pkg/config"
 	"github.com/mercadopago/sdk-go/pkg/payment"
 	"github.com/mercadopago/sdk-go/pkg/preference"
 	"github.com/mercadopago/sdk-go/pkg/refund"
+
+	"github.com/hamp/booking-sport/pkg/logger"
 )
 
 type RefundResult struct {
@@ -18,12 +19,51 @@ type RefundResult struct {
 	Amount float64
 }
 
+// PreferenceInput agrupa todos los parámetros necesarios para crear una
+// preferencia de pago con split (marketplace).
+type PreferenceInput struct {
+	Title           string
+	Amount          float64
+	Email           string
+	PayerName       string
+	PayerSurname    string
+	ExternalRef     string
+	SuccessURL      string
+	FailureURL      string
+	PendingURL      string
+	NotificationURL string
+	ExpirationDate  *time.Time
+	MarketplaceFee  float64
+	Metadata        map[string]any
+}
+
 type Client struct {
 	accessToken string
+	config      *mp.Config
 }
 
 func NewClient(accessToken string) *Client {
-	return &Client{accessToken: accessToken}
+	cfg, err := mp.New(accessToken)
+	if err != nil {
+		logger.GetLogger().Warnw("mercadopago_config_error",
+			"error", err,
+		)
+	}
+	return &Client{accessToken: accessToken, config: cfg}
+}
+
+// getConfig devuelve la configuración del cliente, recreándola solo si el primer
+// intento falló (p.ej. token vacío al construirlo).
+func (c *Client) getConfig() (*mp.Config, error) {
+	if c.config != nil {
+		return c.config, nil
+	}
+	cfg, err := mp.New(c.accessToken)
+	if err != nil {
+		return nil, fmt.Errorf("error creating mercadopago config: %w", err)
+	}
+	c.config = cfg
+	return cfg, nil
 }
 
 type PreferenceResult struct {
@@ -31,10 +71,19 @@ type PreferenceResult struct {
 	InitPoint string
 }
 
-func (c *Client) CreatePreference(ctx context.Context, title string, amount float64, email string, payerName string, payerSurname string, externalRef string, successURL string, failureURL string, pendingURL string, notificationURL string, expirationDate *time.Time) (*PreferenceResult, error) {
-	cfg, err := mp.New(c.accessToken)
+// maskToken enmascara un access token mostrando solo los primeros y últimos
+// caracteres. Es seguro para tokens vacíos o cortos.
+func maskToken(token string) string {
+	if len(token) <= 10 {
+		return "***"
+	}
+	return token[:5] + "..." + token[len(token)-5:]
+}
+
+func (c *Client) CreatePreference(ctx context.Context, input PreferenceInput) (*PreferenceResult, error) {
+	cfg, err := c.getConfig()
 	if err != nil {
-		return nil, fmt.Errorf("error creating mercadopago config: %w", err)
+		return nil, err
 	}
 
 	prefClient := preference.NewClient(cfg)
@@ -43,33 +92,47 @@ func (c *Client) CreatePreference(ctx context.Context, title string, amount floa
 	req := preference.Request{
 		Items: []preference.ItemRequest{
 			{
-				Title:     title,
+				Title:     input.Title,
 				Quantity:  quantity,
-				UnitPrice: amount,
+				UnitPrice: input.Amount,
 			},
 		},
 		Payer: &preference.PayerRequest{
-			Email:   email,
-			Name:    payerName,
-			Surname: payerSurname,
+			Email:   input.Email,
+			Name:    input.PayerName,
+			Surname: input.PayerSurname,
 		},
 		BackURLs: &preference.BackURLsRequest{
-			Success: successURL,
-			Failure: failureURL,
-			Pending: pendingURL,
+			Success: input.SuccessURL,
+			Failure: input.FailureURL,
+			Pending: input.PendingURL,
 		},
-		ExternalReference: externalRef,
+		ExternalReference: input.ExternalRef,
 		AutoReturn:        "approved",
-		NotificationURL:   notificationURL,
-		ExpirationDateTo:  expirationDate,
+		NotificationURL:   input.NotificationURL,
+		ExpirationDateTo:  input.ExpirationDate,
+		MarketplaceFee:    input.MarketplaceFee,
+		Metadata:          input.Metadata,
 	}
+
+	log := logger.FromContext(ctx)
+	log.Infow("mercadopago_preference_creating",
+		"external_ref", input.ExternalRef,
+		"amount", input.Amount,
+		"marketplace_fee", req.MarketplaceFee,
+		"token", maskToken(c.accessToken),
+	)
 
 	result, err := prefClient.Create(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("error creating mercadopago preference: %w", err)
 	}
 
-	log.Printf("[MERCADOPAGO] Preference created: ID=%s, InitPoint=%s\n", result.ID, result.InitPoint)
+	log.Infow("mercadopago_preference_created",
+		"preference_id", result.ID,
+		"init_point", result.InitPoint,
+		"token", maskToken(c.accessToken),
+	)
 
 	return &PreferenceResult{
 		ID:        result.ID,
@@ -78,9 +141,9 @@ func (c *Client) CreatePreference(ctx context.Context, title string, amount floa
 }
 
 func (c *Client) GetPayment(ctx context.Context, paymentID int) (*payment.Response, error) {
-	cfg, err := mp.New(c.accessToken)
+	cfg, err := c.getConfig()
 	if err != nil {
-		return nil, fmt.Errorf("error creating mercadopago config: %w", err)
+		return nil, err
 	}
 
 	payClient := payment.NewClient(cfg)
@@ -90,17 +153,23 @@ func (c *Client) GetPayment(ctx context.Context, paymentID int) (*payment.Respon
 		return nil, fmt.Errorf("error getting mercadopago payment: %w", err)
 	}
 
-	log.Printf("[MERCADOPAGO] Payment %d status: %s\n", paymentID, result.Status)
+	logger.FromContext(ctx).Infow("mercadopago_payment_status",
+		"payment_id", paymentID,
+		"status", result.Status,
+	)
 	return result, nil
 }
 
 // CreateRefund crea un reembolso total para un pago
 func (c *Client) CreateRefund(ctx context.Context, paymentID int) (*RefundResult, error) {
-	log.Println("[MERCADOPAGO] Creating refund for payment ID:", paymentID)
-	log.Printf("Using access token: %s\n", c.accessToken)
-	cfg, err := mp.New(c.accessToken)
+	log := logger.FromContext(ctx)
+	log.Infow("mercadopago_refund_creating",
+		"payment_id", paymentID,
+		"token", maskToken(c.accessToken),
+	)
+	cfg, err := c.getConfig()
 	if err != nil {
-		return nil, fmt.Errorf("error creating mercadopago config: %w", err)
+		return nil, err
 	}
 
 	refundClient := refund.NewClient(cfg)
@@ -109,8 +178,12 @@ func (c *Client) CreateRefund(ctx context.Context, paymentID int) (*RefundResult
 		return nil, fmt.Errorf("error creating mercadopago refund for payment %d: %w", paymentID, err)
 	}
 
-	log.Printf("[MERCADOPAGO] Refund created: ID=%d, PaymentID=%d, Amount=%.2f, Status=%s\n",
-		result.ID, paymentID, result.Amount, result.Status)
+	log.Infow("mercadopago_refund_created",
+		"refund_id", result.ID,
+		"payment_id", paymentID,
+		"amount", result.Amount,
+		"status", result.Status,
+	)
 
 	return &RefundResult{
 		ID:     result.ID,
@@ -121,9 +194,9 @@ func (c *Client) CreateRefund(ctx context.Context, paymentID int) (*RefundResult
 
 // CreatePartialRefund crea un reembolso parcial para un pago
 func (c *Client) CreatePartialRefund(ctx context.Context, paymentID int, amount float64) (*RefundResult, error) {
-	cfg, err := mp.New(c.accessToken)
+	cfg, err := c.getConfig()
 	if err != nil {
-		return nil, fmt.Errorf("error creating mercadopago config: %w", err)
+		return nil, err
 	}
 
 	refundClient := refund.NewClient(cfg)
@@ -132,8 +205,12 @@ func (c *Client) CreatePartialRefund(ctx context.Context, paymentID int, amount 
 		return nil, fmt.Errorf("error creating partial mercadopago refund for payment %d: %w", paymentID, err)
 	}
 
-	log.Printf("[MERCADOPAGO] Partial refund created: ID=%d, PaymentID=%d, Amount=%.2f, Status=%s\n",
-		result.ID, paymentID, result.Amount, result.Status)
+	logger.FromContext(ctx).Infow("mercadopago_partial_refund_created",
+		"refund_id", result.ID,
+		"payment_id", paymentID,
+		"amount", result.Amount,
+		"status", result.Status,
+	)
 
 	return &RefundResult{
 		ID:     result.ID,
@@ -143,9 +220,9 @@ func (c *Client) CreatePartialRefund(ctx context.Context, paymentID int, amount 
 }
 
 func (c *Client) SearchPaymentsByExternalReference(ctx context.Context, externalReference string) (*payment.SearchResponse, error) {
-	cfg, err := mp.New(c.accessToken)
+	cfg, err := c.getConfig()
 	if err != nil {
-		return nil, fmt.Errorf("error creating mercadopago config: %w", err)
+		return nil, err
 	}
 
 	payClient := payment.NewClient(cfg)
@@ -163,6 +240,9 @@ func (c *Client) SearchPaymentsByExternalReference(ctx context.Context, external
 		return nil, fmt.Errorf("error searching mercadopago payments by external_reference %s: %w", externalReference, err)
 	}
 
-	log.Printf("[MERCADOPAGO] Search by external_reference=%s: found %d results\n", externalReference, result.Paging.Total)
+	logger.FromContext(ctx).Infow("mercadopago_payment_search",
+		"external_reference", externalReference,
+		"total", result.Paging.Total,
+	)
 	return result, nil
 }

@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="es" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="x-apple-disable-message-reformatting">
+
+  <title>{{.Title}}</title>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #f4f7f5;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #17201b;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    table {
+      border-collapse: collapse;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    .card {
+      background-color: #ffffff;
+      border-radius: 18px;
+      overflow: hidden;
+      border: 1px solid #e3ebe6;
+    }
+
+    .button {
+      display: inline-block;
+      background-color: #16e6a1;
+      color: #071b16 !important;
+      text-decoration: none;
+      font-size: 16px;
+      font-weight: 700;
+      padding: 15px 32px;
+      border-radius: 10px;
+    }
+
+    @media only screen and (max-width: 600px) {
+      .container {
+        width: 100% !important;
+      }
+
+      .mobile-padding {
+        padding-left: 24px !important;
+        padding-right: 24px !important;
+      }
+
+      .button {
+        display: block !important;
+        text-align: center !important;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- Preheader -->
+  <div
+    style="
+      display:none;
+      max-height:0;
+      overflow:hidden;
+      opacity:0;
+      color:transparent;
+    "
+  >
+    {{.Preheader}}
+  </div>
+
+  <table
+    role="presentation"
+    width="100%"
+    cellpadding="0"
+    cellspacing="0"
+    style="
+      background-color:#f4f7f5;
+      padding:40px 16px;
+    "
+  >
+    <tr>
+      <td align="center">
+
+        <table
+          role="presentation"
+          class="container"
+          width="600"
+          cellpadding="0"
+          cellspacing="0"
+        >
+
+          <!-- CARD -->
+          <tr>
+            <td>
+
+              <table
+                role="presentation"
+                width="100%"
+                cellpadding="0"
+                cellspacing="0"
+                class="card"
+              >
+
+                <!-- HEADER -->
+                <tr>
+                  <td
+                    align="center"
+                    style="
+                      background-color:#0d1b3a;
+                      padding:32px 24px;
+                    "
+                  >
+
+                    <a
+                      href="{{.HomeURL}}"
+                      target="_blank"
+                      style="text-decoration:none;"
+                    >
+                      <img
+                        src="{{.LogoURL}}"
+                        alt="ReservaloYA"
+                        width="280"
+                        style="
+                          display:block;
+                          width:280px;
+                          max-width:100%;
+                          height:auto;
+                          border:0;
+                          margin:0 auto;
+                        "
+                      >
+                    </a>
+
+                  </td>
+                </tr>
+
+                <!-- GREEN LINE -->
+                <tr>
+                  <td
+                    style="
+                      height:5px;
+                      background-color:#16e6a1;
+                      font-size:0;
+                      line-height:0;
+                    "
+                  >
+                    &nbsp;
+                  </td>
+                </tr>
+
+                <!-- CONTENT -->
+                <tr>
+                  <td
+                    class="mobile-padding"
+                    style="
+                      padding:42px 48px 40px 48px;
+                    "
+                  >
+
+                    <!-- ICON -->
+                    <table
+                      role="presentation"
+                      width="100%"
+                      cellpadding="0"
+                      cellspacing="0"
+                    >
+                      <tr>
+                        <td align="center">
+
+                          <div
+                            style="
+                              width:68px;
+                              height:68px;
+                              line-height:68px;
+                              border-radius:50%;
+                              background-color:#e4faf3;
+                              color:#0d8f68;
+                              font-size:32px;
+                              font-weight:bold;
+                              text-align:center;
+                              margin:0 auto;
+                            "
+                          >
+                            ✓
+                          </div>
+
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- TITLE -->
+                    <h1
+                      style="
+                        margin:28px 0 12px 0;
+                        text-align:center;
+                        font-size:28px;
+                        line-height:36px;
+                        font-weight:700;
+                        color:#0d1b3a;
+                      "
+                    >
+                      {{.Title}}
+                    </h1>
+
+                    <!-- GREETING -->
+                    <p
+                      style="
+                        margin:0 0 18px 0;
+                        text-align:center;
+                        font-size:17px;
+                        line-height:26px;
+                        color:#37413b;
+                      "
+                    >
+                      Hola
+                      <strong>{{.GreetingName}}</strong>
+                      👋
+                    </p>
+
+                    <!-- DESCRIPTION -->
+                    <p
+                      style="
+                        margin:0 0 28px 0;
+                        text-align:center;
+                        font-size:16px;
+                        line-height:26px;
+                        color:#59645e;
+                      "
+                    >
+                      {{.Intro}}
+                    </p>
+
+                    <!-- ACCOUNT BOX -->
+                    <table
+                      role="presentation"
+                      width="100%"
+                      cellpadding="0"
+                      cellspacing="0"
+                      style="
+                        background-color:#f7faf8;
+                        border:1px solid #e2ebe5;
+                        border-radius:12px;
+                        margin-bottom:14px;
+                      "
+                    >
+                      <tr>
+                        <td
+                          align="center"
+                          style="padding:16px 20px;"
+                        >
+
+                          <p
+                            style="
+                              margin:0 0 5px 0;
+                              font-size:12px;
+                              line-height:18px;
+                              color:#7b857f;
+                              text-transform:uppercase;
+                              letter-spacing:0.6px;
+                            "
+                          >
+                            Correo de tu cuenta
+                          </p>
+
+                          <p
+                            style="
+                              margin:0;
+                              font-size:15px;
+                              line-height:22px;
+                              font-weight:600;
+                              color:#17201b;
+                              word-break:break-word;
+                            "
+                          >
+                            {{.Email}}
+                          </p>
+
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- CENTER BOX -->
+                    <table
+                      role="presentation"
+                      width="100%"
+                      cellpadding="0"
+                      cellspacing="0"
+                      style="
+                        background-color:#f7faf8;
+                        border:1px solid #e2ebe5;
+                        border-radius:12px;
+                        margin-bottom:28px;
+                      "
+                    >
+                      <tr>
+                        <td
+                          align="center"
+                          style="padding:16px 20px;"
+                        >
+
+                          <p
+                            style="
+                              margin:0 0 5px 0;
+                              font-size:12px;
+                              line-height:18px;
+                              color:#7b857f;
+                              text-transform:uppercase;
+                              letter-spacing:0.6px;
+                            "
+                          >
+                            {{.CenterLabel}}
+                          </p>
+
+                          <p
+                            style="
+                              margin:0 0 4px 0;
+                              font-size:15px;
+                              line-height:22px;
+                              font-weight:600;
+                              color:#17201b;
+                            "
+                          >
+                            {{.CenterName}}
+                          </p>
+
+                          <p
+                            style="
+                              margin:0 0 4px 0;
+                              font-size:14px;
+                              line-height:21px;
+                              color:#37413b;
+                            "
+                          >
+                            {{.Address}}
+                          </p>
+
+                          <p
+                            style="
+                              margin:0;
+                              font-size:14px;
+                              line-height:21px;
+                            "
+                          >
+                            <a
+                              href="{{.TenantURL}}"
+                              target="_blank"
+                              style="
+                                color:#0d8f68;
+                                text-decoration:underline;
+                                word-break:break-all;
+                              "
+                            >
+                              {{.TenantURL}}
+                            </a>
+                          </p>
+
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- NEXT STEP -->
+                    <p
+                      style="
+                        margin:0 0 20px 0;
+                        text-align:center;
+                        font-size:16px;
+                        line-height:25px;
+                        color:#37413b;
+                      "
+                    >
+                      {{.NextStepText}}
+                    </p>
+
+                    <!-- BUTTON -->
+                    <table
+                      role="presentation"
+                      width="100%"
+                      cellpadding="0"
+                      cellspacing="0"
+                    >
+                      <tr>
+                        <td align="center">
+
+                          <a
+                            href="{{.ActionURL}}"
+                            target="_blank"
+                            class="button"
+                            style="
+                              display:inline-block;
+                              background-color:#16e6a1;
+                              color:#071b16;
+                              text-decoration:none;
+                              font-size:16px;
+                              line-height:20px;
+                              font-weight:700;
+                              padding:15px 32px;
+                              border-radius:10px;
+                            "
+                          >
+                            {{.ButtonLabel}}
+                          </a>
+
+                        </td>
+                      </tr>
+                    </table>
+
+                    {{if .ShowExpiration}}
+                    <!-- EXPIRATION -->
+                    <p
+                      style="
+                        margin:22px 0 0 0;
+                        text-align:center;
+                        font-size:13px;
+                        line-height:20px;
+                        color:#89938d;
+                      "
+                    >
+                      Este enlace es personal y de un solo uso.
+                    </p>
+                    {{end}}
+
+                    <!-- FALLBACK -->
+                    <p
+                      style="
+                        margin:26px 0 0 0;
+                        text-align:center;
+                        font-size:12px;
+                        line-height:18px;
+                        color:#9aa39e;
+                      "
+                    >
+                      Si el botón no funciona, copia y pega el
+                      siguiente enlace en tu navegador:
+                    </p>
+
+                    <p
+                      style="
+                        margin:10px 0 0 0;
+                        text-align:center;
+                        font-size:11px;
+                        line-height:17px;
+                        word-break:break-all;
+                      "
+                    >
+                      <a
+                        href="{{.ActionURL}}"
+                        target="_blank"
+                        style="
+                          color:#0d8f68;
+                          text-decoration:underline;
+                        "
+                      >
+                        {{.ActionURL}}
+                      </a>
+                    </p>
+
+                  </td>
+                </tr>
+
+                <!-- DIVIDER -->
+                <tr>
+                  <td style="padding:0 48px;">
+
+                    <div
+                      style="
+                        height:1px;
+                        background-color:#edf1ee;
+                        font-size:0;
+                        line-height:0;
+                      "
+                    >
+                      &nbsp;
+                    </div>
+
+                  </td>
+                </tr>
+
+                <!-- HELP -->
+                <tr>
+                  <td
+                    class="mobile-padding"
+                    style="
+                      padding:26px 48px 30px 48px;
+                    "
+                  >
+
+                    <p
+                      style="
+                        margin:0 0 8px 0;
+                        text-align:center;
+                        font-size:14px;
+                        line-height:22px;
+                        font-weight:600;
+                        color:#37413b;
+                      "
+                    >
+                      ¿Tienes algún problema?
+                    </p>
+
+                    <p
+                      style="
+                        margin:0;
+                        text-align:center;
+                        font-size:13px;
+                        line-height:21px;
+                        color:#7b857f;
+                      "
+                    >
+                      Si necesitas ayuda con tu cuenta,
+                      no dudes en contactarnos.
+                    </p>
+
+                  </td>
+                </tr>
+
+              </table>
+
+            </td>
+          </tr>
+
+          <!-- FOOTER -->
+          <tr>
+            <td
+              align="center"
+              style="
+                padding:28px 20px 10px 20px;
+              "
+            >
+
+              <p
+                style="
+                  margin:0 0 8px 0;
+                  font-size:13px;
+                  line-height:20px;
+                  color:#7b857f;
+                "
+              >
+                © 2026 ReservaloYA
+              </p>
+
+              <p
+                style="
+                  margin:0;
+                  font-size:12px;
+                  line-height:18px;
+                  color:#9aa39e;
+                "
+              >
+                Gestiona tus reservas de forma simple y rápida.
+              </p>
+
+            </td>
+          </tr>
+
+        </table>
+
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>

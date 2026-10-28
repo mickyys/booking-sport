@@ -2,25 +2,32 @@ package infra
 
 import (
 	"bytes"
+	"context"
+	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hamp/booking-sport/internal/app"
 	"github.com/hamp/booking-sport/internal/domain"
+	"github.com/hamp/booking-sport/pkg/logger"
+	"github.com/hamp/booking-sport/pkg/mercadopago"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type BookingHandler struct {
 	useCase     *app.BookingUseCase
 	baseHandler *BaseHandler
+	facility    *app.FacilityBookingUseCase
 }
 
 func NewBookingHandler(uc *app.BookingUseCase) *BookingHandler {
@@ -28,6 +35,39 @@ func NewBookingHandler(uc *app.BookingUseCase) *BookingHandler {
 		useCase:     uc,
 		baseHandler: NewBaseHandler(),
 	}
+}
+
+// SetFacilityBookings habilita el procesamiento de pagos y consultas por código
+// de las reservas de sede y piscina, que comparten rutas con las canchas.
+func (h *BookingHandler) SetFacilityBookings(uc *app.FacilityBookingUseCase) {
+	h.facility = uc
+}
+
+// normalizeBookingCode hace la consulta por código insensible a mayúsculas:
+// las reservas de sede se guardan con prefijo "FAC-" en mayúsculas y las de
+// cancha en minúsculas.
+func normalizeBookingCode(code string) string {
+	code = strings.TrimSpace(code)
+	if strings.HasPrefix(strings.ToUpper(code), domain.FacilityBookingCodePrefix) {
+		return strings.ToUpper(code)
+	}
+	return strings.ToLower(code)
+}
+
+func isFacilityBookingCode(code string) bool {
+	return strings.HasPrefix(code, domain.FacilityBookingCodePrefix)
+}
+
+// handlePaymentNotification enruta la notificación de Mercado Pago a la reserva
+// de sede/piscina o de cancha que corresponda.
+func (h *BookingHandler) handlePaymentNotification(ctx context.Context, paymentID string) error {
+	if h.facility != nil {
+		handled, err := h.facility.HandlePaymentNotification(ctx, paymentID)
+		if handled {
+			return err
+		}
+	}
+	return h.useCase.HandleMercadoPagoWebhook(ctx, paymentID)
 }
 
 // GetUserCancelledBookings retorna solo las reservas canceladas del usuario autenticado
@@ -276,7 +316,7 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 
 	maxRefundAmount := booking.PaidAmount
 	if !booking.IsPartialPayment {
-		maxRefundAmount = (booking.Price * float64(refundPercentage)) / 100
+		maxRefundAmount = (booking.ChargedPrice() * float64(refundPercentage)) / 100
 	}
 
 	// Nueva estructura de respuesta para evitar exponer IDs sensibles y agregar nombres
@@ -292,9 +332,13 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 			"local_date":           booking.LocalDate,
 			"timezone":             booking.Timezone,
 			"scheduled_at":         booking.ScheduledAt,
+			"ends_at":              booking.EndInstant(),
+			"duration_minutes":     booking.DurationOrDefault(),
 			"hour":                 booking.Hour,
 			"minutes":              booking.Minutes,
-			"price":                booking.Price,
+			"price":                booking.ChargedPrice(),
+			"list_price":           booking.Price,
+			"pricing":              booking.Pricing,
 			"status":               booking.Status,
 			"payment_method":       booking.PaymentMethod,
 			"booking_code":         booking.BookingCode,
@@ -379,9 +423,19 @@ func (h *BookingHandler) CancelBooking(c *gin.Context) {
 }
 
 func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
-	code := c.Param("code")
+	code := normalizeBookingCode(c.Param("code"))
 	if code == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "booking code is required"})
+		return
+	}
+
+	if h.facility != nil && isFacilityBookingCode(code) {
+		bookings, err := h.facility.GetByCode(c.Request.Context(), code)
+		if err != nil {
+			c.JSON(errorStatusCode(err), gin.H{"error": "booking not found"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"type": "facility", "booking_code": code, "bookings": bookings})
 		return
 	}
 
@@ -427,7 +481,7 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 
 	maxRefundAmount := booking.PaidAmount
 	if !booking.IsPartialPayment {
-		maxRefundAmount = (booking.Price * float64(refundPercentage)) / 100
+		maxRefundAmount = (booking.ChargedPrice() * float64(refundPercentage)) / 100
 	}
 
 	response := gin.H{
@@ -438,13 +492,21 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 			"court_name":           court.Name,
 			"sport_center_id":      court.SportCenterID,
 			"sport_center_name":    center.Name,
+			"sport_center_slug":    center.Slug,
+			"sport_center_address": center.Address,
+			"sport_center_city":    center.City,
+			"customer_name":        booking.CustomerName,
 			"date":                 booking.Date,
 			"local_date":           booking.LocalDate,
 			"timezone":             booking.Timezone,
 			"scheduled_at":         booking.ScheduledAt,
+			"ends_at":              booking.EndInstant(),
+			"duration_minutes":     booking.DurationOrDefault(),
 			"hour":                 booking.Hour,
 			"minutes":              booking.Minutes,
-			"price":                booking.Price,
+			"price":                booking.ChargedPrice(),
+			"list_price":           booking.Price,
+			"pricing":              booking.Pricing,
 			"status":               booking.Status,
 			"payment_method":       booking.PaymentMethod,
 			"booking_code":         booking.BookingCode,
@@ -454,6 +516,8 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 			"pending_amount":       booking.PendingAmount,
 			"is_partial_payment":   booking.IsPartialPayment,
 			"partial_payment_paid": booking.PartialPaymentPaid,
+			"mp_status":            booking.MPStatus,
+			"last_payment_sync_at": booking.LastPaymentSyncAt,
 		},
 		"hours_until_match": hoursUntilMatch,
 		"can_cancel":        canCancel,
@@ -504,12 +568,19 @@ func (h *BookingHandler) CreateInternalBooking(c *gin.Context) {
 		return
 	}
 	booking.Booking.SeriesID = booking.SeriesID
+	// La reserva interna la crea un administrador: puede asignar un socio sin
+	// verificación por correo.
+	booking.Booking.AdminSource = true
 	// Asegurar que minutes tenga valor por defecto
 	if booking.Booking.Minutes == 0 {
 		booking.Booking.Minutes = 0
 	}
 
-	log.Printf("📝 CreateInternalBooking: date=%s, hour=%d, minutes=%d", booking.Booking.Date, booking.Booking.Hour, booking.Booking.Minutes)
+	h.baseHandler.GetLogger(c).Infow("create_internal_booking",
+		"date", booking.Booking.Date,
+		"hour", booking.Booking.Hour,
+		"minutes", booking.Booking.Minutes,
+	)
 
 	err := h.useCase.CreateInternalBooking(c.Request.Context(), &booking.Booking, "internal")
 	if err != nil {
@@ -561,6 +632,11 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 		return
 	}
 	booking.Booking.SeriesID = booking.SeriesID
+
+	// Flujo público: el socio solo se acredita con el token emitido tras
+	// verificar el correo. Nunca se acepta un member_id enviado por el cliente.
+	booking.Booking.MemberID = ""
+	booking.Booking.AdminSource = false
 
 	if booking.Partial {
 		booking.Booking.IsPartialPayment = true
@@ -625,6 +701,53 @@ func (h *BookingHandler) DeleteBooking(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }
 
+// RescheduleBooking mueve una reserva existente a otra fecha/hora. Lo usa el
+// panel de administración al arrastrar un evento en la agenda.
+func (h *BookingHandler) RescheduleBooking(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid booking id"})
+		return
+	}
+
+	var req struct {
+		Date    string `json:"date" binding:"required"`
+		Hour    int    `json:"hour"`
+		Minutes int    `json:"minutes"`
+		CourtID string `json:"court_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	var courtID *primitive.ObjectID
+	if req.CourtID != "" {
+		parsed, err := primitive.ObjectIDFromHex(req.CourtID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid court id"})
+			return
+		}
+		courtID = &parsed
+	}
+
+	booking, err := h.useCase.RescheduleBooking(
+		c.Request.Context(),
+		id,
+		req.Date,
+		req.Hour,
+		req.Minutes,
+		courtID,
+		h.baseHandler.GetUserID(c),
+	)
+	if err != nil {
+		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, booking)
+}
+
 func (h *BookingHandler) GetAdminDashboard(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
@@ -667,6 +790,8 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 	}
 
 	input.Booking.GuestDeviceID = c.GetString("guest_device_id")
+	input.Booking.MemberID = ""
+	input.Booking.AdminSource = false
 
 	initPoint, err := h.useCase.CreateMercadoPagoPayment(c.Request.Context(), &input.Booking, input.Partial)
 	if err != nil {
@@ -677,13 +802,69 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"init_point":   initPoint,
 		"booking_code": input.Booking.BookingCode,
+		"confirmed":    initPoint == "",
 	})
+}
+
+// webhookDedup evita reprocesar la misma notificación de Mercado Pago dentro de
+// una ventana de tiempo, usando el header x-request-id como identificador.
+var webhookDedup = struct {
+	mu sync.Mutex
+	m  map[string]time.Time
+}{m: make(map[string]time.Time)}
+
+const webhookDedupWindow = 10 * time.Minute
+
+func isDuplicateWebhookNotification(requestID string) bool {
+	if requestID == "" {
+		return false
+	}
+	webhookDedup.mu.Lock()
+	defer webhookDedup.mu.Unlock()
+
+	now := time.Now()
+	for id, seen := range webhookDedup.m {
+		if now.Sub(seen) > webhookDedupWindow {
+			delete(webhookDedup.m, id)
+		}
+	}
+	if _, ok := webhookDedup.m[requestID]; ok {
+		return true
+	}
+	webhookDedup.m[requestID] = now
+	return false
 }
 
 func (h *BookingHandler) MercadoPagoWebhook(c *gin.Context) {
 	// MercadoPago sends webhook notifications
 	// Query param: type=payment, data.id=<payment_id>
 	// Or JSON body: { "action": "payment.updated", "data": { "id": "123" } }
+
+	log := h.baseHandler.GetLogger(c)
+	requestID := c.GetHeader("X-Request-Id")
+	signature := c.GetHeader("X-Signature")
+	traceID := logger.GetTraceID(c.Request.Context())
+
+	// Deduplicar notificaciones ya procesadas (Mercado Pago reintenta varias veces)
+	if requestID != "" && isDuplicateWebhookNotification(requestID) {
+		log.Infow("mp_webhook_duplicate_ignored",
+			"trace_id", traceID,
+			"request_id", requestID,
+		)
+		c.JSON(http.StatusOK, gin.H{"status": "received"})
+		return
+	}
+
+	rawBody, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		log.Warnw("mp_webhook_read_body_error",
+			"trace_id", traceID,
+			"request_id", requestID,
+			"error", err,
+		)
+		c.JSON(http.StatusOK, gin.H{"status": "received"})
+		return
+	}
 
 	var event struct {
 		Action string `json:"action"`
@@ -693,37 +874,73 @@ func (h *BookingHandler) MercadoPagoWebhook(c *gin.Context) {
 		} `json:"data"`
 	}
 
-	if err := c.ShouldBindJSON(&event); err != nil {
-		// Try query params as fallback (IPN style)
-		topic := c.Query("topic")
-		id := c.Query("id")
-		if topic == "payment" && id != "" {
-			err := h.useCase.HandleMercadoPagoWebhook(c.Request.Context(), id)
-			if err != nil {
-				log.Printf("[MP WEBHOOK ERROR] %v\n", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	// Notificación JSON (formato webhook moderno con x-signature)
+	if len(rawBody) > 0 && json.Unmarshal(rawBody, &event) == nil && event.Data.ID != "" {
+		secret := os.Getenv("MP_WEBHOOK_SECRET")
+		if secret != "" {
+			if verifyErr := mercadopago.VerifyWebhookSignature(secret, event.Data.ID, signature, requestID); verifyErr != nil {
+				log.Warnw("mp_webhook_invalid_signature",
+					"trace_id", traceID,
+					"request_id", requestID,
+					"payment_id", event.Data.ID,
+					"error", verifyErr,
+				)
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid signature"})
 				return
 			}
-			c.JSON(http.StatusOK, gin.H{"status": "received"})
-			return
+		} else {
+			log.Warnw("mp_webhook_secret_not_configured",
+				"trace_id", traceID,
+				"request_id", requestID,
+			)
 		}
-		c.JSON(http.StatusOK, gin.H{"status": "ignored"})
+
+		// Only process payment-related events
+		if event.Type == "payment" || event.Action == "payment.created" || event.Action == "payment.updated" {
+			if processErr := h.handlePaymentNotification(c.Request.Context(), event.Data.ID); processErr != nil {
+				// Loggear internamente pero siempre responder 200 para no
+				// provocar reintentos masivos de Mercado Pago.
+				log.Errorw("mp_webhook_processing_error",
+					"trace_id", traceID,
+					"request_id", requestID,
+					"payment_id", event.Data.ID,
+					"error", processErr,
+				)
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{"status": "received"})
 		return
 	}
 
-	// Only process payment-related events
-	if event.Type == "payment" || event.Action == "payment.created" || event.Action == "payment.updated" {
-		if event.Data.ID != "" {
-			err := h.useCase.HandleMercadoPagoWebhook(c.Request.Context(), event.Data.ID)
-			if err != nil {
-				log.Printf("[MP WEBHOOK ERROR] %v\n", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
+	// Fallback IPN (query params). El IPN clásico no incluye x-signature.
+	topic := c.Query("topic")
+	id := c.Query("id")
+	if topic == "payment" && id != "" {
+		if signature == "" {
+			log.Warnw("mp_webhook_ipn_without_signature",
+				"trace_id", traceID,
+				"request_id", requestID,
+				"payment_id", id,
+			)
 		}
+		if processErr := h.handlePaymentNotification(c.Request.Context(), id); processErr != nil {
+			log.Errorw("mp_webhook_ipn_processing_error",
+				"trace_id", traceID,
+				"request_id", requestID,
+				"payment_id", id,
+				"error", processErr,
+			)
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "received"})
+		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "received"})
+	log.Infow("mp_webhook_ignored",
+		"trace_id", traceID,
+		"request_id", requestID,
+	)
+	c.JSON(http.StatusOK, gin.H{"status": "ignored"})
 }
 
 func (h *BookingHandler) MockMercadoPagoConfirm(c *gin.Context) {
@@ -753,12 +970,15 @@ func (h *BookingHandler) MockMercadoPagoConfirm(c *gin.Context) {
 }
 
 func (h *BookingHandler) SyncConfirmedPayment(c *gin.Context) {
+	if secret := os.Getenv("INTERNAL_API_SECRET"); secret != "" && c.GetHeader("X-Internal-Token") != secret {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
 	var req struct {
-		BookingCode     string  `json:"booking_code"`
-		MPPaymentID     string  `json:"mp_payment_id"`
-		FintocPaymentID string  `json:"fintoc_payment_id"`
-		PaidAmount      float64 `json:"paid_amount"`
-		PendingAmount   float64 `json:"pending_amount"`
+		BookingCode   string  `json:"booking_code"`
+		MPPaymentID   string  `json:"mp_payment_id"`
+		PaidAmount    float64 `json:"paid_amount"`
+		PendingAmount float64 `json:"pending_amount"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -780,10 +1000,14 @@ func (h *BookingHandler) SyncConfirmedPayment(c *gin.Context) {
 }
 
 func (h *BookingHandler) MercadoPagoReturn(c *gin.Context) {
+	log := h.baseHandler.GetLogger(c)
 	url := os.Getenv("URL_FRONTEND")
 	bookingCode := c.Query("code")
 	paymentID := c.Query("payment_id")
-	log.Printf("[MP RETURN] code=%s payment_id=%s\n", bookingCode, paymentID)
+	log.Infow("mp_return_received",
+		"booking_code", bookingCode,
+		"payment_id", paymentID,
+	)
 
 	if bookingCode == "" {
 		// Try external_reference as fallback
@@ -795,25 +1019,98 @@ func (h *BookingHandler) MercadoPagoReturn(c *gin.Context) {
 		return
 	}
 
-	// Si tenemos payment_id, guardarlo en la reserva antes de procesar el webhook
-	if paymentID != "" {
-		if err := h.useCase.StoreMPPaymentID(c.Request.Context(), bookingCode, paymentID); err != nil {
-			log.Printf("[MP RETURN] Error storing payment_id %s for code %s: %v\n", paymentID, bookingCode, err)
+	if h.facility != nil && isFacilityBookingCode(bookingCode) {
+		if paymentID != "" {
+			if err := h.facility.StorePaymentID(c.Request.Context(), bookingCode, paymentID); err != nil {
+				log.Warnw("mp_return_facility_store_payment_id_error", "booking_code", bookingCode, "error", err)
+			}
+			if err := h.handlePaymentNotification(c.Request.Context(), paymentID); err != nil {
+				log.Errorw("mp_return_facility_webhook_error", "payment_id", paymentID, "error", err)
+			}
 		}
-		if err := h.useCase.HandleMercadoPagoWebhook(c.Request.Context(), paymentID); err != nil {
-			log.Printf("[MP RETURN] Error processing payment %s: %v\n", paymentID, err)
-		}
-	}
-
-	code, err := h.useCase.ValidateMercadoPagoPaymentAndGetCode(c.Request.Context(), bookingCode)
-	if err != nil {
-		log.Printf("[MP RETURN] Error validating payment for code %s: %v\n", bookingCode, err)
-		c.Redirect(http.StatusFound, url+"/booking/failure?error=validation_failed")
+		c.Redirect(http.StatusFound, fmt.Sprintf("%s/booking/status?code=%s", url, bookingCode))
 		return
 	}
 
-	redirectURL := fmt.Sprintf("%s/booking/status?code=%s", url, code)
+	if paymentID != "" {
+		if err := h.useCase.StoreMPPaymentID(c.Request.Context(), bookingCode, paymentID); err != nil {
+			log.Warnw("mp_return_store_payment_id_error",
+				"payment_id", paymentID,
+				"booking_code", bookingCode,
+				"error", err,
+			)
+		}
+	}
+
+	if _, err := h.useCase.ReconcileMercadoPagoPayment(c.Request.Context(), bookingCode); err != nil {
+		log.Warnw("mp_return_reconcile_error",
+			"booking_code", bookingCode,
+			"error", err,
+		)
+	}
+
+	redirectURL := fmt.Sprintf("%s/booking/status?code=%s", url, bookingCode)
 	c.Redirect(http.StatusFound, redirectURL)
+}
+
+// GetPaymentStatus consulta Mercado Pago por booking_code, actualiza la reserva
+// si el pago ya fue aprobado y devuelve el estado real del pago.
+func (h *BookingHandler) GetPaymentStatus(c *gin.Context) {
+	code := normalizeBookingCode(c.Param("code"))
+	if code == "" || isFacilityBookingCode(code) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid booking code"})
+		return
+	}
+	res, err := h.useCase.ReconcileMercadoPagoPaymentThrottled(c.Request.Context(), code)
+	if res == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "booking not found"})
+		return
+	}
+	if err != nil {
+		h.baseHandler.GetLogger(c).Warnw("payment_status_reconcile_error", "booking_code", code, "error", err)
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+// AdminVerifyPayment permite a un admin del centro forzar la verificación del pago.
+func (h *BookingHandler) AdminVerifyPayment(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid booking id"})
+		return
+	}
+	userID, _ := c.Get("user_id")
+	uid, _ := userID.(string)
+	booking, err := h.useCase.GetByID(c.Request.Context(), id)
+	if err != nil || booking == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "booking not found"})
+		return
+	}
+	center, err := h.useCase.GetSportCenterByID(c.Request.Context(), booking.SportCenterID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "sport center not found"})
+		return
+	}
+	allowed := false
+	for _, u := range center.Users {
+		if u == uid {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+	res, err := h.useCase.ReconcileMercadoPagoPayment(c.Request.Context(), booking.BookingCode)
+	if res == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not verify payment"})
+		return
+	}
+	if err != nil {
+		h.baseHandler.GetLogger(c).Warnw("admin_verify_payment_error", "booking_code", booking.BookingCode, "error", err)
+	}
+	c.JSON(http.StatusOK, res)
 }
 
 func (h *BookingHandler) MarkPartialPaymentAsPaid(c *gin.Context) {
@@ -926,6 +1223,11 @@ func (h *BookingHandler) CreateRecurringReservation(c *gin.Context) {
 			"court_id", input.CourtID.Hex(),
 			"customer_name", input.CustomerName,
 		)
+		var appErr *domain.AppError
+		if errors.As(err, &appErr) {
+			c.JSON(appErr.StatusCode, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -1041,6 +1343,76 @@ func (h *BookingHandler) CancelRecurringDate(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "date_cancelled"})
+}
+
+// GenerateRecurringBookings ejecuta manualmente el generador de ocurrencias
+// desde el panel de administración.
+func (h *BookingHandler) GenerateRecurringBookings(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in token"})
+		return
+	}
+	userIDStr, ok := userID.(string)
+	if !ok || userIDStr == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid user_id"})
+		return
+	}
+	isAdmin := false
+	if rolesValue, exists := c.Get("user_roles"); exists {
+		if roles, ok := rolesValue.([]string); ok {
+			for _, role := range roles {
+				lower := strings.ToLower(role)
+				if lower == "admin" || lower == "administrator" {
+					isAdmin = true
+					break
+				}
+			}
+		}
+	}
+	if !isAdmin {
+		administers, err := h.useCase.UserAdministersAnyCenter(c.Request.Context(), userIDStr)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if !administers {
+			c.JSON(http.StatusForbidden, gin.H{"error": "only administrators can generate recurring bookings"})
+			return
+		}
+	}
+
+	summary, err := h.useCase.GenerateUpcomingRecurringBookings(c.Request.Context())
+	if err != nil {
+		h.baseHandler.LogError(c, "recurring_generation_failed", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, summary)
+}
+
+// GenerateRecurringBookingsInternal es el endpoint idempotente que invoca el
+// batch desde GitHub Actions. Se protege con un token compartido en la cabecera
+// X-Job-Token (variable RECURRING_JOB_TOKEN).
+func (h *BookingHandler) GenerateRecurringBookingsInternal(c *gin.Context) {
+	expected := os.Getenv("RECURRING_JOB_TOKEN")
+	if expected == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "recurring generation job is not configured"})
+		return
+	}
+	provided := c.GetHeader("X-Job-Token")
+	if subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid job token"})
+		return
+	}
+
+	summary, err := h.useCase.GenerateUpcomingRecurringBookings(c.Request.Context())
+	if err != nil {
+		h.baseHandler.LogError(c, "recurring_generation_failed", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, summary)
 }
 
 func errorStatusCode(err error) int {

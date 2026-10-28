@@ -14,13 +14,13 @@ import (
 )
 
 type ContactHandler struct {
-	mailer app.Mailer
+	mailer      app.Mailer
 	baseHandler *BaseHandler
 }
 
 func NewContactHandler(mailer app.Mailer) *ContactHandler {
 	return &ContactHandler{
-		mailer: mailer,
+		mailer:      mailer,
 		baseHandler: NewBaseHandler(),
 	}
 }
@@ -43,7 +43,7 @@ type TurnstileResponse struct {
 
 func (h *ContactHandler) Submit(c *gin.Context) {
 	log := h.baseHandler.GetLogger(c)
-	
+
 	var req ContactRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		log.Warnw("contact_form_invalid_json",

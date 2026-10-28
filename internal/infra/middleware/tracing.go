@@ -110,17 +110,17 @@ func Recovery() gin.HandlerFunc {
 			if err := recover(); err != nil {
 				traceID := logger.GetTraceID(c.Request.Context())
 
-			logger.FromContext(c.Request.Context()).Errorw("panic_recovered",
-				"msg", fmt.Sprintf("PANIC recuperado en %s %s", c.Request.Method, c.Request.URL.Path),
-				"trace_id", traceID,
-				"error", err,
-				"method", c.Request.Method,
-				"path", c.Request.URL.Path,
-			)
+				logger.FromContext(c.Request.Context()).Errorw("panic_recovered",
+					"msg", fmt.Sprintf("PANIC recuperado en %s %s", c.Request.Method, c.Request.URL.Path),
+					"trace_id", traceID,
+					"error", err,
+					"method", c.Request.Method,
+					"path", c.Request.URL.Path,
+				)
 
 				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-					"error":   "internal_server_error",
-					"message": "An unexpected error occurred",
+					"error":    "internal_server_error",
+					"message":  "An unexpected error occurred",
 					"trace_id": traceID,
 				})
 			}
