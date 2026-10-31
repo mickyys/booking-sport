@@ -101,6 +101,7 @@ func main() {
 	scheduleExceptionRepo := mongo.NewScheduleExceptionRepository(db)
 	blockRepo := mongo.NewBlockRepository(db)
 	userProfileRepo := mongo.NewUserProfileRepository(db)
+	inboxRepo := mongo.NewInboxRepository(db)
 
 	log.Infow("repositories_initialized")
 
@@ -170,6 +171,8 @@ func main() {
 	bookingResolver := app.NewScheduleResolver(scheduleRuleRepo, scheduleExceptionRepo, blockRepo)
 	bookingUC.SetScheduleResolver(bookingResolver)
 	bookingUC.SetJobLockRepository(jobLockRepo)
+	bookingUC.SetInbox(inboxRepo)
+	bookingUC.SetReminderFinder(bookingRepo)
 	if getEnv("MP_RECONCILE_ENABLED", "true") != "false" {
 		mpInterval, err := time.ParseDuration(getEnv("MP_RECONCILE_INTERVAL", "3m"))
 		if err != nil || mpInterval <= 0 {
@@ -285,6 +288,7 @@ func main() {
 	scheduleHandler := infra.NewScheduleHandler(scheduleUC)
 	userProfileHandler := infra.NewUserProfileHandler(app.NewUserProfileUseCase(userProfileRepo))
 	bookingClaimHandler := infra.NewBookingClaimHandler(bookingRepo)
+	inboxHandler := infra.NewInboxHandler(app.NewInboxUseCase(inboxRepo))
 
 	log.Infow("handlers_initialized")
 
@@ -366,6 +370,7 @@ func main() {
 	r.POST("/api/bookings/mercadopago/mock-confirm", bookingHandler.MockMercadoPagoConfirm)
 	r.POST("/api/internal/sync-payment", bookingHandler.SyncConfirmedPayment)
 	r.POST("/api/internal/jobs/recurring-generate", bookingHandler.GenerateRecurringBookingsInternal)
+	r.POST("/api/internal/jobs/booking-reminders", bookingHandler.SendBookingRemindersInternal)
 	r.GET("/api/bookings/code/:code", bookingHandler.GetByBookingCode)
 	r.GET("/api/bookings/code/:code/payment-status", bookingHandler.GetPaymentStatus)
 	r.POST("/api/bookings/code/:code/cancel", bookingHandler.CancelByBookingCode)
@@ -398,6 +403,12 @@ func main() {
 		// Teléfono guardado del usuario autenticado (precarga en reservas)
 		api.GET("/users/me/phone", userProfileHandler.GetPhone)
 		api.PUT("/users/me/phone", userProfileHandler.SavePhone)
+		// Bandeja de mensajes del cliente
+		api.GET("/users/me/messages", inboxHandler.List)
+		api.GET("/users/me/messages/unread-count", inboxHandler.UnreadCount)
+		api.POST("/users/me/messages/read-all", inboxHandler.MarkAllRead)
+		api.POST("/users/me/messages/:id/read", inboxHandler.MarkRead)
+		api.DELETE("/users/me/messages/:id", inboxHandler.Delete)
 
 		// Endpoint seguro para obtener schedules con detalles de reservas
 		api.GET("/sport-centers/:id/schedules/bookings", sportCenterHandler.GetSchedulesWithBookings)

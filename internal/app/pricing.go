@@ -143,7 +143,7 @@ func (s *PricingService) QuoteWithBase(ctx context.Context, court *domain.Court,
 	var plan *domain.MembershipPlan
 	var memberPeriodKey string
 
-	if s.membershipRepo != nil && (strings.TrimSpace(input.MemberToken) != "" || strings.TrimSpace(input.MemberID) != "") {
+	if s.membershipRepo != nil && category == domain.SpaceCategoryCancha && (strings.TrimSpace(input.MemberToken) != "" || strings.TrimSpace(input.MemberID) != "") {
 		member, plan = s.resolveMember(ctx, center.ID, input.MemberToken, input.MemberID)
 		if member == nil || plan == nil {
 			if input.MemberToken != "" || input.MemberID != "" {

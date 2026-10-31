@@ -152,33 +152,63 @@ func (r *DiscountRepository) TryReserveCounter(ctx context.Context, centerID pri
 		"identity_key": identityKey,
 		"period_key":   periodKey,
 	}
-	if limit > 0 {
-		filter["$expr"] = bson.M{"$lt": bson.A{
-			bson.M{"$add": bson.A{"$reserved", "$confirmed"}},
-			limit,
-		}}
+	if limit <= 0 {
+		update := bson.M{
+			"$inc": bson.M{"reserved": 1},
+			"$set": bson.M{"updated_at": now},
+			"$setOnInsert": bson.M{
+				"sport_center_id": centerID,
+				"source":          source,
+				"source_id":       sourceID,
+				"identity_key":    identityKey,
+				"period_key":      periodKey,
+			},
+		}
+		err := r.counters.FindOneAndUpdate(ctx, filter, update, options.FindOneAndUpdate().SetUpsert(true)).Err()
+		if err != nil {
+			if mongo.IsDuplicateKeyError(err) || errors.Is(err, mongo.ErrNoDocuments) {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
 	}
-	update := bson.M{
-		"$inc": bson.M{"reserved": 1},
-		"$set": bson.M{"updated_at": now},
-		"$setOnInsert": bson.M{
+
+	// $expr no se permite en filtros de upsert, así que la condición del límite
+	// se evalúa dentro del update con pipeline. Como el update es atómico por
+	// documento, el documento anterior indica si este intento incrementó el uso.
+	ifNull := func(field string) bson.M { return bson.M{"$ifNull": bson.A{field, 0}} }
+	update := mongo.Pipeline{
+		bson.D{{Key: "$set", Value: bson.M{
 			"sport_center_id": centerID,
 			"source":          source,
 			"source_id":       sourceID,
 			"identity_key":    identityKey,
 			"period_key":      periodKey,
-		},
+			"updated_at":      now,
+			"reserved": bson.M{"$cond": bson.A{
+				bson.M{"$lt": bson.A{bson.M{"$add": bson.A{ifNull("$reserved"), ifNull("$confirmed")}}, limit}},
+				bson.M{"$add": bson.A{ifNull("$reserved"), 1}},
+				ifNull("$reserved"),
+			}},
+		}}},
 	}
-	err := r.counters.FindOneAndUpdate(ctx, filter, update, options.FindOneAndUpdate().SetUpsert(true)).Err()
+	var before struct {
+		Reserved  int `bson:"reserved"`
+		Confirmed int `bson:"confirmed"`
+	}
+	err := r.counters.FindOneAndUpdate(ctx, filter, update,
+		options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.Before)).Decode(&before)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return true, nil
+	}
 	if err != nil {
-		// El upsert intenta insertar cuando el documento existe pero el
-		// límite ya se alcanzó; el índice único lo rechaza.
-		if mongo.IsDuplicateKeyError(err) || errors.Is(err, mongo.ErrNoDocuments) {
+		if mongo.IsDuplicateKeyError(err) {
 			return false, nil
 		}
 		return false, err
 	}
-	return true, nil
+	return before.Reserved+before.Confirmed < limit, nil
 }
 
 func (r *DiscountRepository) FindCounter(ctx context.Context, source string, sourceID primitive.ObjectID, identityKey, periodKey string) (*domain.DiscountUsageCounter, error) {

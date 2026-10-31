@@ -251,6 +251,9 @@ func (uc *BookingUseCase) applyApprovedPayment(ctx context.Context, store Paymen
 		fmt.Sprintf("Nueva reserva en %s para el %s a las %02d:00 hrs.",
 			booking.SportCenterName, booking.Date.Format("02/01/2006"), booking.Hour),
 		"confirmation")
+	uc.notifyCustomer(ctx, booking, domain.InboxBookingConfirmed, "Reserva confirmada",
+		fmt.Sprintf("Tu pago fue confirmado: reserva en %s para el %s a las %02d:%02d hrs.",
+			booking.SportCenterName, booking.Date.In(domain.GetSantiagoLocation()).Format("02/01/2006"), booking.Hour, booking.Minutes))
 
 	res.EmailSent = uc.sendConfirmationEmailOnce(ctx, store, booking, center)
 	return res, nil

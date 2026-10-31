@@ -237,6 +237,14 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 			price = booking.FinalPrice
 			amountToPay, isPartial = computeAmountToPay(price, usePartialPayment, partialPaymentEnabled, center)
 		}
+		if price <= 0 && quote != nil && quote.Quote.DiscountTotal > 0 {
+			uc.repo.MarkExpired(ctx, existingBooking.ID)
+			if existingBooking.HoldID != nil {
+				uc.holdRepo.Delete(ctx, *existingBooking.HoldID)
+			}
+			uc.releaseOccupancy(ctx, existingBooking)
+			return "", uc.confirmFullyDiscountedBooking(ctx, booking, hold, quote)
+		}
 		if quote != nil {
 			applyQuoteToBooking(existingBooking, quote)
 			if err := uc.reserveDiscount(ctx, quote, existingBooking); err != nil {
@@ -415,7 +423,9 @@ func (uc *BookingUseCase) confirmFullyDiscountedBooking(ctx context.Context, boo
 		return err
 	}
 	uc.confirmDiscount(ctx, booking.ID)
-	uc.holdRepo.Delete(ctx, hold.ID)
+	if hold != nil {
+		uc.holdRepo.Delete(ctx, hold.ID)
+	}
 	return nil
 }
 

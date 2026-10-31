@@ -965,3 +965,24 @@ func (c *SportCenter) IsOperational() bool {
 	}
 	return c.Status == "" || c.Status == SportCenterStatusActive
 }
+
+// Tipos de mensaje de la bandeja del cliente.
+const (
+	InboxBookingConfirmed = "booking_confirmed"
+	InboxBookingCancelled = "booking_cancelled"
+	InboxBookingReminder  = "booking_reminder"
+)
+
+// InboxMessage es un aviso in-app para un usuario autenticado (bandeja de
+// "Mensajes" de la app cliente). DedupeKey (type + booking) evita duplicados.
+type InboxMessage struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	UserID    string             `bson:"user_id" json:"-"`
+	Type      string             `bson:"type" json:"type"`
+	Title     string             `bson:"title" json:"title"`
+	Body      string             `bson:"body" json:"body"`
+	Data      map[string]string  `bson:"data,omitempty" json:"data,omitempty"`
+	DedupeKey string             `bson:"dedupe_key,omitempty" json:"-"`
+	ReadAt    *time.Time         `bson:"read_at,omitempty" json:"read_at,omitempty"`
+	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
+}

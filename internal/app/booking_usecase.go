@@ -34,6 +34,8 @@ type BookingUseCase struct {
 	deviceRepo               UserDeviceRepository
 	mailer                   Mailer
 	notifier                 NotificationService
+	inbox                    InboxRepository
+	reminders                ReminderBookingFinder
 	recurringReservationRepo RecurringReservationRepository
 	jobLockRepo              JobLockRepository
 	mongoClient              *mongo.Client
@@ -731,6 +733,7 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 		"center_id", booking.SportCenterID.Hex(),
 	)
 	uc.notifyAdmins(ctx, booking, title, body, "cancellation")
+	uc.notifyCustomer(ctx, booking, domain.InboxBookingCancelled, "Reserva cancelada", body)
 
 	// Enviar correo de confirmación de cancelación si está configurado
 	if uc.mailer != nil {
@@ -1627,6 +1630,7 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 		"center_id", booking.SportCenterID.Hex(),
 	)
 	uc.notifyAdmins(ctx, booking, title, body, "confirmation")
+	uc.notifyCustomer(ctx, booking, domain.InboxBookingConfirmed, "Reserva confirmada", fmt.Sprintf("Tu reserva en %s para el %s a las %02d:%02d hrs está confirmada.", booking.SportCenterName, booking.Date.In(domain.GetSantiagoLocation()).Format("02/01/2006"), booking.Hour, booking.Minutes))
 
 	if uc.mailer != nil {
 		log.Infow("booking_sending_confirmation_email",

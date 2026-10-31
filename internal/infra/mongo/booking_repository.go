@@ -1453,3 +1453,36 @@ func buildDateRangeFilter(start, end time.Time) bson.M {
 	_, endBound := domain.SantiagoDayBounds(end)
 	return bson.M{"$gte": startBound, "$lt": endBound}
 }
+
+// FindConfirmedWithUserBetween devuelve reservas confirmadas de usuarios
+// autenticados cuyo inicio cae en [from, to). Consulta por una ventana de
+// fechas amplia y filtra por el instante de inicio exacto.
+func (r *BookingRepository) FindConfirmedWithUserBetween(ctx context.Context, from, to time.Time) ([]domain.Booking, error) {
+	dayFrom := from.AddDate(0, 0, -1)
+	dayTo := to.AddDate(0, 0, 1)
+	cursor, err := r.collection.Find(ctx, bson.M{
+		"status":  domain.BookingStatusConfirmed,
+		"user_id": bson.M{"$exists": true, "$ne": ""},
+		"$or": []bson.M{
+			{"scheduled_at": bson.M{"$gte": from, "$lt": to}},
+			{"scheduled_at": bson.M{"$exists": false}, "date": bson.M{"$gte": dayFrom, "$lt": dayTo}},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var candidates []domain.Booking
+	if err := cursor.All(ctx, &candidates); err != nil {
+		return nil, err
+	}
+	out := candidates[:0]
+	for i := range candidates {
+		start := candidates[i].StartInstant()
+		if !start.Before(from) && start.Before(to) {
+			out = append(out, candidates[i])
+		}
+	}
+	return out, nil
+}

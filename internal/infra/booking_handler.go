@@ -1415,6 +1415,27 @@ func (h *BookingHandler) GenerateRecurringBookingsInternal(c *gin.Context) {
 	c.JSON(http.StatusOK, summary)
 }
 
+// SendBookingRemindersInternal lo invoca el batch cada pocos minutos para dejar
+// recordatorios en la bandeja de los usuarios. Usa el mismo X-Job-Token.
+func (h *BookingHandler) SendBookingRemindersInternal(c *gin.Context) {
+	expected := os.Getenv("RECURRING_JOB_TOKEN")
+	if expected == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "reminders job is not configured"})
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(c.GetHeader("X-Job-Token")), []byte(expected)) != 1 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid job token"})
+		return
+	}
+	summary, err := h.useCase.SendBookingReminders(c.Request.Context(), time.Now(), 2*time.Hour)
+	if err != nil {
+		h.baseHandler.LogError(c, "booking_reminders_failed", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, summary)
+}
+
 func errorStatusCode(err error) int {
 	var appErr *domain.AppError
 	if errors.As(err, &appErr) {
