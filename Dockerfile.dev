@@ -7,7 +7,8 @@ WORKDIR /app
 ENV GOTOOLCHAIN=auto
 
 # Instalar dependencias adicionales para compilar con CGO desactivado si es necesario
-RUN apk add --no-cache git gcc musl-dev
+# tzdata: zona horaria IANA para America/Santiago (además del embed time/tzdata).
+RUN apk add --no-cache git gcc musl-dev tzdata
 
 # Instalar Air para Hot Reload
 RUN go install github.com/air-verse/air@latest

@@ -7,12 +7,14 @@ import (
 	"os"
 	"time"
 
+	"github.com/hamp/booking-sport/pkg/migratelog"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 func main() {
+	defer migratelog.Start("migrate-name-index")()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -63,7 +65,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error listing indexes: %v", err)
 	}
-	
+
 	var indexes []bson.M
 	if err := indexCursor.All(ctx, &indexes); err != nil {
 		log.Fatalf("Error decoding indexes: %v", err)

@@ -8,11 +8,23 @@ services:
     volumes:
       - mongodb_data:/data/db
 
+  # Redis local para desarrollo. El coordinador de ocupación usa Upstash en
+  # staging/producción; en local se apunta a este servicio con REDIS_URL.
+  redis:
+    image: redis:7-alpine
+    container_name: booking_sport_redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+
   backend:
     build:
       context: .
       dockerfile: Dockerfile.dev
     container_name: booking_sport_backend
+    # Duplica la salida a ./logs/backend.log (visible desde el host por el bind
+    # mount ./:/app) sin dejar de mostrarla en `docker logs`.
+    command: ["sh", "-c", "mkdir -p /app/logs && air -c .air.toml 2>&1 | tee -a /app/logs/backend.log"]
     volumes:
       - ./:/app
       - /app/tmp
@@ -29,8 +41,10 @@ services:
       - NEW_RELIC_LICENSE_KEY=${NEW_RELIC_LICENSE_KEY:-}
       - NEW_RELIC_APP_NAME=${NEW_RELIC_APP_NAME:-ReservaYA-API-Dev}
       - NEW_RELIC_ENABLED=${NEW_RELIC_ENABLED:-false}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
     depends_on:
       - mongodb
+      - redis
 
 volumes:
   mongodb_data:

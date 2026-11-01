@@ -34,3 +34,5 @@ go.work.sum
 main
 *.log
 firebase-adminsdk.json
+# Logs locales del contenedor de desarrollo
+logs/

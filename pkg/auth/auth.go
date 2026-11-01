@@ -154,6 +154,11 @@ func EnsureValidToken(domain, audience string) gin.HandlerFunc {
 			}
 		}
 		c.Set("user_roles", roles)
+		claimKeys := make([]string, 0, len(claims))
+		for key := range claims {
+			claimKeys = append(claimKeys, key)
+		}
+		c.Set("token_claim_keys", claimKeys)
 
 		c.Next()
 	}
