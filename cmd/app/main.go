@@ -342,6 +342,7 @@ func main() {
 	log.Infow("routes_configured")
 
 	// Rutas Públicas
+	r.GET("/api/app-config", infra.NewAppConfigHandler().Get)
 	r.GET("/api/tenants/host/:host", tenantHandler.GetByHost)
 	r.GET("/api/tenants/:subdomain", tenantHandler.GetBySubdomain)
 	r.GET("/api/sport-centers", sportCenterHandler.List)
