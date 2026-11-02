@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -466,8 +465,6 @@ func (r *BookingRepository) FindBySportCenterAndDate(ctx context.Context, center
 	startDate, endDate := domain.SantiagoDayBounds(date)
 	civilDate := domain.SantiagoCivilDate(date)
 	localDate := civilDate.Format("2006-01-02")
-
-	log.Printf("🔍 FindBySportCenterAndDate: centerID=%s, date=%s, startDate=%s, endDate=%s", centerID, date, startDate, endDate)
 
 	cursor, err := r.collection.Find(ctx, bson.M{
 		"sport_center_id": centerID,

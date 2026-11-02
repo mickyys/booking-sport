@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/hamp/booking-sport/internal/domain/civil"
@@ -11,16 +12,23 @@ const civilDateLayout = civil.DateLayout
 
 const SantiagoTimezone = "America/Santiago"
 
-// GetSantiagoLocation returns the America/Santiago location (Chile, DST-aware).
-// It falls back to UTC when the timezone database is not available in the
-// runtime. Production binaries embed time/tzdata, so the fallback is a last
-// resort for exotic builds only.
-func GetSantiagoLocation() *time.Location {
+// santiagoLocation carga la zona horaria una sola vez por proceso. Antes cada
+// llamada a GetSantiagoLocation parseaba tzdata desde disco, y los endpoints de
+// agenda la invocan muchas veces por request.
+var santiagoLocation = sync.OnceValue(func() *time.Location {
 	loc, err := time.LoadLocation(SantiagoTimezone)
 	if err != nil {
 		return time.UTC
 	}
 	return loc
+})
+
+// GetSantiagoLocation returns the America/Santiago location (Chile, DST-aware).
+// It falls back to UTC when the timezone database is not available in the
+// runtime. Production binaries embed time/tzdata, so the fallback is a last
+// resort for exotic builds only.
+func GetSantiagoLocation() *time.Location {
+	return santiagoLocation()
 }
 
 // LoadTimezone validates an IANA timezone name. Unlike GetSantiagoLocation it

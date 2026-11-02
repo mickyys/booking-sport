@@ -95,6 +95,32 @@ func (r *SlotHoldRepository) FindActiveByCourtAndDate(ctx context.Context, court
 	return holds, nil
 }
 
+func (r *SlotHoldRepository) FindActiveByCourtIDsAndDate(ctx context.Context, courtIDs []primitive.ObjectID, date time.Time) ([]domain.SlotHold, error) {
+	if len(courtIDs) == 0 {
+		return nil, nil
+	}
+	startDate, endDate := domain.SantiagoDayBounds(date)
+	localDate := domain.SantiagoCivilDate(date).Format("2006-01-02")
+
+	cursor, err := r.collection.Find(ctx, bson.M{
+		"court_id": bson.M{"$in": courtIDs},
+		"$or": []bson.M{
+			{"local_date": localDate},
+			{"local_date": bson.M{"$exists": false}, "date": bson.M{"$gte": startDate, "$lt": endDate}},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var holds []domain.SlotHold
+	if err := cursor.All(ctx, &holds); err != nil {
+		return nil, err
+	}
+	return holds, nil
+}
+
 func (r *SlotHoldRepository) RenewExpiration(ctx context.Context, holdID primitive.ObjectID, newExpiresAt time.Time) error {
 	_, err := r.collection.UpdateOne(ctx,
 		bson.M{"_id": holdID},
