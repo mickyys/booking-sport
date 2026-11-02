@@ -436,16 +436,49 @@ func (uc *SportCenterUseCase) UpdateSettings(ctx context.Context, id primitive.O
 }
 
 func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, centerID primitive.ObjectID, date time.Time, all bool) ([]CourtScheduleResponse, error) {
-	courts, err := uc.courtRepo.FindByCenterID(ctx, centerID)
-	if err != nil {
+	loc := domain.GetSantiagoLocation()
+	searchDate := domain.SantiagoCivilDate(date)
+	dayOfWeek := int(searchDate.Weekday())
+
+	// Las consultas son independientes entre sí. Se lanzan en paralelo para
+	// pagar una sola vez la latencia de la base de datos en lugar de sumar
+	// 3 consultas base + 3 por espacio.
+	var (
+		courts                []domain.Court
+		allBookings           []domain.Booking
+		recurringReservations []domain.RecurringReservation
+		scheduleData          *CenterScheduleData
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		var err error
+		courts, err = uc.courtRepo.FindByCenterID(gctx, centerID)
+		return err
+	})
+	// Buscar TODOS los bookings confirmados para este centro y fecha específica en una sola consulta
+	g.Go(func() error {
+		allBookings, _ = uc.bookingRepo.FindBySportCenterAndDate(gctx, centerID, searchDate)
+		return nil
+	})
+	if uc.recurringReservationRepo != nil {
+		g.Go(func() error {
+			recurringReservations, _ = uc.recurringReservationRepo.FindByCenterIDAndDayOfWeek(gctx, centerID, dayOfWeek)
+			return nil
+		})
+	}
+	if uc.scheduleResolver != nil {
+		g.Go(func() error {
+			// Si falla, se degrada al horario legacy (spaces.schedule).
+			scheduleData, _ = uc.scheduleResolver.LoadCenterScheduleData(gctx, centerID, searchDate)
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
 		return nil, err
 	}
 
-	loc := domain.GetSantiagoLocation()
-	searchDate := domain.SantiagoCivilDate(date)
-
-	// Buscar TODOS los bookings confirmados para este centro y fecha específica en una sola consulta
-	allBookings, _ := uc.bookingRepo.FindBySportCenterAndDate(ctx, centerID, searchDate)
+	baseSlotsByCourt := uc.baseSlotsByCourt(courts, scheduleData, searchDate)
 
 	// Agrupar bookings por CourtID para acceso rápido
 	bookingsByCourt := make(map[primitive.ObjectID]map[int]*primitive.ObjectID)
@@ -457,15 +490,6 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 		bookingCopy := b
 		bookingsByCourt[b.CourtID][key] = &bookingCopy.ID
 	}
-
-	// Obtener todas las reservas recurrentes activas para este centro
-	var recurringReservations []domain.RecurringReservation
-	if uc.recurringReservationRepo != nil {
-		recurringReservations, _ = uc.recurringReservationRepo.FindByCenterID(ctx, centerID)
-	}
-
-	// Calcular día de la semana de la fecha consultada
-	dayOfWeek := int(searchDate.Weekday())
 
 	// Agrupar reservas recurrentes por courtID y hora (filtrar por día de la semana)
 	recurringByCourt := make(map[primitive.ObjectID]map[int]*domain.RecurringReservation)
@@ -496,7 +520,7 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 
 		recurringHours := recurringByCourt[court.ID]
 
-		baseSlots := uc.courtBaseSlotsForDate(ctx, &court, searchDate)
+		baseSlots := baseSlotsByCourt[court.ID]
 
 		// Recolectar todos los slots primero para detectar overlaps
 		allSlots := []struct {
@@ -730,21 +754,21 @@ func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, c
 	var courts []domain.Court
 	var allBookings []domain.Booking
 	var recurringReservations []domain.RecurringReservation
-	var activeHoldsMap map[primitive.ObjectID]map[int]*domain.SlotHold
+	var scheduleData *CenterScheduleData
 
-	g, ctx := errgroup.WithContext(ctx)
+	g, gctx := errgroup.WithContext(ctx)
 
 	// Fetch courts
 	g.Go(func() error {
 		var err error
-		courts, err = uc.courtRepo.FindAllByCenterID(ctx, centerID)
+		courts, err = uc.courtRepo.FindAllByCenterID(gctx, centerID)
 		return err
 	})
 
 	// Fetch bookings
 	g.Go(func() error {
 		var err error
-		allBookings, err = uc.bookingRepo.FindBySportCenterAndDate(ctx, centerID, searchDate)
+		allBookings, err = uc.bookingRepo.FindBySportCenterAndDate(gctx, centerID, searchDate)
 		return err
 	})
 
@@ -752,8 +776,17 @@ func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, c
 	if uc.recurringReservationRepo != nil {
 		g.Go(func() error {
 			var err error
-			recurringReservations, err = uc.recurringReservationRepo.FindByCenterIDAndDayOfWeek(ctx, centerID, dayOfWeek)
+			recurringReservations, err = uc.recurringReservationRepo.FindByCenterIDAndDayOfWeek(gctx, centerID, dayOfWeek)
 			return err
+		})
+	}
+
+	// Reglas, excepciones y bloqueos del centro en 3 consultas, no 3 por espacio.
+	if uc.scheduleResolver != nil {
+		g.Go(func() error {
+			// Si falla, se degrada al horario legacy (spaces.schedule).
+			scheduleData, _ = uc.scheduleResolver.LoadCenterScheduleData(gctx, centerID, searchDate)
+			return nil
 		})
 	}
 
@@ -761,9 +794,13 @@ func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, c
 		return nil, err
 	}
 
-	activeHoldsMap = make(map[primitive.ObjectID]map[int]*domain.SlotHold)
+	baseSlotsByCourt := uc.baseSlotsByCourt(courts, scheduleData, searchDate)
+
+	holdsByCourt := uc.activeHoldsByCourt(ctx, courts, searchDate)
+
+	activeHoldsMap := make(map[primitive.ObjectID]map[int]*domain.SlotHold)
 	for _, court := range courts {
-		holds, _ := uc.holdRepo.FindActiveByCourtAndDate(ctx, court.ID, searchDate)
+		holds := holdsByCourt[court.ID]
 		if len(holds) > 0 {
 			activeHoldsMap[court.ID] = make(map[int]*domain.SlotHold)
 			for i := range holds {
@@ -822,12 +859,7 @@ func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, c
 			recurringHours = make(map[int]*domain.RecurringReservation)
 		}
 
-		var baseSlots []domain.CourtSchedule
-		if court.IsFacility() {
-			baseSlots = uc.facilityBaseSlotsForDate(ctx, &court, searchDate)
-		} else {
-			baseSlots = uc.courtBaseSlotsForDate(ctx, &court, searchDate)
-		}
+		baseSlots := baseSlotsByCourt[court.ID]
 
 		// Recolectar todos los slots primero para detectar overlaps
 		allSlots := []struct {
@@ -1025,16 +1057,33 @@ func (uc *SportCenterUseCase) SetScheduleResolver(resolver *ScheduleResolver) {
 	uc.scheduleResolver = resolver
 }
 
-// courtBaseSlotsForDate retorna la lista base de slots de un court para una
-// fecha. Si el espacio tiene reglas (schedule_rules), las resuelve aplicando
-// excepciones y bloqueos; si no, usa el horario legacy (day_of_week resuelto).
-func (uc *SportCenterUseCase) courtBaseSlotsForDate(ctx context.Context, court *domain.Court, searchDate time.Time) []domain.CourtSchedule {
-	if uc.scheduleResolver == nil {
-		return court.Schedule
-	}
+// slotHoldsBatchFinder es la variante por lote de SlotHoldRepository. Se
+// descubre por type assertion para no obligar a todos los dobles de prueba a
+// implementarla.
+type slotHoldsBatchFinder interface {
+	FindActiveByCourtIDsAndDate(ctx context.Context, courtIDs []primitive.ObjectID, date time.Time) ([]domain.SlotHold, error)
+}
 
-	resolved, err := uc.scheduleResolver.ResolveFranjasForDate(ctx, court.ID, searchDate)
-	if err != nil || !resolved.HasRules {
+// baseSlotsByCourt resuelve las franjas base de todos los espacios del centro a
+// partir de los datos de reglas ya cargados. Sin reglas (o si la carga falló)
+// usa el horario legacy guardado en el espacio.
+func (uc *SportCenterUseCase) baseSlotsByCourt(courts []domain.Court, data *CenterScheduleData, searchDate time.Time) map[primitive.ObjectID][]domain.CourtSchedule {
+	out := make(map[primitive.ObjectID][]domain.CourtSchedule, len(courts))
+	for _, court := range courts {
+		resolved := data.Resolve(court.ID)
+		if court.IsFacility() {
+			out[court.ID] = facilityBaseSlots(&court, resolved)
+			continue
+		}
+		out[court.ID] = courtBaseSlots(&court, resolved)
+	}
+	return out
+}
+
+// courtBaseSlots expande las franjas resueltas a slots reservables de 60 min.
+// Si el espacio no tiene reglas se mantiene el modelo legacy.
+func courtBaseSlots(court *domain.Court, resolved *ResolvedSchedule) []domain.CourtSchedule {
+	if resolved == nil || !resolved.HasRules {
 		return court.Schedule
 	}
 
@@ -1049,24 +1098,48 @@ func (uc *SportCenterUseCase) courtBaseSlotsForDate(ctx context.Context, court *
 	return slots
 }
 
-// facilityBaseSlotsForDate retorna el bloque único de día completo de una
-// facility (quincho/sede/piscina) para la fecha: libre, o "closed" si el día
-// está bloqueado por el administrador. Un día cerrado por excepción no tiene
-// bloque.
-func (uc *SportCenterUseCase) facilityBaseSlotsForDate(ctx context.Context, court *domain.Court, searchDate time.Time) []domain.CourtSchedule {
+// facilityBaseSlots retorna el bloque único de día completo de una facility
+// (quincho/sede/piscina) para la fecha: libre, o "closed" si el día está
+// bloqueado por el administrador. Un día cerrado por excepción no tiene bloque.
+func facilityBaseSlots(court *domain.Court, resolved *ResolvedSchedule) []domain.CourtSchedule {
 	status := "available"
-	if uc.scheduleResolver != nil {
-		resolved, err := uc.scheduleResolver.ResolveFranjasForDate(ctx, court.ID, searchDate)
-		if err == nil {
-			if resolved.Exception != nil && resolved.Exception.Type == domain.ScheduleExceptionClosed {
-				return []domain.CourtSchedule{}
-			}
-			if len(resolved.Blocks) > 0 {
-				status = "closed"
-			}
+	if resolved != nil {
+		if resolved.Exception != nil && resolved.Exception.Type == domain.ScheduleExceptionClosed {
+			return []domain.CourtSchedule{}
+		}
+		if len(resolved.Blocks) > 0 {
+			status = "closed"
 		}
 	}
 	return []domain.CourtSchedule{{Hour: 0, Minutes: 0, Price: court.DayPrice(), Status: status}}
+}
+
+// activeHoldsByCourt agrupa los holds vigentes de todos los espacios del centro.
+// Usa una sola consulta cuando el repositorio lo soporta (en vez de una por
+// espacio).
+func (uc *SportCenterUseCase) activeHoldsByCourt(ctx context.Context, courts []domain.Court, searchDate time.Time) map[primitive.ObjectID][]domain.SlotHold {
+	out := make(map[primitive.ObjectID][]domain.SlotHold, len(courts))
+	if len(courts) == 0 {
+		return out
+	}
+	if batch, ok := uc.holdRepo.(slotHoldsBatchFinder); ok {
+		ids := make([]primitive.ObjectID, 0, len(courts))
+		for _, court := range courts {
+			ids = append(ids, court.ID)
+		}
+		holds, err := batch.FindActiveByCourtIDsAndDate(ctx, ids, searchDate)
+		if err == nil {
+			for _, hold := range holds {
+				out[hold.CourtID] = append(out[hold.CourtID], hold)
+			}
+			return out
+		}
+	}
+	for _, court := range courts {
+		holds, _ := uc.holdRepo.FindActiveByCourtAndDate(ctx, court.ID, searchDate)
+		out[court.ID] = holds
+	}
+	return out
 }
 
 // expandFranjasToSlots expande franjas en bloques reservables de 60 minutos

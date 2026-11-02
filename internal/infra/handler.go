@@ -1226,6 +1226,7 @@ func (h *CourtHandler) DeleteAdminCourt(c *gin.Context) {
 }
 
 func (h *SportCenterHandler) GetSchedules(c *gin.Context) {
+	startedAt := time.Now()
 	idStr := c.Param("id")
 	var centerID primitive.ObjectID
 	// Try parse as ObjectID first; if fails, treat as slug and resolve
@@ -1258,6 +1259,8 @@ func (h *SportCenterHandler) GetSchedules(c *gin.Context) {
 		return
 	}
 
+	// Expone el tiempo del handler en la pestaña Timing del navegador.
+	c.Header("Server-Timing", fmt.Sprintf("app;dur=%.1f", float64(time.Since(startedAt).Microseconds())/1000))
 	c.JSON(http.StatusOK, schedules)
 }
 

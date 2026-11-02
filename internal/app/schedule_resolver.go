@@ -6,6 +6,7 @@ import (
 
 	"github.com/hamp/booking-sport/internal/domain"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"golang.org/x/sync/errgroup"
 )
 
 // ScheduleResolver resuelve la disponibilidad de un espacio para una fecha
@@ -49,40 +50,136 @@ func (r *ScheduleResolver) ResolveFranjasForDate(ctx context.Context, spaceID pr
 		return &ResolvedSchedule{HasRules: false}, nil
 	}
 
-	loc := domain.GetSantiagoLocation()
-	dateCL := date.In(loc)
-	searchDate := time.Date(dateCL.Year(), dateCL.Month(), dateCL.Day(), 0, 0, 0, 0, loc)
-	weekday := int(searchDate.Weekday())
-
-	res := &ResolvedSchedule{HasRules: true}
+	searchDate := santiagoMidnight(date)
 
 	ex, err := r.exceptionRepo.FindBySpaceIDAndDate(ctx, spaceID, searchDate)
 	if err != nil {
 		return nil, err
-	}
-	if ex != nil {
-		res.Exception = ex
-		if ex.Type == domain.ScheduleExceptionSpecial {
-			res.Franjas = ex.Slots
-		} else {
-			// closed: sin disponibilidad
-			res.Franjas = nil
-		}
-	} else {
-		rule := mostSpecificRuleForDay(rules, weekday)
-		if rule == nil {
-			res.Franjas = nil
-		} else {
-			res.Franjas = rule.Slots
-		}
 	}
 
 	blocks, err := r.blockRepo.FindBySpaceIDAndDate(ctx, spaceID, searchDate)
 	if err != nil {
 		return nil, err
 	}
+	return resolveFranjas(rules, ex, blocks, searchDate), nil
+}
+
+// resolveFranjas combina reglas, excepción y bloqueos ya cargados. No hace
+// consultas: es la parte compartida entre la resolución por espacio y la
+// resolución por lote de un centro completo.
+func resolveFranjas(rules []domain.ScheduleRule, ex *domain.ScheduleException, blocks []domain.Block, searchDate time.Time) *ResolvedSchedule {
+	res := &ResolvedSchedule{HasRules: true}
+
+	if ex != nil {
+		res.Exception = ex
+		if ex.Type == domain.ScheduleExceptionSpecial {
+			res.Franjas = ex.Slots
+		}
+		// closed: sin disponibilidad (Franjas queda nil)
+	} else if rule := mostSpecificRuleForDay(rules, int(searchDate.Weekday())); rule != nil {
+		res.Franjas = rule.Slots
+	}
+
 	res.Blocks = blocks
-	return res, nil
+	return res
+}
+
+// CenterScheduleData agrupa las reglas, excepciones y bloqueos de todos los
+// espacios de un centro para una fecha concreta. Se carga una sola vez por
+// request para no repetir 3 consultas por espacio.
+type CenterScheduleData struct {
+	rules      map[primitive.ObjectID][]domain.ScheduleRule
+	exceptions map[primitive.ObjectID]*domain.ScheduleException
+	blocks     map[primitive.ObjectID][]domain.Block
+	date       time.Time
+}
+
+// Resolve retorna la disponibilidad del espacio con los datos ya cargados.
+// Devuelve nil si no hay datos (el caller debe usar el modelo legacy).
+func (d *CenterScheduleData) Resolve(spaceID primitive.ObjectID) *ResolvedSchedule {
+	if d == nil {
+		return nil
+	}
+	rules := d.rules[spaceID]
+	if len(rules) == 0 {
+		return &ResolvedSchedule{HasRules: false}
+	}
+	return resolveFranjas(rules, d.exceptions[spaceID], d.blocks[spaceID], d.date)
+}
+
+// LoadCenterScheduleData carga las reglas, excepciones y bloqueos del centro
+// para `date` con 3 consultas en paralelo (en vez de 3 por espacio).
+func (r *ScheduleResolver) LoadCenterScheduleData(ctx context.Context, centerID primitive.ObjectID, date time.Time) (*CenterScheduleData, error) {
+	searchDate := santiagoMidnight(date)
+
+	var (
+		rules      []domain.ScheduleRule
+		exceptions []domain.ScheduleException
+		blocks     []domain.Block
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		var err error
+		rules, err = r.ruleRepo.FindBySportCenterID(gctx, centerID)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		exceptions, err = r.exceptionRepo.FindBySportCenterID(gctx, centerID)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		blocks, err = r.blockRepo.FindBySportCenterID(gctx, centerID)
+		return err
+	})
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	data := &CenterScheduleData{
+		rules:      make(map[primitive.ObjectID][]domain.ScheduleRule, len(rules)),
+		exceptions: make(map[primitive.ObjectID]*domain.ScheduleException),
+		blocks:     make(map[primitive.ObjectID][]domain.Block),
+		date:       searchDate,
+	}
+	for _, rule := range rules {
+		data.rules[rule.SpaceID] = append(data.rules[rule.SpaceID], rule)
+	}
+	for i := range exceptions {
+		ex := exceptions[i]
+		if !sameSantiagoDate(ex.Date, searchDate) {
+			continue
+		}
+		if _, exists := data.exceptions[ex.SpaceID]; exists {
+			continue
+		}
+		data.exceptions[ex.SpaceID] = &ex
+	}
+	for _, block := range blocks {
+		if !sameSantiagoDate(block.Date, searchDate) {
+			continue
+		}
+		data.blocks[block.SpaceID] = append(data.blocks[block.SpaceID], block)
+	}
+	return data, nil
+}
+
+// santiagoMidnight returns the start of the Santiago calendar day of `date`.
+func santiagoMidnight(date time.Time) time.Time {
+	loc := domain.GetSantiagoLocation()
+	d := date.In(loc)
+	return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, loc)
+}
+
+// sameSantiagoDate reports whether both instants fall on the same Santiago
+// calendar day.
+func sameSantiagoDate(a, b time.Time) bool {
+	loc := domain.GetSantiagoLocation()
+	ay, am, ad := a.In(loc).Date()
+	by, bm, bd := b.In(loc).Date()
+	return ay == by && am == bm && ad == bd
 }
 
 // FindFranjaForBooking retorna la franja que contiene el intervalo
