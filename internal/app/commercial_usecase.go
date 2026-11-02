@@ -81,6 +81,10 @@ type CommissionView struct {
 	Effective  int    `json:"effective"`
 	Source     string `json:"source"`
 	Configured *int   `json:"configured,omitempty"`
+	// BilledInSplit indica si Mercado Pago retiene la comisión en el split. Es
+	// false cuando la conexión es manual (token compartido): la comisión se
+	// factura fuera de Mercado Pago.
+	BilledInSplit bool `json:"billed_in_split"`
 }
 
 func (uc *CommercialUseCase) center(ctx context.Context, id primitive.ObjectID) (*domain.SportCenter, error) {
@@ -154,7 +158,17 @@ func (uc *CommercialUseCase) view(ctx context.Context, c *domain.SportCenter) (*
 	case domain.CommercialModePayOnline:
 		v.MercadoPago = c.MercadoPagoStatus()
 		rate, source := c.EffectiveCommission(CommercialModelEnforced(), defaultMarketplaceFeePercent)
-		cv := &CommissionView{Effective: rate, Source: source}
+		// Sólo una conexión manual activa cambia el cobro: con token compartido
+		// Mercado Pago rechaza marketplace_fee, así que no se retiene nada en el
+		// split, la comisión se factura aparte y la efectiva para el centro es 0.
+		// Sin conexión no hay nada que retener todavía: se muestra la tarifa que
+		// aplicará al conectar.
+		manualConnection := c.MercadoPago.IsConnected() && !c.MercadoPago.SupportsMarketplaceFee()
+		billedInSplit := !manualConnection
+		if manualConnection {
+			rate = 0
+		}
+		cv := &CommissionView{Effective: rate, Source: source, BilledInSplit: billedInSplit}
 		if c.Commercial != nil && c.Commercial.OnlinePayment != nil && c.Commercial.OnlinePayment.Commission != nil {
 			cv.Configured = c.Commercial.OnlinePayment.Commission.Value
 		}
