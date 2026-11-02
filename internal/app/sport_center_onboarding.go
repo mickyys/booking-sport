@@ -98,6 +98,24 @@ func applyPaymentModeToSlots(paymentMode string, slots []domain.ScheduleRuleSlot
 	}
 }
 
+// applyPartialPaymentDefault completa con el pago parcial del centro las
+// franjas que no traen un valor propio, cuando el centro cobra online y tiene
+// los abonos activos.
+func applyPartialPaymentDefault(center *domain.SportCenter, slots []domain.ScheduleRuleSlot) []domain.ScheduleRuleSlot {
+	if center == nil || center.PaymentMode != PaymentModePayOnline || !center.PartialPaymentEnabled {
+		return slots
+	}
+	out := make([]domain.ScheduleRuleSlot, len(slots))
+	for i, s := range slots {
+		out[i] = s
+		if s.PartialPaymentEnabled == nil {
+			enabled := true
+			out[i].PartialPaymentEnabled = &enabled
+		}
+	}
+	return out
+}
+
 // applyPaymentModeToCourtSchedule es la versión legacy para spaces.schedule
 // (slots por hora).
 func applyPaymentModeToCourtSchedule(paymentMode string, schedule []domain.CourtSchedule) []domain.CourtSchedule {

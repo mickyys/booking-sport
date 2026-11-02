@@ -158,13 +158,15 @@ func (r *SpaceRepository) UpdateScheduleSlot(ctx context.Context, id primitive.O
 	return nil
 }
 
+// SyncPartialPaymentSlots fuerza el pago parcial en todas las franjas del
+// horario legacy de los espacios del centro, incluidas las que tenían un valor
+// propio.
 func (r *SpaceRepository) SyncPartialPaymentSlots(ctx context.Context, centerID primitive.ObjectID, partialPaymentEnabled bool) (int64, error) {
 	result, err := r.collection.UpdateMany(
 		ctx,
 		bson.M{
-			"sport_center_id":                  centerID,
-			"category":                         domain.SpaceCategoryCancha,
-			"schedule.partial_payment_enabled": nil,
+			"sport_center_id": centerID,
+			"schedule.0":      bson.M{"$exists": true},
 		},
 		bson.M{
 			"$set": bson.M{

@@ -253,6 +253,51 @@ type SportCenterUseCase struct {
 	ruleRepo                 ScheduleRuleRepository
 	scheduleResolver         *ScheduleResolver
 	mpDisconnector           MPDisconnector
+	exceptionPartialSyncer   partialPaymentSlotSyncer
+}
+
+// partialPaymentSlotSyncer es opcional para no ampliar los repositorios de
+// horarios: propaga el pago parcial del centro a todas sus franjas.
+type partialPaymentSlotSyncer interface {
+	SyncPartialPaymentSlots(ctx context.Context, centerID primitive.ObjectID, partialPaymentEnabled bool) (int64, error)
+}
+
+// SetExceptionPartialSyncer inyecta el repositorio de excepciones de horario
+// para alinear también sus franjas con el pago parcial del centro.
+func (uc *SportCenterUseCase) SetExceptionPartialSyncer(s partialPaymentSlotSyncer) {
+	uc.exceptionPartialSyncer = s
+}
+
+// syncPartialPaymentSlots aplica el pago parcial del centro a todas las
+// franjas (reglas semanales, excepciones y horario legacy), incluidas las que
+// tenían un valor propio. Los errores se registran sin interrumpir el guardado.
+func (uc *SportCenterUseCase) syncPartialPaymentSlots(ctx context.Context, centerID primitive.ObjectID, enabled bool) {
+	type target struct {
+		name   string
+		syncer partialPaymentSlotSyncer
+	}
+	var targets []target
+	if s, ok := uc.ruleRepo.(partialPaymentSlotSyncer); ok {
+		targets = append(targets, target{"schedule_rules", s})
+	}
+	if uc.exceptionPartialSyncer != nil {
+		targets = append(targets, target{"schedule_exceptions", uc.exceptionPartialSyncer})
+	}
+	if uc.courtRepo != nil {
+		targets = append(targets, target{"courts", uc.courtRepo})
+	}
+	if uc.spaceRepo != nil {
+		targets = append(targets, target{"spaces", uc.spaceRepo})
+	}
+
+	for _, s := range targets {
+		n, err := s.syncer.SyncPartialPaymentSlots(ctx, centerID, enabled)
+		if err != nil {
+			log.Printf("[SYNC] Error syncing partial payment in %s: %v", s.name, err)
+			continue
+		}
+		log.Printf("[SYNC] Synced %d %s docs with partial payment = %v", n, s.name, enabled)
+	}
 }
 
 // SetMPDisconnector inyecta el caso de uso de Mercado Pago Connect para poder
@@ -355,16 +400,11 @@ func (uc *SportCenterUseCase) UpdateSettings(ctx context.Context, id primitive.O
 		return err
 	}
 
-	if partialPaymentEnabled != nil && uc.courtRepo != nil {
-		wasEnabled := center.PartialPaymentEnabled
-		if wasEnabled != *partialPaymentEnabled {
-			syncedCount, err := uc.courtRepo.SyncPartialPaymentSlots(ctx, id, *partialPaymentEnabled)
-			if err != nil {
-				log.Printf("[SYNC] Error syncing partial payment slots: %v", err)
-			} else {
-				log.Printf("[SYNC] Synced %d courts with partial payment = %v", syncedCount, *partialPaymentEnabled)
-			}
-		}
+	// El pago parcial se propaga siempre a todas las franjas (no solo cuando
+	// cambia el flag del centro) para corregir franjas que quedaron con un valor
+	// propio desfasado.
+	if partialPaymentEnabled != nil {
+		uc.syncPartialPaymentSlots(ctx, id, *partialPaymentEnabled)
 	}
 
 	// La modalidad comercial define si las franjas exigen pago online. Al

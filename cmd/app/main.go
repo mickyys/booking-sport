@@ -116,6 +116,7 @@ func main() {
 
 	sportCenterUC := app.NewSportCenterUseCase(sportCenterRepo, courtRepo, userRepo, bookingRepo, holdRepo, recurringReservationRepo, spaceRepo, scheduleRuleRepo)
 	sportCenterUC.SetMPDisconnector(mpConnectUC)
+	sportCenterUC.SetExceptionPartialSyncer(scheduleExceptionRepo)
 	courtUC := app.NewCourtUseCase(courtRepo, sportCenterRepo, bookingRepo)
 	facilityUC := app.NewFacilityUseCase(facilityRepo, sportCenterRepo)
 	spaceUC := app.NewSpaceUseCase(spaceRepo, sportCenterRepo)

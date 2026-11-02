@@ -112,9 +112,47 @@ func (r *ScheduleRuleRepository) SyncPaymentModeSlots(ctx context.Context, cente
 	return result.ModifiedCount, nil
 }
 
+// SyncPartialPaymentSlots fuerza el pago parcial en todas las franjas del
+// centro, incluidas las que tenían un valor propio.
+func (r *ScheduleRuleRepository) SyncPartialPaymentSlots(ctx context.Context, centerID primitive.ObjectID, partialPaymentEnabled bool) (int64, error) {
+	result, err := r.collection.UpdateMany(
+		ctx,
+		bson.M{"sport_center_id": centerID, "slots.0": bson.M{"$exists": true}},
+		bson.M{
+			"$set": bson.M{
+				"slots.$[].partial_payment_enabled": partialPaymentEnabled,
+				"updated_at":                        time.Now(),
+			},
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.ModifiedCount, nil
+}
+
 // ScheduleExceptionRepository persiste excepciones de horario (schedule_exceptions).
 type ScheduleExceptionRepository struct {
 	collection *mongodb.Collection
+}
+
+// SyncPartialPaymentSlots fuerza el pago parcial en las franjas de todas las
+// excepciones del centro.
+func (r *ScheduleExceptionRepository) SyncPartialPaymentSlots(ctx context.Context, centerID primitive.ObjectID, partialPaymentEnabled bool) (int64, error) {
+	result, err := r.collection.UpdateMany(
+		ctx,
+		bson.M{"sport_center_id": centerID, "slots.0": bson.M{"$exists": true}},
+		bson.M{
+			"$set": bson.M{
+				"slots.$[].partial_payment_enabled": partialPaymentEnabled,
+				"updated_at":                        time.Now(),
+			},
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.ModifiedCount, nil
 }
 
 func NewScheduleExceptionRepository(db *mongodb.Database) *ScheduleExceptionRepository {
