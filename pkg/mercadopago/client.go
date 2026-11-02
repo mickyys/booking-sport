@@ -2,7 +2,10 @@ package mercadopago
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	mp "github.com/mercadopago/sdk-go/pkg/config"
@@ -80,6 +83,50 @@ func maskToken(token string) string {
 	return token[:5] + "..." + token[len(token)-5:]
 }
 
+// preferenceEndpoint es el recurso de Mercado Pago al que apunta CreatePreference.
+const preferenceEndpoint = "https://api.mercadopago.com/checkout/preferences"
+
+// preferencePayloadLogging indica si se registra el request completo enviado a
+// Mercado Pago. Se apaga con MP_LOG_PREFERENCE_PAYLOAD=false.
+func preferencePayloadLogging() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("MP_LOG_PREFERENCE_PAYLOAD"))) {
+	case "false", "0", "no", "off":
+		return false
+	}
+	return true
+}
+
+// logPreferenceRequest registra el request tal como lo envía el SDK, junto a un
+// curl equivalente para poder replicarlo en Postman. El access token queda como
+// variable ($MP_ACCESS_TOKEN) para no filtrar credenciales en los logs; el
+// valor real está en sport_centers.mercadopago.access_token del centro.
+func logPreferenceRequest(log *logger.SugaredLogger, req *preference.Request) {
+	raw, err := json.Marshal(req)
+	if err != nil {
+		log.Warnw("mercadopago_preference_request_marshal_error", "error", err)
+		return
+	}
+
+	var body map[string]any
+	if uErr := json.Unmarshal(raw, &body); uErr != nil {
+		body = map[string]any{"raw": string(raw)}
+	}
+
+	log.Infow("mercadopago_preference_request",
+		"method", "POST",
+		"url", preferenceEndpoint,
+		"headers", map[string]string{
+			"Authorization": "Bearer $MP_ACCESS_TOKEN",
+			"Content-Type":  "application/json",
+		},
+		"body", body,
+		"curl", fmt.Sprintf(
+			`curl -s -X POST %s -H "Authorization: Bearer $MP_ACCESS_TOKEN" -H "Content-Type: application/json" -d '%s'`,
+			preferenceEndpoint, raw,
+		),
+	)
+}
+
 func (c *Client) CreatePreference(ctx context.Context, input PreferenceInput) (*PreferenceResult, error) {
 	cfg, err := c.getConfig()
 	if err != nil {
@@ -123,8 +170,21 @@ func (c *Client) CreatePreference(ctx context.Context, input PreferenceInput) (*
 		"token", maskToken(c.accessToken),
 	)
 
+	if preferencePayloadLogging() {
+		logPreferenceRequest(log, &req)
+	}
+
 	result, err := prefClient.Create(ctx, req)
 	if err != nil {
+		// El SDK entrega el cuerpo crudo de la respuesta de Mercado Pago en
+		// err.Error(), así que este log guarda el motivo real del rechazo.
+		log.Errorw("mercadopago_preference_error",
+			"external_ref", input.ExternalRef,
+			"amount", input.Amount,
+			"marketplace_fee", req.MarketplaceFee,
+			"token", maskToken(c.accessToken),
+			"error", err,
+		)
 		return nil, fmt.Errorf("error creating mercadopago preference: %w", err)
 	}
 
