@@ -793,7 +793,11 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 	input.Booking.MemberID = ""
 	input.Booking.AdminSource = false
 
-	initPoint, err := h.useCase.CreateMercadoPagoPayment(c.Request.Context(), &input.Booking, input.Partial)
+	ctx := c.Request.Context()
+	if c.GetHeader("X-Client") == "mobile" {
+		ctx = app.WithMobileClient(ctx)
+	}
+	initPoint, err := h.useCase.CreateMercadoPagoPayment(ctx, &input.Booking, input.Partial)
 	if err != nil {
 		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
 		return
