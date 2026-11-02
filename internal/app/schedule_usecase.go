@@ -169,6 +169,7 @@ func (uc *ScheduleUseCase) SaveSchedule(ctx context.Context, spaceID primitive.O
 		// modalidad comercial del centro (tipo de suscripción); no es editable.
 		if space.Category == domain.SpaceCategoryCancha {
 			rule.Slots = applyPaymentModeToSlots(center.PaymentMode, rule.Slots)
+			rule.Slots = applyPartialPaymentDefault(center, rule.Slots)
 		}
 		if err := uc.ruleRepo.Create(ctx, &rule); err != nil {
 			return nil, fmt.Errorf("error saving rule: %w", err)
@@ -203,6 +204,7 @@ func (uc *ScheduleUseCase) CreateException(ctx context.Context, spaceID primitiv
 	ex.ID = primitive.NewObjectID()
 	if space.Category == domain.SpaceCategoryCancha {
 		ex.Slots = applyPaymentModeToSlots(center.PaymentMode, ex.Slots)
+		ex.Slots = applyPartialPaymentDefault(center, ex.Slots)
 	}
 	if err := uc.exceptionRepo.Create(ctx, ex); err != nil {
 		return nil, err
@@ -233,6 +235,7 @@ func (uc *ScheduleUseCase) UpdateException(ctx context.Context, spaceID primitiv
 	existing.Date = normalizeDate(updated.Date)
 	if space.Category == domain.SpaceCategoryCancha {
 		existing.Slots = applyPaymentModeToSlots(center.PaymentMode, updated.Slots)
+		existing.Slots = applyPartialPaymentDefault(center, existing.Slots)
 	} else {
 		existing.Slots = updated.Slots
 	}

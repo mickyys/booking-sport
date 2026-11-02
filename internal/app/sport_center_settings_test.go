@@ -23,14 +23,24 @@ func (m *settingsCenterRepo) FindByID(ctx context.Context, id primitive.ObjectID
 
 func (m *settingsCenterRepo) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
 	m.updatedMode = paymentMode
-	m.center.PaymentMode = *paymentMode
+	if paymentMode != nil {
+		m.center.PaymentMode = *paymentMode
+	}
 	return nil
 }
 
 type settingsCourtRepo struct {
 	CourtRepository
-	called   bool
-	required bool
+	called        bool
+	required      bool
+	partialCalled bool
+	partialValue  bool
+}
+
+func (m *settingsCourtRepo) SyncPartialPaymentSlots(ctx context.Context, centerID primitive.ObjectID, partialPaymentEnabled bool) (int64, error) {
+	m.partialCalled = true
+	m.partialValue = partialPaymentEnabled
+	return 1, nil
 }
 
 func (m *settingsCourtRepo) SyncPaymentModeSlots(ctx context.Context, centerID primitive.ObjectID, paymentRequired bool) (int64, error) {
@@ -41,8 +51,27 @@ func (m *settingsCourtRepo) SyncPaymentModeSlots(ctx context.Context, centerID p
 
 type settingsRuleRepo struct {
 	ScheduleRuleRepository
-	called   bool
-	required bool
+	called        bool
+	required      bool
+	partialCalled bool
+	partialValue  bool
+}
+
+func (m *settingsRuleRepo) SyncPartialPaymentSlots(ctx context.Context, centerID primitive.ObjectID, partialPaymentEnabled bool) (int64, error) {
+	m.partialCalled = true
+	m.partialValue = partialPaymentEnabled
+	return 1, nil
+}
+
+type settingsExceptionSyncer struct {
+	called bool
+	value  bool
+}
+
+func (m *settingsExceptionSyncer) SyncPartialPaymentSlots(ctx context.Context, centerID primitive.ObjectID, partialPaymentEnabled bool) (int64, error) {
+	m.called = true
+	m.value = partialPaymentEnabled
+	return 1, nil
 }
 
 func (m *settingsRuleRepo) SyncPaymentModeSlots(ctx context.Context, centerID primitive.ObjectID, paymentRequired bool) (int64, error) {
@@ -139,6 +168,60 @@ func TestUpdateSettings_MismaModalidadNoSincroniza(t *testing.T) {
 
 	if ruleRepo.called || courtRepo.called || disconnector.called {
 		t.Errorf("no debe sincronizar ni desconectar si la modalidad no cambió (rule=%v court=%v disconnect=%v)", ruleRepo.called, courtRepo.called, disconnector.called)
+	}
+}
+
+func TestUpdateSettings_PagoParcialSeAplicaATodasLasFranjas(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		uc, centerRepo, courtRepo, ruleRepo, _ := newSettingsUseCase(PaymentModePayOnline)
+		centerRepo.center.PartialPaymentEnabled = enabled // ya estaba así: igual debe sincronizar
+		exceptions := &settingsExceptionSyncer{}
+		uc.SetExceptionPartialSyncer(exceptions)
+
+		if err := uc.UpdateSettings(context.Background(), centerRepo.center.ID, nil, nil, nil, &enabled, nil, nil, nil, nil, nil, nil, nil, nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if !ruleRepo.partialCalled || ruleRepo.partialValue != enabled {
+			t.Errorf("schedule_rules: called=%v value=%v, want %v", ruleRepo.partialCalled, ruleRepo.partialValue, enabled)
+		}
+		if !exceptions.called || exceptions.value != enabled {
+			t.Errorf("schedule_exceptions: called=%v value=%v, want %v", exceptions.called, exceptions.value, enabled)
+		}
+		if !courtRepo.partialCalled || courtRepo.partialValue != enabled {
+			t.Errorf("courts: called=%v value=%v, want %v", courtRepo.partialCalled, courtRepo.partialValue, enabled)
+		}
+	}
+}
+
+func TestUpdateSettings_SinPagoParcialNoSincronizaFranjas(t *testing.T) {
+	uc, centerRepo, courtRepo, ruleRepo, _ := newSettingsUseCase(PaymentModePayOnline)
+
+	hours := 3
+	if err := uc.UpdateSettings(context.Background(), centerRepo.center.ID, nil, &hours, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ruleRepo.partialCalled || courtRepo.partialCalled {
+		t.Errorf("no debe tocar franjas si no se envía partial_payment_enabled")
+	}
+}
+
+func TestApplyPartialPaymentDefault(t *testing.T) {
+	off := false
+	slots := []domain.ScheduleRuleSlot{{StartTime: "15:00"}, {StartTime: "16:00", PartialPaymentEnabled: &off}}
+
+	online := &domain.SportCenter{PaymentMode: PaymentModePayOnline, PartialPaymentEnabled: true}
+	out := applyPartialPaymentDefault(online, slots)
+	if out[0].PartialPaymentEnabled == nil || !*out[0].PartialPaymentEnabled {
+		t.Errorf("franja sin valor debe heredar el parcial del centro")
+	}
+	if out[1].PartialPaymentEnabled == nil || *out[1].PartialPaymentEnabled {
+		t.Errorf("franja con valor propio no debe cambiar")
+	}
+
+	atCenter := &domain.SportCenter{PaymentMode: PaymentModePayAtCenter, PartialPaymentEnabled: true}
+	if got := applyPartialPaymentDefault(atCenter, slots); got[0].PartialPaymentEnabled != nil {
+		t.Errorf("sin cobro online no se completa el parcial")
 	}
 }
 
