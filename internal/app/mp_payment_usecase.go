@@ -291,13 +291,8 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 
 		client := mercadopago.NewClient(center.MercadoPago.AccessToken)
 
-		urlFrontend := os.Getenv("URL_FRONTEND")
 		notificationURL := os.Getenv("URL_MP_WEBHOOK")
-		urlPaymentCallback := os.Getenv("URL_MP_CALLBACK")
-
-		successURL := fmt.Sprintf("%s?code=%s", urlPaymentCallback, existingBooking.BookingCode)
-		failureURL := fmt.Sprintf("%s/booking/failure", urlFrontend)
-		pendingURL := fmt.Sprintf("%s?code=%s", urlPaymentCallback, existingBooking.BookingCode)
+		successURL, failureURL, pendingURL := mpBackURLs(ctx, existingBooking.BookingCode)
 
 		title := fmt.Sprintf("Reserva %s - %s - %s %s", court.Name, center.Name, existingBooking.Date.Format("02/01/2006"), slotTimeLabel(court, existingBooking.Hour))
 		if isPartial {
@@ -363,13 +358,8 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	_ = uc.holdRepo.SetBookingID(ctx, hold.ID, booking.ID)
 	client := mercadopago.NewClient(center.MercadoPago.AccessToken)
 
-	urlFrontend := os.Getenv("URL_FRONTEND")
 	notificationURL := os.Getenv("URL_MP_WEBHOOK")
-	urlPaymentCallback := os.Getenv("URL_MP_CALLBACK")
-
-	successURL := fmt.Sprintf("%s?code=%s", urlPaymentCallback, booking.BookingCode)
-	failureURL := fmt.Sprintf("%s/booking/failure", urlFrontend)
-	pendingURL := fmt.Sprintf("%s?code=%s", urlPaymentCallback, booking.BookingCode)
+	successURL, failureURL, pendingURL := mpBackURLs(ctx, booking.BookingCode)
 
 	title := fmt.Sprintf("Reserva %s - %s - %s %s", court.Name, center.Name, booking.Date.Format("02/01/2006"), slotTimeLabel(court, booking.Hour))
 	if isPartial {
