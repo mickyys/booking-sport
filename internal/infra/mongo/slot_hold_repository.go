@@ -103,6 +103,14 @@ func (r *SlotHoldRepository) RenewExpiration(ctx context.Context, holdID primiti
 	return err
 }
 
+func (r *SlotHoldRepository) SetBookingID(ctx context.Context, holdID primitive.ObjectID, bookingID primitive.ObjectID) error {
+	_, err := r.collection.UpdateOne(ctx,
+		bson.M{"_id": holdID},
+		bson.M{"$set": bson.M{"booking_id": bookingID}},
+	)
+	return err
+}
+
 func (r *SlotHoldRepository) DeleteIfExpired(ctx context.Context, holdID primitive.ObjectID, expectedExpiresAt time.Time) (bool, error) {
 	result, err := r.collection.DeleteOne(ctx, bson.M{
 		"_id":        holdID,

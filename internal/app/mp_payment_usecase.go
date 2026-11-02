@@ -277,6 +277,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 				return "", domain.NewConflictError("no se pudo asegurar el bloque para continuar el pago, intentalo nuevamente")
 			}
 			hold = claimed
+			_ = uc.holdRepo.SetBookingID(ctx, hold.ID, existingBooking.ID)
 		}
 
 		lockExpires := hold.ExpiresAt
@@ -359,7 +360,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	}
 
 	hold.BookingID = booking.ID
-
+	_ = uc.holdRepo.SetBookingID(ctx, hold.ID, booking.ID)
 	client := mercadopago.NewClient(center.MercadoPago.AccessToken)
 
 	urlFrontend := os.Getenv("URL_FRONTEND")

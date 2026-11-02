@@ -230,6 +230,7 @@ type SlotHoldRepository interface {
 	FindByBookingID(ctx context.Context, bookingID primitive.ObjectID) (*domain.SlotHold, error)
 	FindActiveByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.SlotHold, error)
 	RenewExpiration(ctx context.Context, holdID primitive.ObjectID, newExpiresAt time.Time) error
+	SetBookingID(ctx context.Context, holdID primitive.ObjectID, bookingID primitive.ObjectID) error
 	DeleteIfExpired(ctx context.Context, holdID primitive.ObjectID, expectedExpiresAt time.Time) (bool, error)
 	Delete(ctx context.Context, holdID primitive.ObjectID) error
 	TryClaimSlot(ctx context.Context, hold *domain.SlotHold) (*domain.SlotHold, error)
