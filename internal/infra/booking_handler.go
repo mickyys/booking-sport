@@ -799,6 +799,10 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 	}
 	initPoint, err := h.useCase.CreateMercadoPagoPayment(ctx, &input.Booking, input.Partial)
 	if err != nil {
+		h.baseHandler.GetLogger(c).Errorw("mp_preference_create_failed",
+			"booking_code", input.Booking.BookingCode,
+			"error", err,
+		)
 		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
 		return
 	}
