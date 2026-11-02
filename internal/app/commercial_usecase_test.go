@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/hamp/booking-sport/internal/domain"
 	"github.com/hamp/booking-sport/pkg/mercadopago"
@@ -250,3 +251,78 @@ func TestUpdateSportCenterPreservesCommercial(t *testing.T) {
 		t.Fatalf("commercial debe conservarse del documento existente, got %+v", repo.saved.Commercial)
 	}
 }
+
+// TestCommercialViewCommissionBilling verifica que la comisión efectiva sólo se
+// anula cuando el centro tiene una conexión manual de Mercado Pago: en ese caso
+// no hay marketplace_fee y la comisión se factura aparte.
+func TestCommercialViewCommissionBilling(t *testing.T) {
+	defer SetCommercialModelEnforced(false)
+	SetCommercialModelEnforced(true)
+
+	expires := time.Now().Add(24 * time.Hour)
+	cases := []struct {
+		name          string
+		mp            *domain.MercadoPagoConfig
+		wantEffective int
+		wantInSplit   bool
+	}{
+		{
+			name:          "sin conexión aplica la tarifa futura",
+			mp:            nil,
+			wantEffective: defaultMarketplaceFeePercent,
+			wantInSplit:   true,
+		},
+		{
+			name: "oauth retiene en el split",
+			mp: &domain.MercadoPagoConfig{
+				AccessToken: "APP_USR-1", ExpiresAt: &expires,
+				ConnectionType: domain.MPConnectionOAuth,
+			},
+			wantEffective: defaultMarketplaceFeePercent,
+			wantInSplit:   true,
+		},
+		{
+			name: "manual se factura aparte",
+			mp: &domain.MercadoPagoConfig{
+				AccessToken: "APP_USR-1", ExpiresAt: &expires,
+				ConnectionType: domain.MPConnectionManual,
+			},
+			wantEffective: 0,
+			wantInSplit:   false,
+		},
+		{
+			name: "manual expirado ya no retiene nada",
+			mp: &domain.MercadoPagoConfig{
+				AccessToken: "APP_USR-1", ExpiresAt: timePtrApp(expires.Add(-48 * time.Hour)),
+				ConnectionType: domain.MPConnectionManual,
+			},
+			wantEffective: defaultMarketplaceFeePercent,
+			wantInSplit:   true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := readyCenter()
+			c.MercadoPago = tc.mp
+			c.Commercial = &domain.Commercial{PaymentMode: domain.CommercialModePayOnline}
+			uc, _, _, _ := newCommercialFixture(c)
+
+			v, err := uc.Get(context.Background(), c.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if v.Commission == nil {
+				t.Fatal("PAY_ONLINE debe exponer comisión")
+			}
+			if v.Commission.Effective != tc.wantEffective {
+				t.Errorf("effective = %d, want %d", v.Commission.Effective, tc.wantEffective)
+			}
+			if v.Commission.BilledInSplit != tc.wantInSplit {
+				t.Errorf("billed_in_split = %v, want %v", v.Commission.BilledInSplit, tc.wantInSplit)
+			}
+		})
+	}
+}
+
+func timePtrApp(v time.Time) *time.Time { return &v }

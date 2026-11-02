@@ -28,6 +28,20 @@ func centerCommissionRate(center *domain.SportCenter) int {
 	return rate
 }
 
+// marketplaceFeeFor resuelve el marketplace_fee a enviar a Mercado Pago.
+//
+// Sólo los centros conectados por OAuth autorizaron a la plataforma a retener
+// la comisión en el split. Con un access token compartido (conexión manual)
+// Mercado Pago rechaza la preferencia si se envía marketplace_fee, así que en
+// ese caso se omite y la comisión se factura fuera de Mercado Pago. La comisión
+// igual queda registrada en la reserva vía applyCommissionSnapshot.
+func marketplaceFeeFor(center *domain.SportCenter, amount float64) float64 {
+	if center == nil || !center.MercadoPago.SupportsMarketplaceFee() {
+		return 0
+	}
+	return commissionFee(amount, centerCommissionRate(center))
+}
+
 // commissionFee calcula la comisión en moneda local para un porcentaje ya
 // resuelto. No aplica defaults: 0% es 0.
 func commissionFee(amount float64, ratePercent int) float64 {

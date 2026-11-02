@@ -427,7 +427,7 @@ func (uc *FacilityBookingUseCase) createPreference(
 		PendingURL:      successURL,
 		NotificationURL: notificationURL,
 		ExpirationDate:  expiresAt,
-		MarketplaceFee:  commissionFee(amountToPay, centerCommissionRate(center)),
+		MarketplaceFee:  marketplaceFeeFor(center, amountToPay),
 		Metadata: map[string]any{
 			"booking_code": first.BookingCode,
 			"space":        space.Name,

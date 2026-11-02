@@ -40,6 +40,49 @@ type MercadoPagoConfig struct {
 	LiveMode     bool       `bson:"live_mode" json:"live_mode"`
 	ConnectedAt  *time.Time `bson:"connected_at" json:"connected_at"`
 	UpdatedAt    *time.Time `bson:"updated_at" json:"updated_at"`
+	// ConnectionType indica cómo se obtuvieron las credenciales. Determina si la
+	// plataforma puede retener comisión en el split (marketplace_fee).
+	ConnectionType string `bson:"connection_type,omitempty" json:"connection_type,omitempty"`
+}
+
+// Tipos de conexión de Mercado Pago de un centro.
+const (
+	// MPConnectionOAuth: credenciales obtenidas por Mercado Pago Connect
+	// (OAuth). El centro autorizó a la plataforma como marketplace, así que las
+	// preferencias llevan marketplace_fee y la comisión se cobra en el split.
+	MPConnectionOAuth = "oauth"
+	// MPConnectionManual: access token compartido por el centro y cargado a
+	// mano. No hay autorización de marketplace: Mercado Pago rechaza la
+	// preferencia si se envía marketplace_fee, así que la comisión debe
+	// facturarse fuera de Mercado Pago.
+	MPConnectionManual = "manual"
+)
+
+// EffectiveConnectionType resuelve el tipo de conexión. Los centros que todavía
+// no tienen `connection_type` (documentos anteriores a
+// migrate-mp-connection-type) se infieren por sus credenciales: el
+// refresh_token y connected_at solo existen cuando el alta fue por OAuth.
+func (c *MercadoPagoConfig) EffectiveConnectionType() string {
+	if c == nil {
+		return ""
+	}
+	switch c.ConnectionType {
+	case MPConnectionOAuth, MPConnectionManual:
+		return c.ConnectionType
+	}
+	if c.RefreshToken != "" || c.ConnectedAt != nil {
+		return MPConnectionOAuth
+	}
+	if c.AccessToken != "" {
+		return MPConnectionManual
+	}
+	return ""
+}
+
+// SupportsMarketplaceFee indica si la plataforma está autorizada a enviar
+// marketplace_fee en las preferencias de este centro.
+func (c *MercadoPagoConfig) SupportsMarketplaceFee() bool {
+	return c.EffectiveConnectionType() == MPConnectionOAuth
 }
 
 // IsConnected indica si el centro tiene credenciales válidas (no expiradas) para recibir pagos.

@@ -26,6 +26,9 @@ type MPConnectStatus struct {
 	Scope             string     `json:"scope,omitempty"`
 	ConnectedAt       *time.Time `json:"connected_at,omitempty"`
 	ExpiresAt         *time.Time `json:"expires_at,omitempty"`
+	// ConnectionType distingue OAuth (marketplace habilitado) de manual (token
+	// compartido, sin marketplace_fee).
+	ConnectionType string `json:"connection_type,omitempty"`
 }
 
 // MPConnectUseCase implementa el flujo de Mercado Pago Connect (OAuth marketplace):
@@ -148,15 +151,16 @@ func (uc *MPConnectUseCase) HandleCallback(ctx context.Context, code, state stri
 	expiresAt := now.Add(time.Duration(token.ExpiresIn) * time.Second)
 
 	config := &domain.MercadoPagoConfig{
-		AccessToken:  token.AccessToken,
-		RefreshToken: token.RefreshToken,
-		ExpiresAt:    &expiresAt,
-		MPUserID:     mpUserID,
-		PublicKey:    token.PublicKey,
-		Scope:        token.Scope,
-		LiveMode:     token.LiveMode,
-		ConnectedAt:  &now,
-		UpdatedAt:    &now,
+		AccessToken:    token.AccessToken,
+		RefreshToken:   token.RefreshToken,
+		ExpiresAt:      &expiresAt,
+		MPUserID:       mpUserID,
+		PublicKey:      token.PublicKey,
+		Scope:          token.Scope,
+		LiveMode:       token.LiveMode,
+		ConnectedAt:    &now,
+		UpdatedAt:      &now,
+		ConnectionType: domain.MPConnectionOAuth,
 	}
 
 	if err := uc.centerRepo.UpdateMercadoPagoConfig(ctx, id, config); err != nil {
@@ -206,6 +210,7 @@ func (uc *MPConnectUseCase) GetStatus(ctx context.Context, userID string) (*MPCo
 		Scope:             cfg.Scope,
 		ConnectedAt:       cfg.ConnectedAt,
 		ExpiresAt:         cfg.ExpiresAt,
+		ConnectionType:    cfg.EffectiveConnectionType(),
 	}, nil
 }
 
