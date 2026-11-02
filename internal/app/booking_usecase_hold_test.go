@@ -252,6 +252,7 @@ type mockSlotHoldRepo struct {
 	TryClaimSlotCalls              int
 	FindOneAndDeleteIfExpiredCalls int
 	RenewExpirationCalls           int
+	SetBookingIDCalls              int
 	DeleteCalls                    []primitive.ObjectID
 	FindBySlotCalls                int
 }
@@ -284,6 +285,11 @@ func (m *mockSlotHoldRepo) RenewExpiration(ctx context.Context, holdID primitive
 	if m.RenewExpirationFn != nil {
 		return m.RenewExpirationFn(ctx, holdID, newExpiresAt)
 	}
+	return nil
+}
+
+func (m *mockSlotHoldRepo) SetBookingID(ctx context.Context, holdID primitive.ObjectID, bookingID primitive.ObjectID) error {
+	m.SetBookingIDCalls++
 	return nil
 }
 
@@ -441,6 +447,62 @@ func TestClaimOrRenewSlot_SameUserRenewsLockWithHold(t *testing.T) {
 	}
 	if bookingRepo.UpdateLockExpiresAtCalls != 1 {
 		t.Errorf("expected 1 UpdateLockExpiresAt call, got %d", bookingRepo.UpdateLockExpiresAtCalls)
+	}
+	if holdRepo.RenewExpirationCalls != 1 {
+		t.Errorf("expected 1 RenewExpiration call, got %d", holdRepo.RenewExpirationCalls)
+	}
+}
+
+func TestClaimOrRenewSlot_SameUserReusesOrphanHold(t *testing.T) {
+	courtID := newObjectID()
+	date := chileDate(2026, 11, 3)
+	hour := 23
+	userID := "device:abc"
+
+	futureLock := futureLockTime()
+	pendingBooking := &domain.Booking{
+		ID:            newObjectID(),
+		GuestDeviceID: userID,
+		LockExpiresAt: &futureLock,
+	}
+	orphanHold := &domain.SlotHold{
+		ID:      newObjectID(),
+		CourtID: courtID,
+		Hour:    hour,
+		UserID:  userID,
+	}
+
+	bookingRepo := &mockBookingRepoForHold{
+		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
+			return nil, nil
+		},
+		FindPendingBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
+			return pendingBooking, nil
+		},
+	}
+	holdRepo := &mockSlotHoldRepo{
+		FindBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.SlotHold, error) {
+			return orphanHold, nil
+		},
+	}
+
+	uc := &BookingUseCase{repo: bookingRepo, holdRepo: holdRepo}
+
+	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, 0, userID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if hold == nil || hold.ID != orphanHold.ID {
+		t.Fatalf("expected orphan hold to be reused, got %+v", hold)
+	}
+	if booking == nil || booking.ID != pendingBooking.ID {
+		t.Fatalf("expected pending booking, got %+v", booking)
+	}
+	if holdRepo.TryClaimSlotCalls != 0 {
+		t.Errorf("expected no TryClaimSlot calls, got %d", holdRepo.TryClaimSlotCalls)
+	}
+	if holdRepo.SetBookingIDCalls != 1 {
+		t.Errorf("expected 1 SetBookingID call, got %d", holdRepo.SetBookingIDCalls)
 	}
 	if holdRepo.RenewExpirationCalls != 1 {
 		t.Errorf("expected 1 RenewExpiration call, got %d", holdRepo.RenewExpirationCalls)

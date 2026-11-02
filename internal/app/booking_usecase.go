@@ -426,6 +426,20 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 				)
 				uc.repo.UpdateLockExpiresAt(ctx, pending.ID, expiresAt)
 				hold, _ := uc.holdRepo.FindByBookingID(ctx, pending.ID)
+				if hold == nil {
+					// Hold huérfano (sin booking_id): si es del mismo usuario se
+					// reutiliza en vez de chocar con él al crear uno nuevo.
+					if slotHold, _ := uc.holdRepo.FindBySlot(ctx, courtID, normalizedDate, hour, minutes); slotHold != nil &&
+						(slotHold.BookingID.IsZero() || slotHold.BookingID == pending.ID) &&
+						(slotHold.UserID == userID || slotHold.UserID == "") {
+						hold = slotHold
+						if hold.BookingID.IsZero() {
+							if err := uc.holdRepo.SetBookingID(ctx, hold.ID, pending.ID); err == nil {
+								hold.BookingID = pending.ID
+							}
+						}
+					}
+				}
 				if hold != nil {
 					uc.holdRepo.RenewExpiration(ctx, hold.ID, expiresAt)
 				} else {
