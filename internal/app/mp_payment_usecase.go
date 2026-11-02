@@ -313,7 +313,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 			PendingURL:      pendingURL,
 			NotificationURL: notificationURL,
 			ExpirationDate:  &lockExpires,
-			MarketplaceFee:  commissionFee(amountToPay, centerCommissionRate(center)),
+			MarketplaceFee:  marketplaceFeeFor(center, amountToPay),
 			Metadata:        buildPreferenceMetadata(existingBooking.BookingCode, court.Name, center.Name, center.ID.Hex(), existingBooking.Hour, existingBooking.Date, isPartial),
 		}
 
@@ -380,7 +380,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		PendingURL:      pendingURL,
 		NotificationURL: notificationURL,
 		ExpirationDate:  &lockExpires,
-		MarketplaceFee:  commissionFee(amountToPay, centerCommissionRate(center)),
+		MarketplaceFee:  marketplaceFeeFor(center, amountToPay),
 		Metadata:        buildPreferenceMetadata(booking.BookingCode, court.Name, center.Name, center.ID.Hex(), booking.Hour, booking.Date, isPartial),
 	}
 
