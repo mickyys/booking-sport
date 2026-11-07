@@ -11,14 +11,14 @@ import (
 
 type fakeInbox struct{ msgs []*domain.InboxMessage }
 
-func (f *fakeInbox) Insert(_ context.Context, m *domain.InboxMessage) error {
+func (f *fakeInbox) Insert(_ context.Context, m *domain.InboxMessage) (bool, error) {
 	for _, e := range f.msgs {
 		if e.UserID == m.UserID && e.DedupeKey == m.DedupeKey {
-			return nil
+			return false, nil
 		}
 	}
 	f.msgs = append(f.msgs, m)
-	return nil
+	return true, nil
 }
 func (f *fakeInbox) List(context.Context, string, string, int) ([]domain.InboxMessage, error) {
 	return nil, nil

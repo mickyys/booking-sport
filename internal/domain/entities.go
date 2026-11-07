@@ -601,16 +601,32 @@ type User struct {
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
 }
 
+// Apps que registran dispositivos. El panel y la app de clientes pueden
+// convivir en el mismo teléfono con tokens distintos: sin `app` un
+// administrador que usa la app de clientes recibiría avisos del panel.
+const (
+	DeviceAppClient = "client"
+	DeviceAppAdmin  = "admin"
+)
+
+// UserDevice es un token FCM registrado por una app.
+//
+// `user_id` identifica a un usuario autenticado (sub de Auth0) y
+// `guest_device_id` al invitado que reservó sin cuenta. Un mismo dispositivo
+// puede tener varios documentos: uno por app.
 type UserDevice struct {
 	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
-	UserID         string             `bson:"user_id" json:"user_id"`
-	SportCenterID  string             `bson:"sport_center_id" json:"sport_center_id"`
-	FCMToken       string             `bson:"fcm_token" json:"fcm_token"`
+	App            string             `bson:"app" json:"app"` // client | admin
+	UserID         string             `bson:"user_id,omitempty" json:"user_id,omitempty"`
+	SportCenterID  string             `bson:"sport_center_id,omitempty" json:"sport_center_id,omitempty"`
+	GuestDeviceID  string             `bson:"guest_device_id,omitempty" json:"-"`
+	FCMToken       string             `bson:"fcm_token" json:"-"`
 	Platform       string             `bson:"platform" json:"platform"` // ios, android, web
 	DeviceName     string             `bson:"device_name" json:"device_name"`
 	OSVersion      string             `bson:"os_version" json:"os_version"`
 	LastActivityAt time.Time          `bson:"last_activity_at" json:"last_activity_at"`
 	CreatedAt      time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt      time.Time          `bson:"updated_at" json:"updated_at"`
 }
 
 // UserProfile guarda datos de contacto de un usuario autenticado (identificado
@@ -1011,9 +1027,10 @@ func (c *SportCenter) IsOperational() bool {
 
 // Tipos de mensaje de la bandeja del cliente.
 const (
-	InboxBookingConfirmed = "booking_confirmed"
-	InboxBookingCancelled = "booking_cancelled"
-	InboxBookingReminder  = "booking_reminder"
+	InboxBookingConfirmed   = "booking_confirmed"
+	InboxBookingCancelled   = "booking_cancelled"
+	InboxBookingReminder    = "booking_reminder"
+	InboxBookingRescheduled = "booking_rescheduled"
 )
 
 // InboxMessage es un aviso in-app para un usuario autenticado (bandeja de

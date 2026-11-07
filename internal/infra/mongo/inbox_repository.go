@@ -36,15 +36,20 @@ func NewInboxRepository(db *mongo.Database) *InboxRepository {
 	return &InboxRepository{collection: coll}
 }
 
-func (r *InboxRepository) Insert(ctx context.Context, msg *domain.InboxMessage) error {
+// Insert devuelve false cuando ya existía un mensaje con el mismo DedupeKey
+// para el usuario: el webhook o el job se reintentaron.
+func (r *InboxRepository) Insert(ctx context.Context, msg *domain.InboxMessage) (bool, error) {
 	if msg.CreatedAt.IsZero() {
 		msg.CreatedAt = time.Now()
 	}
 	_, err := r.collection.InsertOne(ctx, msg)
 	if mongo.IsDuplicateKeyError(err) {
-		return nil
+		return false, nil
 	}
-	return err
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (r *InboxRepository) List(ctx context.Context, userID, before string, limit int) ([]domain.InboxMessage, error) {

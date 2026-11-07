@@ -1456,17 +1456,23 @@ func buildDateRangeFilter(start, end time.Time) bson.M {
 }
 
 // FindConfirmedWithUserBetween devuelve reservas confirmadas de usuarios
-// autenticados cuyo inicio cae en [from, to). Consulta por una ventana de
-// fechas amplia y filtra por el instante de inicio exacto.
+// autenticados o de invitados con dispositivo registrado, cuyo inicio cae en
+// [from, to). Consulta por una ventana de fechas amplia y filtra por el
+// instante de inicio exacto.
 func (r *BookingRepository) FindConfirmedWithUserBetween(ctx context.Context, from, to time.Time) ([]domain.Booking, error) {
 	dayFrom := from.AddDate(0, 0, -1)
 	dayTo := to.AddDate(0, 0, 1)
 	cursor, err := r.collection.Find(ctx, bson.M{
-		"status":  domain.BookingStatusConfirmed,
-		"user_id": bson.M{"$exists": true, "$ne": ""},
-		"$or": []bson.M{
-			{"scheduled_at": bson.M{"$gte": from, "$lt": to}},
-			{"scheduled_at": bson.M{"$exists": false}, "date": bson.M{"$gte": dayFrom, "$lt": dayTo}},
+		"status": domain.BookingStatusConfirmed,
+		"$and": []bson.M{
+			{"$or": []bson.M{
+				{"user_id": bson.M{"$exists": true, "$ne": ""}},
+				{"guest_device_id": bson.M{"$exists": true, "$ne": ""}},
+			}},
+			{"$or": []bson.M{
+				{"scheduled_at": bson.M{"$gte": from, "$lt": to}},
+				{"scheduled_at": bson.M{"$exists": false}, "date": bson.M{"$gte": dayFrom, "$lt": dayTo}},
+			}},
 		},
 	})
 	if err != nil {

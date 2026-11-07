@@ -18,9 +18,9 @@ const (
 )
 
 type InboxRepository interface {
-	// Insert guarda el mensaje; si ya existe uno con el mismo DedupeKey para el
-	// usuario no hace nada.
-	Insert(ctx context.Context, msg *domain.InboxMessage) error
+	// Insert guarda el mensaje. Devuelve false si ya existía uno con el mismo
+	// DedupeKey para el usuario (webhook reintentado, job repetido).
+	Insert(ctx context.Context, msg *domain.InboxMessage) (bool, error)
 	// List devuelve mensajes del usuario, más nuevos primero. before es un id
 	// hex opcional (cursor): solo mensajes anteriores a él.
 	List(ctx context.Context, userID, before string, limit int) ([]domain.InboxMessage, error)
@@ -87,32 +87,53 @@ func (uc *BookingUseCase) SetInbox(repo InboxRepository) {
 	uc.inbox = repo
 }
 
-// notifyCustomer deja un aviso en la bandeja del usuario dueño de la reserva.
-// Las reservas de invitado (sin UserID) se ignoran. Nunca falla la operación
-// de negocio: los errores solo se registran.
+// notifyCustomer deja un aviso en la bandeja del usuario dueño de la reserva y
+// envía la push correspondiente. Las reservas de invitado (sin UserID) no
+// tienen bandeja, pero sí push si registraron su dispositivo.
+//
+// Nunca falla la operación de negocio: los errores solo se registran.
 func (uc *BookingUseCase) notifyCustomer(ctx context.Context, booking *domain.Booking, msgType, title, body string) {
-	if uc.inbox == nil || booking == nil || booking.UserID == "" {
+	if booking == nil {
 		return
 	}
-	msg := &domain.InboxMessage{
-		UserID:    booking.UserID,
-		Type:      msgType,
-		Title:     title,
-		Body:      body,
-		DedupeKey: msgType + ":" + booking.ID.Hex(),
-		Data: map[string]string{
-			"booking_id":      booking.ID.Hex(),
-			"booking_code":    booking.BookingCode,
-			"sport_center_id": booking.SportCenterID.Hex(),
-		},
+
+	log := logger.FromContext(ctx)
+
+	// La bandeja solo existe para usuarios autenticados. Su dedupe (booking+tipo)
+	// también evita la push duplicada cuando el webhook reintenta.
+	if uc.inbox != nil && booking.UserID != "" {
+		msg := &domain.InboxMessage{
+			UserID:    booking.UserID,
+			Type:      msgType,
+			Title:     title,
+			Body:      body,
+			DedupeKey: msgType + ":" + booking.ID.Hex(),
+			Data: map[string]string{
+				"booking_id":      booking.ID.Hex(),
+				"booking_code":    booking.BookingCode,
+				"sport_center_id": booking.SportCenterID.Hex(),
+			},
+		}
+		inserted, err := uc.inbox.Insert(ctx, msg)
+		if err != nil {
+			log.Warnw("inbox_insert_failed", "error", err, "booking_id", booking.ID.Hex())
+		} else if !inserted {
+			return
+		}
 	}
-	if err := uc.inbox.Insert(ctx, msg); err != nil {
-		logger.FromContext(ctx).Warnw("inbox_insert_failed", "error", err, "booking_id", booking.ID.Hex())
+
+	if uc.push == nil {
+		return
 	}
+	uc.push.NotifyCustomer(ctx, booking, PushEvent{
+		Type:  msgType,
+		Title: title,
+		Body:  body,
+	})
 }
 
-// ReminderBookingFinder lista reservas confirmadas de usuarios con inicio en
-// [from, to).
+// ReminderBookingFinder lista reservas confirmadas con inicio en [from, to).
+// Incluye reservas de invitados que registraron su dispositivo.
 type ReminderBookingFinder interface {
 	FindConfirmedWithUserBetween(ctx context.Context, from, to time.Time) ([]domain.Booking, error)
 }
@@ -135,7 +156,10 @@ func (uc *BookingUseCase) SetReminderFinder(f ReminderBookingFinder) {
 // dentro de la propia ventana: el usuario acaba de crearlas.
 func (uc *BookingUseCase) SendBookingReminders(ctx context.Context, now time.Time, lead time.Duration) (*ReminderSummary, error) {
 	summary := &ReminderSummary{}
-	if uc.reminders == nil || uc.inbox == nil {
+	if uc.reminders == nil {
+		return summary, errors.New("booking reminders are not configured")
+	}
+	if uc.inbox == nil && uc.push == nil {
 		return summary, errors.New("booking reminders are not configured")
 	}
 	bookings, err := uc.reminders.FindConfirmedWithUserBetween(ctx, now, now.Add(lead))

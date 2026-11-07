@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -34,6 +35,7 @@ type BookingUseCase struct {
 	deviceRepo               UserDeviceRepository
 	mailer                   Mailer
 	notifier                 NotificationService
+	push                     *PushService
 	inbox                    InboxRepository
 	reminders                ReminderBookingFinder
 	recurringReservationRepo RecurringReservationRepository
@@ -58,6 +60,12 @@ func (uc *BookingUseCase) SetScheduleResolver(resolver *ScheduleResolver) {
 // Sin él se mantiene el comportamiento anterior (precio lista).
 func (uc *BookingUseCase) SetPricingService(pricing *PricingService) {
 	uc.pricing = pricing
+}
+
+// SetPushService inyecta el dispatcher de notificaciones. Sin él la bandeja
+// in-app sigue funcionando y no se envía ninguna push.
+func (uc *BookingUseCase) SetPushService(push *PushService) {
+	uc.push = push
 }
 
 // SetJobLockRepository inyecta el repositorio de locks distribuidos usado por
@@ -86,8 +94,47 @@ func NewBookingUseCase(repo BookingRepository, holdRepo SlotHoldRepository, cour
 	}
 }
 
-func (uc *BookingUseCase) RegisterDevice(ctx context.Context, userID, token, platform, deviceName, osVersion string, userRoles []string) error {
-	// 1. Validar por el claim de roles de Auth0
+// RegisterDeviceInput es el alta de un token FCM de cualquiera de las apps.
+type RegisterDeviceInput struct {
+	App           string // client | admin
+	UserID        string
+	GuestDeviceID string
+	Token         string
+	Platform      string
+	DeviceName    string
+	OSVersion     string
+}
+
+// RegisterDevice registra el token de una app con sesión.
+//
+// `app=admin` exige rol de administrador o administrar centros; `app=client`
+// solo exige sesión. Sin esta separación, un administrador que usa la app de
+// clientes recibiría los avisos del panel en el teléfono del cliente.
+func (uc *BookingUseCase) RegisterDevice(ctx context.Context, in RegisterDeviceInput, userRoles []string) error {
+	if strings.TrimSpace(in.Token) == "" {
+		return domain.NewBadRequestError("token es obligatorio")
+	}
+
+	appName, err := normalizeDeviceApp(in.App)
+	if err != nil {
+		return err
+	}
+
+	device := &domain.UserDevice{
+		App:           appName,
+		UserID:        in.UserID,
+		GuestDeviceID: in.GuestDeviceID,
+		FCMToken:      in.Token,
+		Platform:      in.Platform,
+		DeviceName:    in.DeviceName,
+		OSVersion:     in.OSVersion,
+	}
+
+	if appName == domain.DeviceAppClient {
+		return uc.deviceRepo.Upsert(ctx, device)
+	}
+
+	// app=admin: mismo control que antes de existir la app de clientes.
 	isAdminRole := false
 	for _, role := range userRoles {
 		lowerRole := strings.ToLower(role)
@@ -97,195 +144,119 @@ func (uc *BookingUseCase) RegisterDevice(ctx context.Context, userID, token, pla
 		}
 	}
 
-	// 2. Buscar centros administrados por el usuario
-	centers, err := uc.centerRepo.FindByUserID(ctx, userID)
+	centers, err := uc.centerRepo.FindByUserID(ctx, in.UserID)
 	if err != nil {
 		return fmt.Errorf("error verifying admin status: %w", err)
 	}
-
-	// Si no tiene el rol en el token ni administra centros, rechazamos
 	if !isAdminRole && len(centers) == 0 {
 		return fmt.Errorf("unauthorized: only administrators can register devices")
 	}
 
-	sportCenterID := ""
 	if len(centers) > 0 {
-		sportCenterID = centers[0].ID.Hex()
-	}
-
-	device := &domain.UserDevice{
-		UserID:        userID,
-		SportCenterID: sportCenterID,
-		FCMToken:      token,
-		Platform:      platform,
-		DeviceName:    deviceName,
-		OSVersion:     osVersion,
+		device.SportCenterID = centers[0].ID.Hex()
 	}
 	return uc.deviceRepo.Upsert(ctx, device)
 }
 
-func (uc *BookingUseCase) notifyAdmins(ctx context.Context, booking *domain.Booking, title, body string, notificationType string) {
-	loc := domain.GetSantiagoLocation()
+// RegisterGuestDevice registra el token de un invitado: exige el código de una
+// reserva hecha con ese mismo `guest_device_id`. Así el alta no queda abierta
+// a cualquiera que conozca un identificador de dispositivo.
+func (uc *BookingUseCase) RegisterGuestDevice(ctx context.Context, in RegisterDeviceInput, bookingCode string) error {
+	if strings.TrimSpace(in.Token) == "" || strings.TrimSpace(in.GuestDeviceID) == "" {
+		return domain.NewBadRequestError("token y guest_device_id son obligatorios")
+	}
+	if strings.TrimSpace(bookingCode) == "" {
+		return domain.NewBadRequestError("booking_code es obligatorio")
+	}
 
-	if uc.notifier == nil {
+	booking, err := uc.repo.FindByBookingCode(ctx, strings.TrimSpace(bookingCode))
+	if err != nil || booking == nil {
+		return domain.NewNotFoundError("reserva no encontrada")
+	}
+	if booking.GuestDeviceID == "" ||
+		subtle.ConstantTimeCompare([]byte(booking.GuestDeviceID), []byte(in.GuestDeviceID)) != 1 {
+		return fmt.Errorf("unauthorized: booking does not belong to this device")
+	}
+
+	return uc.deviceRepo.Upsert(ctx, &domain.UserDevice{
+		App:           domain.DeviceAppClient,
+		GuestDeviceID: booking.GuestDeviceID,
+		FCMToken:      in.Token,
+		Platform:      in.Platform,
+		DeviceName:    in.DeviceName,
+		OSVersion:     in.OSVersion,
+	})
+}
+
+// UnregisterDevice borra el token al cerrar sesión. El filtro por usuario evita
+// que alguien pueda dar de baja el token de otra persona.
+func (uc *BookingUseCase) UnregisterDevice(ctx context.Context, userID, token, appName string) error {
+	if strings.TrimSpace(token) == "" {
+		return nil
+	}
+	normalized, err := normalizeDeviceApp(appName)
+	if err != nil {
+		return err
+	}
+	return uc.deviceRepo.DeleteByTokenAndApp(ctx, token, normalized, userID)
+}
+
+func normalizeDeviceApp(appName string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(appName)) {
+	case "":
+		// Compatibilidad: las versiones del panel instaladas no mandan `app`.
+		return domain.DeviceAppAdmin, nil
+	case domain.DeviceAppClient:
+		return domain.DeviceAppClient, nil
+	case domain.DeviceAppAdmin:
+		return domain.DeviceAppAdmin, nil
+	default:
+		return "", domain.NewBadRequestError("app inválida: se espera client o admin")
+	}
+}
+
+// notifyAdmins delega en el dispatcher: selección de tokens, dedupe, payload y
+// poda de tokens inválidos viven en PushService.
+func (uc *BookingUseCase) notifyAdmins(ctx context.Context, booking *domain.Booking, title, body string, notificationType string) {
+	if uc.push == nil {
 		logger.FromContext(ctx).Warnw("push_notifier_not_configured",
 			"msg", "Servicio de notificaciones push no está configurado, no se enviarán notificaciones",
 		)
 		return
 	}
+	uc.push.NotifyAdmins(ctx, booking, PushEvent{
+		Type:  notificationType,
+		Title: title,
+		Body:  body,
+	})
+}
 
-	sportCenterName := booking.SportCenterName
-	sportCenterID := booking.SportCenterID
-
-	log := logger.FromContext(ctx)
-
-	log.Infow("push_notify_admins_started",
-		"msg", fmt.Sprintf("Iniciando envío de notificación push a administradores del centro %s", sportCenterName),
-		"center_id", sportCenterID.Hex(),
-		"center_name", sportCenterName,
-		"notification_type", notificationType,
-		"booking_id", booking.ID.Hex(),
-	)
-
-	devices, err := uc.deviceRepo.FindBySportCenterID(ctx, sportCenterID.Hex())
-	if err != nil {
-		log.Errorw("push_notify_admins_find_devices_error",
-			"msg", fmt.Sprintf("Error al buscar dispositivos del centro %s", sportCenterName),
-			"center_id", sportCenterID.Hex(),
-			"error", err,
-		)
+// SendTestPush envía una notificación a un token concreto. Solo lo usa el
+// endpoint interno de QA para comprobar la configuración de Firebase.
+func (uc *BookingUseCase) SendTestPush(ctx context.Context, token, audience, title, body string) (PushResult, error) {
+	if uc.notifier == nil {
+		return PushResult{}, fmt.Errorf("push no configurado: falta FIREBASE_CREDENTIALS_FILE")
 	}
-
-	log.Infow("push_notify_admins_devices_found",
-		"msg", fmt.Sprintf("Se encontraron %d dispositivos registrados para el centro %s", len(devices), sportCenterName),
-		"center_id", sportCenterID.Hex(),
-		"center_name", sportCenterName,
-		"devices_count", len(devices),
-	)
-
-	tokenMap := make(map[string]bool)
-	var allTokens []string
-
-	for _, d := range devices {
-		if !tokenMap[d.FCMToken] {
-			tokenMap[d.FCMToken] = true
-			allTokens = append(allTokens, d.FCMToken)
-		}
+	if strings.TrimSpace(token) == "" {
+		return PushResult{}, domain.NewBadRequestError("token es obligatorio")
 	}
-
-	var centerSlug string
-	center, err := uc.centerRepo.FindByID(ctx, sportCenterID)
-	if err == nil {
-		centerSlug = center.Slug
-		log.Infow("push_notify_admins_center_users",
-			"msg", fmt.Sprintf("El centro %s tiene %d usuarios administradores", center.Name, len(center.Users)),
-			"center_id", sportCenterID.Hex(),
-			"center_name", center.Name,
-			"users_count", len(center.Users),
-		)
-		for _, adminID := range center.Users {
-			adminDevices, err := uc.deviceRepo.FindByUserID(ctx, adminID)
-			if err != nil {
-				log.Warnw("push_notify_admins_user_devices_error",
-					"msg", fmt.Sprintf("Error al buscar dispositivos del usuario administrador %s", adminID),
-					"user_id", adminID,
-					"error", err,
-				)
-				continue
-			}
-			log.Infow("push_notify_admins_user_devices_found",
-				"msg", fmt.Sprintf("Se encontraron %d dispositivos para el usuario administrador %s", len(adminDevices), adminID),
-				"user_id", adminID,
-				"devices_count", len(adminDevices),
-			)
-			for _, d := range adminDevices {
-				if !tokenMap[d.FCMToken] {
-					tokenMap[d.FCMToken] = true
-					allTokens = append(allTokens, d.FCMToken)
-				}
-			}
-		}
-	} else {
-		log.Warnw("push_notify_admins_center_not_found",
-			"msg", fmt.Sprintf("No se encontró el centro deportivo %s para buscar usuarios administradores", sportCenterName),
-			"center_id", sportCenterID.Hex(),
-			"error", err,
-		)
+	if audience != domain.DeviceAppAdmin {
+		audience = domain.DeviceAppClient
 	}
-
-	if len(allTokens) == 0 {
-		log.Warnw("push_notify_admins_no_tokens",
-			"msg", fmt.Sprintf("No se encontraron tokens FCM para notificar al centro %s", sportCenterName),
-			"center_id", sportCenterID.Hex(),
-			"center_name", sportCenterName,
-		)
-		return
+	if title == "" {
+		title = "Prueba de notificación"
 	}
-
-	// Determinar estado de pago
-	paymentStatus := "not_required"
-	if booking.PaymentMethod == "mercadopago" {
-		if booking.PendingAmount <= 0 {
-			paymentStatus = "paid"
-		} else {
-			paymentStatus = "pending"
-		}
+	if body == "" {
+		body = "Si ves este mensaje, push está configurado."
 	}
-
-	customerEmail := ""
-	if booking.GuestDetails != nil {
-		customerEmail = booking.GuestDetails.Email
-	}
-
-	data := map[string]string{
-		"booking_id":        booking.ID.Hex(),
-		"customer_name":     booking.CustomerName,
-		"customer_phone":    booking.CustomerPhone,
-		"customer_email":    customerEmail,
-		"booking_code":      booking.BookingCode,
-		"court_name":        booking.CourtName,
-		"center_name":       booking.SportCenterName,
-		"date":              booking.Date.In(loc).Format("2006-01-02"),
-		"hour":              fmt.Sprintf("%d", booking.Hour),
-		"time":              fmt.Sprintf("%02d:%02d", booking.Hour, booking.Minutes),
-		"status":            string(booking.Status),
-		"payment_method":    booking.PaymentMethod,
-		"payment_status":    paymentStatus,
-		"price":             fmt.Sprintf("%.0f", booking.ChargedPrice()),
-		"created_at":        booking.CreatedAt.In(loc).Format(time.RFC3339),
-		"sport_center_slug": centerSlug,
-		"center_id":         sportCenterID.Hex(),
-		"notification_type": notificationType,
-		"click_action":      "FLUTTER_NOTIFICATION_CLICK",
-	}
-
-	log.Infow("push_notify_admins_sending",
-		"msg", fmt.Sprintf("Enviando notificación push a %d dispositivos del centro %s", len(allTokens), sportCenterName),
-		"center_id", sportCenterID.Hex(),
-		"center_name", sportCenterName,
-		"notification_type", notificationType,
-		"tokens_count", len(allTokens),
-	)
-
-	go func() {
-		if err := uc.notifier.SendPushNotification(context.Background(), allTokens, title, body, data, notificationType); err != nil {
-			log.Errorw("push_notify_admins_failed",
-				"msg", fmt.Sprintf("Falló el envío de notificación push al centro %s", sportCenterName),
-				"center_id", sportCenterID.Hex(),
-				"center_name", sportCenterName,
-				"notification_type", notificationType,
-				"error", err,
-			)
-		} else {
-			log.Infow("push_notify_admins_success",
-				"msg", fmt.Sprintf("Notificación push enviada exitosamente a %d dispositivos del centro %s", len(allTokens), sportCenterName),
-				"center_id", sportCenterID.Hex(),
-				"center_name", sportCenterName,
-				"notification_type", notificationType,
-				"tokens_count", len(allTokens),
-			)
-		}
-	}()
+	return uc.notifier.SendPushNotification(ctx, NotificationMessage{
+		Tokens:   []string{token},
+		Title:    title,
+		Body:     body,
+		Type:     "test",
+		Audience: audience,
+		Data:     map[string]string{"type": "test", "audience": audience},
+	})
 }
 
 // GetUserCancelledBookingsPaged retorna solo las reservas canceladas del usuario
@@ -957,6 +928,18 @@ func (uc *BookingUseCase) RescheduleBooking(ctx context.Context, id primitive.Ob
 		"booking_code", booking.BookingCode,
 		"modified_by", modifiedBy,
 	)
+
+	// El cliente que no se enteró del cambio se presenta a la hora vieja.
+	loc = domain.GetSantiagoLocation()
+	if booking.Timezone != "" {
+		if tz, err := time.LoadLocation(booking.Timezone); err == nil {
+			loc = tz
+		}
+	}
+	uc.notifyCustomer(ctx, booking, domain.InboxBookingRescheduled, "Cambiamos tu reserva",
+		fmt.Sprintf("Tu reserva en %s (%s) se movió al %s a las %02d:%02d hrs.",
+			booking.SportCenterName, booking.CourtName,
+			booking.Date.In(loc).Format("02/01/2006"), booking.Hour, booking.Minutes))
 
 	return booking, nil
 }
