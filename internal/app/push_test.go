@@ -173,6 +173,59 @@ func TestPushDedupeStopsRepeatedSends(t *testing.T) {
 	}
 }
 
+func TestPushResendsAfterReschedule(t *testing.T) {
+	booking := newTestBooking()
+	booking.UserID = "user-1"
+
+	devices := &fakeDeviceRepo{byUser: map[string][]domain.UserDevice{
+		"user-1": {{FCMToken: "token-1"}},
+	}}
+	sender := &fakeSender{ch: make(chan NotificationMessage, 2)}
+	push := NewPushService(devices, nil, sender, &fakeDeliveries{seen: map[string]bool{}})
+
+	ev := PushEvent{Type: domain.InboxBookingReminder, Title: "Recordatorio", Body: "20:00"}
+	push.NotifyCustomer(context.Background(), booking, ev)
+	receive(t, sender.ch)
+
+	// La reserva cambia de hora: el recordatorio del horario nuevo sí se envía.
+	booking.Hour = 21
+	push.NotifyCustomer(context.Background(), booking, ev)
+	receive(t, sender.ch)
+
+	// El mismo horario nuevo no se repite.
+	push.NotifyCustomer(context.Background(), booking, ev)
+	select {
+	case msg := <-sender.ch:
+		t.Fatalf("se envió dos veces el mismo horario: %+v", msg)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestPushConfirmationDedupeIgnoresSlot(t *testing.T) {
+	booking := newTestBooking()
+	booking.UserID = "user-1"
+
+	devices := &fakeDeviceRepo{byUser: map[string][]domain.UserDevice{
+		"user-1": {{FCMToken: "token-1"}},
+	}}
+	sender := &fakeSender{ch: make(chan NotificationMessage, 2)}
+	push := NewPushService(devices, nil, sender, &fakeDeliveries{seen: map[string]bool{}})
+
+	ev := PushEvent{Type: domain.InboxBookingConfirmed, Title: "Reserva confirmada", Body: "Listo"}
+	push.NotifyCustomer(context.Background(), booking, ev)
+	receive(t, sender.ch)
+
+	// El reconciliador puede volver a confirmar tras un cambio de hora: la
+	// confirmación no debe repetirse (solo el recordatorio se ata al horario).
+	booking.Hour = 21
+	push.NotifyCustomer(context.Background(), booking, ev)
+	select {
+	case msg := <-sender.ch:
+		t.Fatalf("la confirmación se repitió tras cambiar de hora: %+v", msg)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
 func TestPushPrunesInvalidTokens(t *testing.T) {
 	booking := newTestBooking()
 	booking.UserID = "user-1"

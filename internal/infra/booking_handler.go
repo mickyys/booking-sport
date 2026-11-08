@@ -733,6 +733,7 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 	}
 
 	booking.Booking.GuestDeviceID = c.GetString("guest_device_id")
+	booking.Booking.BookingSource = bookingSourceFromRequest(c)
 
 	log.Infow("booking_create_started",
 		"msg", fmt.Sprintf("Se crea booking para las %02d:00 hrs en cancha %s",
@@ -874,6 +875,7 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 	}
 
 	input.Booking.GuestDeviceID = c.GetString("guest_device_id")
+	input.Booking.BookingSource = bookingSourceFromRequest(c)
 	input.Booking.MemberID = ""
 	input.Booking.AdminSource = false
 
@@ -1507,8 +1509,9 @@ func (h *BookingHandler) GenerateRecurringBookingsInternal(c *gin.Context) {
 	c.JSON(http.StatusOK, summary)
 }
 
-// SendBookingRemindersInternal lo invoca el batch cada pocos minutos para dejar
-// recordatorios en la bandeja de los usuarios. Usa el mismo X-Job-Token.
+// SendBookingRemindersInternal lo invoca el batch cada pocos minutos para
+// recordar por push (y bandeja) las reservas creadas en la app mobile que
+// empiezan dentro de 3 horas. Usa el mismo X-Job-Token.
 func (h *BookingHandler) SendBookingRemindersInternal(c *gin.Context) {
 	expected := os.Getenv("RECURRING_JOB_TOKEN")
 	if expected == "" {
@@ -1519,13 +1522,22 @@ func (h *BookingHandler) SendBookingRemindersInternal(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid job token"})
 		return
 	}
-	summary, err := h.useCase.SendBookingReminders(c.Request.Context(), time.Now(), 2*time.Hour)
+	summary, err := h.useCase.SendBookingReminders(c.Request.Context(), time.Now(), 3*time.Hour)
 	if err != nil {
 		h.baseHandler.LogError(c, "booking_reminders_failed", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, summary)
+}
+
+// bookingSourceFromRequest identifica la app cliente por el header que envía
+// `booking-mobile`. La web no lo manda, así que queda como "web".
+func bookingSourceFromRequest(c *gin.Context) string {
+	if c.GetHeader("X-Client") == "mobile" {
+		return domain.BookingSourceMobile
+	}
+	return domain.BookingSourceWeb
 }
 
 func errorStatusCode(err error) int {

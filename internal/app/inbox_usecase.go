@@ -99,15 +99,16 @@ func (uc *BookingUseCase) notifyCustomer(ctx context.Context, booking *domain.Bo
 
 	log := logger.FromContext(ctx)
 
-	// La bandeja solo existe para usuarios autenticados. Su dedupe (booking+tipo)
-	// también evita la push duplicada cuando el webhook reintenta.
+	// La bandeja solo existe para usuarios autenticados. Su dedupe (tipo +
+	// reserva + horario) también evita la push duplicada cuando el webhook
+	// reintenta, y permite un aviso nuevo si la reserva se mueve.
 	if uc.inbox != nil && booking.UserID != "" {
 		msg := &domain.InboxMessage{
 			UserID:    booking.UserID,
 			Type:      msgType,
 			Title:     title,
 			Body:      body,
-			DedupeKey: msgType + ":" + booking.ID.Hex(),
+			DedupeKey: notificationDedupeKey(booking, msgType),
 			Data: map[string]string{
 				"booking_id":      booking.ID.Hex(),
 				"booking_code":    booking.BookingCode,
@@ -150,10 +151,11 @@ func (uc *BookingUseCase) SetReminderFinder(f ReminderBookingFinder) {
 	uc.reminders = f
 }
 
-// SendBookingReminders deja un recordatorio en la bandeja de quienes tienen un
-// partido que empieza dentro de [lead]. Es idempotente (clave booking+tipo),
-// por lo que puede ejecutarse cada pocos minutos. No avisa de reservas hechas
-// dentro de la propia ventana: el usuario acaba de crearlas.
+// SendBookingReminders envía un recordatorio push (y deja uno en la bandeja)
+// para las reservas creadas en la app mobile que empiezan dentro de [lead]. Es
+// idempotente por reserva + horario, por lo que puede ejecutarse cada pocos
+// minutos y volver a avisar si la reserva cambia de hora. No avisa de reservas
+// hechas dentro de la propia ventana: el usuario acaba de crearlas.
 func (uc *BookingUseCase) SendBookingReminders(ctx context.Context, now time.Time, lead time.Duration) (*ReminderSummary, error) {
 	summary := &ReminderSummary{}
 	if uc.reminders == nil {
@@ -170,6 +172,13 @@ func (uc *BookingUseCase) SendBookingReminders(ctx context.Context, now time.Tim
 	for i := range bookings {
 		b := &bookings[i]
 		summary.Scanned++
+		// El finder ya filtra por estado, pero el recordatorio es best-effort:
+		// una reserva cancelada entre la consulta y el envío no debe avisarse.
+		if b.Status != domain.BookingStatusConfirmed ||
+			b.BookingSource != domain.BookingSourceMobile {
+			summary.Skipped++
+			continue
+		}
 		start := b.StartInstant()
 		if !b.CreatedAt.IsZero() && b.CreatedAt.After(start.Add(-lead)) {
 			summary.Skipped++
@@ -181,9 +190,17 @@ func (uc *BookingUseCase) SendBookingReminders(ctx context.Context, now time.Tim
 			}
 		}
 		local := start.In(loc)
-		body := fmt.Sprintf("Tu reserva en %s empieza hoy a las %s hrs.", b.SportCenterName, local.Format("15:04"))
+		nowLocal := now.In(loc)
+		day := local.Format("el 02/01/2006")
+		switch local.Format("2006-01-02") {
+		case nowLocal.Format("2006-01-02"):
+			day = "hoy"
+		case nowLocal.AddDate(0, 0, 1).Format("2006-01-02"):
+			day = "mañana"
+		}
+		body := fmt.Sprintf("Tu reserva en %s empieza %s a las %s hrs.", b.SportCenterName, day, local.Format("15:04"))
 		if b.CourtName != "" {
-			body = fmt.Sprintf("Tu reserva en %s (%s) empieza a las %s hrs.", b.SportCenterName, b.CourtName, local.Format("15:04"))
+			body = fmt.Sprintf("Tu reserva en %s (%s) empieza %s a las %s hrs.", b.SportCenterName, b.CourtName, day, local.Format("15:04"))
 		}
 		uc.notifyCustomer(ctx, b, domain.InboxBookingReminder, "Recordatorio de tu reserva", body)
 		summary.Sent++

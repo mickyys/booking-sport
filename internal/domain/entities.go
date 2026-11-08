@@ -737,11 +737,15 @@ type Booking struct {
 	SportCenterName string             `bson:"sport_center_name,omitempty" json:"sport_center_name,omitempty"`
 	UserID          string             `bson:"user_id,omitempty" json:"user_id,omitempty"`
 	GuestDeviceID   string             `bson:"guest_device_id,omitempty" json:"guest_device_id,omitempty"`
-	GuestDetails    *GuestDetails      `bson:"guest_details,omitempty" json:"guest_details,omitempty"`
-	Date            time.Time          `bson:"date" json:"date"`
-	LocalDate       string             `bson:"local_date,omitempty" json:"local_date,omitempty"`
-	Timezone        string             `bson:"timezone,omitempty" json:"timezone,omitempty"`
-	ScheduledAt     time.Time          `bson:"scheduled_at,omitempty" json:"scheduled_at,omitempty"`
+	// BookingSource identifica el canal donde se creó la reserva (mobile, web).
+	// Solo las reservas creadas desde la app cliente reciben recordatorio push.
+	// Se setea en el servidor a partir de X-Client; nunca se acepta del cliente.
+	BookingSource string        `bson:"booking_source,omitempty" json:"-"`
+	GuestDetails  *GuestDetails `bson:"guest_details,omitempty" json:"guest_details,omitempty"`
+	Date          time.Time     `bson:"date" json:"date"`
+	LocalDate     string        `bson:"local_date,omitempty" json:"local_date,omitempty"`
+	Timezone      string        `bson:"timezone,omitempty" json:"timezone,omitempty"`
+	ScheduledAt   time.Time     `bson:"scheduled_at,omitempty" json:"scheduled_at,omitempty"`
 	// EndsAt es el fin exclusivo del intervalo, en UTC. Derivado de
 	// scheduled_at + duration_minutes en documentos v2.
 	EndsAt time.Time `bson:"ends_at,omitempty" json:"ends_at,omitempty"`
@@ -1025,6 +1029,12 @@ func (c *SportCenter) IsOperational() bool {
 	return c.Status == "" || c.Status == SportCenterStatusActive
 }
 
+// Orígenes de creación de una reserva.
+const (
+	BookingSourceMobile = "mobile"
+	BookingSourceWeb    = "web"
+)
+
 // Tipos de mensaje de la bandeja del cliente.
 const (
 	InboxBookingConfirmed   = "booking_confirmed"
@@ -1034,7 +1044,8 @@ const (
 )
 
 // InboxMessage es un aviso in-app para un usuario autenticado (bandeja de
-// "Mensajes" de la app cliente). DedupeKey (type + booking) evita duplicados.
+// "Mensajes" de la app cliente). DedupeKey (type + booking + horario) evita
+// duplicados, pero permite un aviso nuevo si la reserva se mueve.
 type InboxMessage struct {
 	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	UserID    string             `bson:"user_id" json:"-"`

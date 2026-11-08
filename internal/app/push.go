@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/hamp/booking-sport/internal/domain"
 	"github.com/hamp/booking-sport/pkg/logger"
@@ -127,7 +128,7 @@ func (s *PushService) dispatch(ctx context.Context, booking *domain.Booking, ev 
 		return
 	}
 	if s.deliveries != nil {
-		claimed, err := s.deliveries.Claim(ctx, audience+":"+ev.Type+":"+booking.ID.Hex(), "push")
+		claimed, err := s.deliveries.Claim(ctx, audience+":"+notificationDedupeKey(booking, ev.Type), "push")
 		if err != nil {
 			log.Warnw("push_dedupe_error", "booking_id", booking.ID.Hex(), "error", err)
 		} else if !claimed {
@@ -163,6 +164,21 @@ func (s *PushService) dispatch(ctx context.Context, booking *domain.Booking, ev 
 			}
 		}
 	}()
+}
+
+// notificationDedupeKey identifica un aviso por tipo y reserva. Para los
+// eventos atados al horario (recordatorio y reagendamiento) incluye el inicio:
+// así un cambio de hora genera un aviso nuevo sin duplicar las corridas
+// sucesivas del job. Confirmaciones y cancelaciones conservan la clave estable
+// por reserva para no repetirse si el webhook o el reconciliador reintentan.
+func notificationDedupeKey(b *domain.Booking, msgType string) string {
+	base := msgType + ":" + b.ID.Hex()
+	switch msgType {
+	case domain.InboxBookingReminder, domain.InboxBookingRescheduled:
+		return base + ":" + b.StartInstant().UTC().Format(time.RFC3339)
+	default:
+		return base
+	}
 }
 
 // pushData es el payload que consumen las apps. No incluye datos personales
