@@ -274,6 +274,27 @@ func (c *ManagementClient) FindByEmail(ctx context.Context, email string) (*User
 	return &u, nil
 }
 
+// EmailByUserID retorna el correo del usuario en Auth0. Un 404 (usuario
+// inexistente) se trata como "sin correo" y devuelve ("", nil).
+//
+// Se usa para vincular reservas de invitado cuando el access token no trae el
+// claim de correo. Requiere el scope read:users en la app M2M.
+func (c *ManagementClient) EmailByUserID(ctx context.Context, userID string) (string, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return "", nil
+	}
+	var u User
+	path := "/users/" + url.PathEscape(userID)
+	if err := c.apiRequest(ctx, http.MethodGet, path, nil, &u); err != nil {
+		if strings.Contains(err.Error(), "respondió 404") {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(u.Email), nil
+}
+
 // isUserAlreadyExists detecta la respuesta 409 de Auth0 al intentar crear un
 // usuario que ya existe ("The user already exists.").
 func isUserAlreadyExists(err error) bool {
