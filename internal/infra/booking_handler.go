@@ -727,10 +727,7 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 		booking.Booking.PartialPaymentPaid = true
 	}
 
-	userID := h.baseHandler.GetUserID(c)
-	if userID != "" {
-		booking.Booking.UserID = userID
-	}
+	h.setBookingOwnerFromToken(c, &booking.Booking)
 
 	booking.Booking.GuestDeviceID = c.GetString("guest_device_id")
 	booking.Booking.BookingSource = bookingSourceFromRequest(c)
@@ -745,7 +742,7 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 		"minutes", booking.Booking.Minutes,
 		"final_price", booking.Booking.FinalPrice,
 		"partial_payment", booking.Partial,
-		"user_id", userID,
+		"user_id", booking.Booking.UserID,
 	)
 
 	err := h.useCase.CreateInternalBooking(c.Request.Context(), &booking.Booking, "presential")
@@ -874,6 +871,7 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 		return
 	}
 
+	h.setBookingOwnerFromToken(c, &input.Booking)
 	input.Booking.GuestDeviceID = c.GetString("guest_device_id")
 	input.Booking.BookingSource = bookingSourceFromRequest(c)
 	input.Booking.MemberID = ""
@@ -1529,6 +1527,22 @@ func (h *BookingHandler) SendBookingRemindersInternal(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, summary)
+}
+
+// setBookingOwnerFromToken fija el dueño de la reserva desde el JWT: cuando
+// hay sesión, el `sub` del token manda sobre el `user_id` que envíe el
+// cliente (así el móvil no depende de mandarlo y nadie puede apuntar la
+// reserva a otra cuenta con un token válido).
+//
+// Sin token se conserva el `user_id` del body porque el checkout web
+// identifica al cliente autenticado solo con ese campo: su cliente HTTP no
+// envía `Authorization`. Si la web pasa a mandar el token, este fallback se
+// puede eliminar (y con él el riesgo de que un invitado apunte su reserva a
+// otra cuenta).
+func (h *BookingHandler) setBookingOwnerFromToken(c *gin.Context, booking *domain.Booking) {
+	if userID := strings.TrimSpace(h.baseHandler.GetUserID(c)); userID != "" {
+		booking.UserID = userID
+	}
 }
 
 // bookingSourceFromRequest identifica la app cliente por el header que envía

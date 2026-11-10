@@ -293,7 +293,7 @@ func main() {
 	scheduleHandler := infra.NewScheduleHandler(scheduleUC)
 	userProfileHandler := infra.NewUserProfileHandler(app.NewUserProfileUseCase(userProfileRepo))
 	accountHandler := infra.NewAccountHandler(auth0Mgmt, sportCenterUC)
-	bookingClaimHandler := infra.NewBookingClaimHandler(bookingRepo)
+	bookingClaimHandler := infra.NewBookingClaimHandler(bookingRepo, auth0Mgmt)
 	inboxHandler := infra.NewInboxHandler(app.NewInboxUseCase(inboxRepo))
 
 	log.Infow("handlers_initialized")
