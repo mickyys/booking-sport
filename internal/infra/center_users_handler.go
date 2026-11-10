@@ -226,3 +226,84 @@ func (h *SportCenterHandler) InviteCenterUser(c *gin.Context) {
 		"trace_id":   traceID,
 	})
 }
+
+// DeleteCenterUserAccount elimina la cuenta de un administrador del centro en
+// Auth0 y lo quita de center.Users.
+//
+//	DELETE /admin/users/:userId/account
+//
+// Es distinto de RemoveCenterUser: ese solo quita el acceso y conserva la
+// cuenta de Auth0.
+func (h *SportCenterHandler) DeleteCenterUserAccount(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in token"})
+		return
+	}
+	userIDStr := userID.(string)
+
+	userIDToRemove := c.Param("userId")
+	if userIDToRemove == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "User ID is required"})
+		return
+	}
+	if userIDToRemove == userIDStr {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no puedes eliminar tu propia cuenta desde aquí"})
+		return
+	}
+
+	centers, err := h.useCase.FindByUserID(c.Request.Context(), userIDStr)
+	if err != nil || len(centers) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No sport center associated with this user"})
+		return
+	}
+	center := centers[0]
+
+	if len(center.Users) <= 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "el centro debe tener al menos un administrador"})
+		return
+	}
+
+	found := false
+	newUsers := make([]string, 0, len(center.Users))
+	for _, u := range center.Users {
+		if u != userIDToRemove {
+			newUsers = append(newUsers, u)
+		} else {
+			found = true
+		}
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found in sport center"})
+		return
+	}
+
+	// Si el usuario administra otro centro, borrar su cuenta en Auth0 también
+	// lo dejaría sin acceso allí. Cada centro gestiona sus propias cuentas.
+	others, err := h.useCase.FindByUserID(c.Request.Context(), userIDToRemove)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo validar el usuario"})
+		return
+	}
+	for _, other := range others {
+		if other.ID != center.ID {
+			c.JSON(http.StatusConflict, gin.H{"error": "este usuario administra otro centro; no puedes eliminar su cuenta desde aquí"})
+			return
+		}
+	}
+
+	// Primero se elimina en Auth0: si falla, el centro no se modifica.
+	if err := h.auth0.DeleteUser(c.Request.Context(), userIDToRemove); err != nil {
+		h.baseHandler.LogError(c, "delete_center_user_account_failed", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "no se pudo eliminar la cuenta en este momento, intenta nuevamente"})
+		return
+	}
+
+	center.Users = newUsers
+	if err := h.useCase.UpdateSportCenter(c.Request.Context(), center.ID, &center); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove user: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Cuenta eliminada"})
+}

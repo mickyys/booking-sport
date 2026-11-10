@@ -292,6 +292,7 @@ func main() {
 	spaceHandler := infra.NewSpaceHandler(spaceUC)
 	scheduleHandler := infra.NewScheduleHandler(scheduleUC)
 	userProfileHandler := infra.NewUserProfileHandler(app.NewUserProfileUseCase(userProfileRepo))
+	accountHandler := infra.NewAccountHandler(auth0Mgmt, sportCenterUC)
 	bookingClaimHandler := infra.NewBookingClaimHandler(bookingRepo)
 	inboxHandler := infra.NewInboxHandler(app.NewInboxUseCase(inboxRepo))
 
@@ -414,6 +415,8 @@ func main() {
 		// Teléfono guardado del usuario autenticado (precarga en reservas)
 		api.GET("/users/me/phone", userProfileHandler.GetPhone)
 		api.PUT("/users/me/phone", userProfileHandler.SavePhone)
+		// Eliminación de la propia cuenta en Auth0. No borra datos de Mongo.
+		api.DELETE("/users/me/account", accountHandler.DeleteMyAccount)
 		// Bandeja de mensajes del cliente
 		api.GET("/users/me/messages", inboxHandler.List)
 		api.GET("/users/me/messages/unread-count", inboxHandler.UnreadCount)
@@ -503,6 +506,9 @@ func main() {
 		api.GET("/admin/users", sportCenterHandler.GetCenterUsers)
 		api.POST("/admin/users", sportCenterHandler.InviteCenterUser)
 		api.DELETE("/admin/users/:userId", sportCenterHandler.RemoveCenterUser)
+		// Elimina la cuenta del administrador en Auth0 (además de quitarlo del
+		// centro). RemoveCenterUser solo quita el acceso.
+		api.DELETE("/admin/users/:userId/account", sportCenterHandler.DeleteCenterUserAccount)
 
 		// Panel superadmin (rol "superadmin" en Auth0)
 		sa := api.Group("/superadmin", middleware.RequireSuperAdmin(auth0Mgmt))

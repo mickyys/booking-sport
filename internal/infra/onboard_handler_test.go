@@ -123,6 +123,10 @@ type mockAuth0Client struct {
 	lastSetupTicketUID string
 	setupTicketURL     string
 	setupTicketErr     error
+
+	deleteUserCalls int
+	lastDeletedUser string
+	deleteUserErr   error
 }
 
 func (m *mockAuth0Client) FindByEmail(ctx context.Context, email string) (*auth0mgmt.User, error) {
@@ -167,6 +171,12 @@ func (m *mockAuth0Client) UserHasRole(ctx context.Context, auth0UserID, roleID s
 		return false, m.hasRoleErr
 	}
 	return m.hasRole, nil
+}
+
+func (m *mockAuth0Client) DeleteUser(ctx context.Context, auth0UserID string) error {
+	m.deleteUserCalls++
+	m.lastDeletedUser = auth0UserID
+	return m.deleteUserErr
 }
 
 var _ auth0mgmt.Client = (*mockAuth0Client)(nil)
