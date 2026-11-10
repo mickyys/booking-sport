@@ -70,6 +70,10 @@ type Client interface {
 	// UserHasRole indica si el usuario tiene roleID asignado. Si la app M2M no
 	// tiene el scope read:roles retorna ErrRolesUnreadable.
 	UserHasRole(ctx context.Context, auth0UserID, roleID string) (bool, error)
+	// DeleteUser elimina la cuenta del usuario en Auth0. Idempotente: si la
+	// cuenta ya no existe (404), retorna nil. Requiere el scope delete:users
+	// en la app M2M.
+	DeleteUser(ctx context.Context, auth0UserID string) error
 }
 
 // ErrRolesUnreadable se retorna cuando no es posible leer los roles de un
@@ -414,4 +418,37 @@ func (c *ManagementClient) UserHasRole(ctx context.Context, auth0UserID, roleID 
 		}
 	}
 	return false, nil
+}
+
+// invalidateToken descarta el token M2M cacheado para forzar una renovación.
+// Se usa cuando Auth0 responde 403: el token pudo emitirse antes de que se
+// habilitara el scope necesario y los scopes quedan fijados al emitirlo.
+func (c *ManagementClient) invalidateToken() {
+	c.mu.Lock()
+	c.accessToken = ""
+	c.tokenExpiry = time.Time{}
+	c.mu.Unlock()
+}
+
+// DeleteUser elimina la cuenta del usuario en Auth0 vía
+// DELETE /api/v2/users/{id}. Es idempotente: un 404 significa que la cuenta ya
+// no existe y se considera éxito.
+//
+// Requiere el scope delete:users en la app M2M. Si el token cacheado no lo
+// incluye (se habilitó el scope después de emitirlo), se renueva y reintenta.
+func (c *ManagementClient) DeleteUser(ctx context.Context, auth0UserID string) error {
+	if strings.TrimSpace(auth0UserID) == "" {
+		return fmt.Errorf("auth0: DeleteUser sin user_id")
+	}
+	path := "/users/" + url.PathEscape(auth0UserID)
+	err := c.apiRequest(ctx, http.MethodDelete, path, nil, nil)
+	if err != nil && strings.Contains(err.Error(), "respondió 403") {
+		c.invalidateToken()
+		err = c.apiRequest(ctx, http.MethodDelete, path, nil, nil)
+	}
+	if err != nil && strings.Contains(err.Error(), "respondió 404") {
+		log.Printf("%s[AUTH0MGMT] DeleteUser: %s ya no existe (404)", traceTag(ctx), auth0UserID)
+		return nil
+	}
+	return err
 }

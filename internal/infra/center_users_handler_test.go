@@ -2,6 +2,7 @@ package infra
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -43,6 +44,7 @@ func newUsersRouter(t *testing.T, repo *mockCenterRepoForUsers, auth0 *mockAuth0
 	})
 	r.POST("/admin/users", h.InviteCenterUser)
 	r.DELETE("/admin/users/:userId", h.RemoveCenterUser)
+	r.DELETE("/admin/users/:userId/account", h.DeleteCenterUserAccount)
 	return r
 }
 
@@ -182,6 +184,86 @@ func TestRemoveCenterUser_ValidaPropioYUltimoAdmin(t *testing.T) {
 		}
 		if repo.lastUpdated == nil || len(repo.lastUpdated.Users) != 1 {
 			t.Errorf("users = %+v", repo.lastUpdated)
+		}
+	})
+}
+
+func TestDeleteCenterUserAccount(t *testing.T) {
+	t.Run("elimina en Auth0 y quita del centro", func(t *testing.T) {
+		repo := newUsersRepo(currentAdminID, "auth0|otro")
+		auth0 := &mockAuth0Client{}
+		r := newUsersRouter(t, repo, auth0, nil)
+
+		w := doRequest(t, r, http.MethodDelete, "/admin/users/auth0|otro/account", "")
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+		}
+		if auth0.deleteUserCalls != 1 || auth0.lastDeletedUser != "auth0|otro" {
+			t.Errorf("DeleteUser calls=%d user=%q", auth0.deleteUserCalls, auth0.lastDeletedUser)
+		}
+		if repo.lastUpdated == nil || len(repo.lastUpdated.Users) != 1 {
+			t.Errorf("center.Users = %+v, want solo el admin actual", repo.lastUpdated)
+		}
+	})
+
+	t.Run("no puede eliminarse a sí mismo", func(t *testing.T) {
+		repo := newUsersRepo(currentAdminID, "auth0|otro")
+		r := newUsersRouter(t, repo, &mockAuth0Client{}, nil)
+
+		w := doRequest(t, r, http.MethodDelete, "/admin/users/"+currentAdminID+"/account", "")
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", w.Code)
+		}
+	})
+
+	t.Run("no puede eliminar al último administrador", func(t *testing.T) {
+		repo := newUsersRepo("auth0|otro")
+		r := newUsersRouter(t, repo, &mockAuth0Client{}, nil)
+
+		w := doRequest(t, r, http.MethodDelete, "/admin/users/auth0|otro/account", "")
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", w.Code)
+		}
+	})
+
+	t.Run("bloquea si el usuario administra otro centro", func(t *testing.T) {
+		repo := newUsersRepo(currentAdminID, "auth0|otro")
+		repo.byUser["auth0|otro"] = []domain.SportCenter{{
+			ID:    primitive.NewObjectID(),
+			Name:  "Otro centro",
+			Users: []string{"auth0|otro"},
+		}}
+		auth0 := &mockAuth0Client{}
+		r := newUsersRouter(t, repo, auth0, nil)
+
+		w := doRequest(t, r, http.MethodDelete, "/admin/users/auth0|otro/account", "")
+
+		if w.Code != http.StatusConflict {
+			t.Fatalf("status = %d, want 409 (body %s)", w.Code, w.Body.String())
+		}
+		if auth0.deleteUserCalls != 0 {
+			t.Errorf("no debía llamar a Auth0: %d", auth0.deleteUserCalls)
+		}
+		if repo.lastUpdated != nil {
+			t.Errorf("no debía modificar el centro")
+		}
+	})
+
+	t.Run("error de Auth0 no modifica el centro", func(t *testing.T) {
+		repo := newUsersRepo(currentAdminID, "auth0|otro")
+		auth0 := &mockAuth0Client{deleteUserErr: errors.New("auth0 caído")}
+		r := newUsersRouter(t, repo, auth0, nil)
+
+		w := doRequest(t, r, http.MethodDelete, "/admin/users/auth0|otro/account", "")
+
+		if w.Code != http.StatusBadGateway {
+			t.Fatalf("status = %d, want 502", w.Code)
+		}
+		if repo.lastUpdated != nil {
+			t.Errorf("no debía modificar el centro si Auth0 falla")
 		}
 	})
 }

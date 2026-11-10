@@ -214,14 +214,39 @@ type DiscountRepository interface {
 
 type UserDeviceRepository interface {
 	Upsert(ctx context.Context, device *domain.UserDevice) error
-	FindByUserID(ctx context.Context, userID string) ([]domain.UserDevice, error)
-	FindBySportCenterID(ctx context.Context, centerID string) ([]domain.UserDevice, error)
-	DeleteByToken(ctx context.Context, token string) error
-	UpdateLastActivity(ctx context.Context, userID string, token string) error
+	FindByUserIDAndApp(ctx context.Context, userID, app string) ([]domain.UserDevice, error)
+	FindBySportCenterIDAndApp(ctx context.Context, centerID, app string) ([]domain.UserDevice, error)
+	FindByGuestDeviceID(ctx context.Context, guestDeviceID string) ([]domain.UserDevice, error)
+	DeleteByTokenAndApp(ctx context.Context, token, app, userID string) error
+	DeleteByTokens(ctx context.Context, tokens []string) error
+}
+
+// NotificationDeliveryRepository evita enviar dos veces el mismo aviso.
+type NotificationDeliveryRepository interface {
+	Claim(ctx context.Context, dedupeKey, channel string) (bool, error)
 }
 
 type NotificationService interface {
-	SendPushNotification(ctx context.Context, tokens []string, title, body string, data map[string]string, notificationType string) error
+	SendPushNotification(ctx context.Context, msg NotificationMessage) (PushResult, error)
+}
+
+// NotificationMessage es un envío FCM ya resuelto: tokens, texto, payload y
+// audiencia (define canal, sonido e ícono en el dispositivo).
+type NotificationMessage struct {
+	Tokens   []string
+	Title    string
+	Body     string
+	Data     map[string]string
+	Type     string
+	Audience string // domain.DeviceAppAdmin | domain.DeviceAppClient
+}
+
+// PushResult resume el multicast y lista los tokens que FCM declaró inválidos
+// para poder podarlos.
+type PushResult struct {
+	SuccessCount  int
+	FailureCount  int
+	InvalidTokens []string
 }
 
 type SlotHoldRepository interface {

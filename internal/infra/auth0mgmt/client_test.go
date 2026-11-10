@@ -18,16 +18,19 @@ type fakeAuth0 struct {
 	createCalls atomic.Int32
 	ticketCalls atomic.Int32
 	roleCalls   atomic.Int32
+	deleteCalls atomic.Int32
 
 	usersByEmail   func(w http.ResponseWriter, r *http.Request)
 	createOverride func(w http.ResponseWriter, r *http.Request)
 	ticketOverride func(w http.ResponseWriter, r *http.Request)
 	assignRole     func(w http.ResponseWriter, r *http.Request)
+	deleteUser     func(w http.ResponseWriter, r *http.Request)
 
 	mu      sync.Mutex
 	creates []map[string]interface{}
 	tickets []map[string]interface{}
 	roles   []map[string]interface{}
+	deleted []string
 }
 
 func newTestClient(t *testing.T, f *fakeAuth0) *ManagementClient {
@@ -84,6 +87,17 @@ func newTestClient(t *testing.T, f *fakeAuth0) *ManagementClient {
 			f.mu.Unlock()
 			if f.assignRole != nil {
 				f.assignRole(w, r)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v2/users/"):
+			f.deleteCalls.Add(1)
+			id := strings.TrimPrefix(r.URL.Path, "/api/v2/users/")
+			f.mu.Lock()
+			f.deleted = append(f.deleted, id)
+			f.mu.Unlock()
+			if f.deleteUser != nil {
+				f.deleteUser(w, r)
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
@@ -291,6 +305,77 @@ func TestAssignRole(t *testing.T) {
 		c := newTestClient(t, f)
 		if err := c.AssignRole(context.Background(), "auth0|1", "mal"); err == nil {
 			t.Fatal("esperaba error para 400 no relacionado con rol duplicado")
+		}
+	})
+}
+
+func TestDeleteUser(t *testing.T) {
+	t.Run("204 elimina la cuenta", func(t *testing.T) {
+		f := &fakeAuth0{}
+		c := newTestClient(t, f)
+
+		if err := c.DeleteUser(context.Background(), "auth0|borrar"); err != nil {
+			t.Fatalf("DeleteUser: %v", err)
+		}
+		if f.deleteCalls.Load() != 1 {
+			t.Fatalf("delete calls = %d, want 1", f.deleteCalls.Load())
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if len(f.deleted) != 1 || f.deleted[0] != "auth0|borrar" {
+			t.Errorf("deleted = %v, want [auth0|borrar]", f.deleted)
+		}
+	})
+
+	t.Run("404 es idempotente", func(t *testing.T) {
+		f := &fakeAuth0{}
+		f.deleteUser = func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"statusCode":404,"error":"Not Found","message":"The user does not exist."}`))
+		}
+		c := newTestClient(t, f)
+
+		if err := c.DeleteUser(context.Background(), "auth0|no-existe"); err != nil {
+			t.Fatalf("DeleteUser 404 debía ser nil, got %v", err)
+		}
+	})
+
+	t.Run("403 por falta de scope es error", func(t *testing.T) {
+		f := &fakeAuth0{}
+		f.deleteUser = func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"message":"Insufficient scope: delete:users"}`))
+		}
+		c := newTestClient(t, f)
+
+		if err := c.DeleteUser(context.Background(), "auth0|1"); err == nil {
+			t.Fatal("esperaba error para 403 (falta delete:users)")
+		}
+	})
+
+	t.Run("403 renueva el token y reintenta", func(t *testing.T) {
+		f := &fakeAuth0{}
+		var calls int
+		f.deleteUser = func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			if calls == 1 {
+				// Token emitido antes de habilitar el scope.
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"message":"Insufficient scope: delete:users"}`))
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}
+		c := newTestClient(t, f)
+
+		if err := c.DeleteUser(context.Background(), "auth0|1"); err != nil {
+			t.Fatalf("DeleteUser: %v", err)
+		}
+		if calls != 2 {
+			t.Fatalf("llamadas a DELETE = %d, want 2", calls)
+		}
+		if got := f.tokenCalls.Load(); got != 2 {
+			t.Fatalf("token calls = %d, want 2 (renovación tras 403)", got)
 		}
 	})
 }

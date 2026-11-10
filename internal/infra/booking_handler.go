@@ -70,7 +70,10 @@ func (h *BookingHandler) handlePaymentNotification(ctx context.Context, paymentI
 	return h.useCase.HandleMercadoPagoWebhook(ctx, paymentID)
 }
 
-// GetUserCancelledBookings retorna solo las reservas canceladas del usuario autenticado
+// RegisterDevice registra el token FCM de una app con sesión.
+//
+// `app` distingue el panel (admin) de la app de clientes (client). Es opcional
+// con default `admin` para no romper las versiones del panel ya instaladas.
 func (h *BookingHandler) RegisterDevice(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
@@ -79,10 +82,12 @@ func (h *BookingHandler) RegisterDevice(c *gin.Context) {
 	}
 
 	var req struct {
-		Token      string `json:"token" binding:"required"`
-		Platform   string `json:"platform" binding:"required"`
-		DeviceName string `json:"device_name"`
-		OSVersion  string `json:"os_version"`
+		App           string `json:"app"`
+		Token         string `json:"token" binding:"required"`
+		Platform      string `json:"platform" binding:"required"`
+		DeviceName    string `json:"device_name"`
+		OSVersion     string `json:"os_version"`
+		GuestDeviceID string `json:"guest_device_id"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -97,13 +102,92 @@ func (h *BookingHandler) RegisterDevice(c *gin.Context) {
 		}
 	}
 
-	err := h.useCase.RegisterDevice(c.Request.Context(), userID.(string), req.Token, req.Platform, req.DeviceName, req.OSVersion, userRoles)
+	err := h.useCase.RegisterDevice(c.Request.Context(), app.RegisterDeviceInput{
+		App:           req.App,
+		UserID:        userID.(string),
+		GuestDeviceID: req.GuestDeviceID,
+		Token:         req.Token,
+		Platform:      req.Platform,
+		DeviceName:    req.DeviceName,
+		OSVersion:     req.OSVersion,
+	}, userRoles)
 	if err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		writeDeviceError(c, err)
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// RegisterGuestDevice registra el token de un invitado. El código de su reserva
+// prueba que el `guest_device_id` es suyo, así el alta no queda abierta.
+func (h *BookingHandler) RegisterGuestDevice(c *gin.Context) {
+	var req struct {
+		Token         string `json:"token" binding:"required"`
+		GuestDeviceID string `json:"guest_device_id" binding:"required"`
+		BookingCode   string `json:"booking_code" binding:"required"`
+		Platform      string `json:"platform" binding:"required"`
+		DeviceName    string `json:"device_name"`
+		OSVersion     string `json:"os_version"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	err := h.useCase.RegisterGuestDevice(c.Request.Context(), app.RegisterDeviceInput{
+		App:           domain.DeviceAppClient,
+		GuestDeviceID: req.GuestDeviceID,
+		Token:         req.Token,
+		Platform:      req.Platform,
+		DeviceName:    req.DeviceName,
+		OSVersion:     req.OSVersion,
+	}, req.BookingCode)
+	if err != nil {
+		writeDeviceError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// UnregisterDevice borra el token al cerrar sesión para que el teléfono deje de
+// recibir avisos de esa cuenta.
+func (h *BookingHandler) UnregisterDevice(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in token"})
+		return
+	}
+
+	var req struct {
+		Token string `json:"token" binding:"required"`
+		App   string `json:"app"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.useCase.UnregisterDevice(c.Request.Context(), userID.(string), req.Token, req.App); err != nil {
+		writeDeviceError(c, err)
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+// writeDeviceError traduce el error del alta de dispositivos: los AppError
+// conservan su código; el resto es un 403 (no es administrador, la reserva no
+// pertenece al dispositivo).
+func writeDeviceError(c *gin.Context, err error) {
+	var appErr *domain.AppError
+	if errors.As(err, &appErr) {
+		c.JSON(appErr.StatusCode, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 }
 
 func (h *BookingHandler) GetUserCancelledBookings(c *gin.Context) {
@@ -649,6 +733,7 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 	}
 
 	booking.Booking.GuestDeviceID = c.GetString("guest_device_id")
+	booking.Booking.BookingSource = bookingSourceFromRequest(c)
 
 	log.Infow("booking_create_started",
 		"msg", fmt.Sprintf("Se crea booking para las %02d:00 hrs en cancha %s",
@@ -790,6 +875,7 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 	}
 
 	input.Booking.GuestDeviceID = c.GetString("guest_device_id")
+	input.Booking.BookingSource = bookingSourceFromRequest(c)
 	input.Booking.MemberID = ""
 	input.Booking.AdminSource = false
 
@@ -1423,8 +1509,9 @@ func (h *BookingHandler) GenerateRecurringBookingsInternal(c *gin.Context) {
 	c.JSON(http.StatusOK, summary)
 }
 
-// SendBookingRemindersInternal lo invoca el batch cada pocos minutos para dejar
-// recordatorios en la bandeja de los usuarios. Usa el mismo X-Job-Token.
+// SendBookingRemindersInternal lo invoca el batch cada pocos minutos para
+// recordar por push (y bandeja) las reservas creadas en la app mobile que
+// empiezan dentro de 3 horas. Usa el mismo X-Job-Token.
 func (h *BookingHandler) SendBookingRemindersInternal(c *gin.Context) {
 	expected := os.Getenv("RECURRING_JOB_TOKEN")
 	if expected == "" {
@@ -1435,7 +1522,7 @@ func (h *BookingHandler) SendBookingRemindersInternal(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid job token"})
 		return
 	}
-	summary, err := h.useCase.SendBookingReminders(c.Request.Context(), time.Now(), 2*time.Hour)
+	summary, err := h.useCase.SendBookingReminders(c.Request.Context(), time.Now(), 3*time.Hour)
 	if err != nil {
 		h.baseHandler.LogError(c, "booking_reminders_failed", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -1444,10 +1531,52 @@ func (h *BookingHandler) SendBookingRemindersInternal(c *gin.Context) {
 	c.JSON(http.StatusOK, summary)
 }
 
+// bookingSourceFromRequest identifica la app cliente por el header que envía
+// `booking-mobile`. La web no lo manda, así que queda como "web".
+func bookingSourceFromRequest(c *gin.Context) string {
+	if c.GetHeader("X-Client") == "mobile" {
+		return domain.BookingSourceMobile
+	}
+	return domain.BookingSourceWeb
+}
+
 func errorStatusCode(err error) int {
 	var appErr *domain.AppError
 	if errors.As(err, &appErr) {
 		return appErr.StatusCode
 	}
 	return http.StatusInternalServerError
+}
+
+// TestPush envía una notificación a un token concreto. Lo usa el equipo para
+// verificar la configuración de Firebase sin crear una reserva.
+// Protegido con el mismo X-Job-Token que los demás jobs internos.
+func (h *BookingHandler) TestPush(c *gin.Context) {
+	expected := os.Getenv("RECURRING_JOB_TOKEN")
+	if expected == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "push test is not configured"})
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(c.GetHeader("X-Job-Token")), []byte(expected)) != 1 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid job token"})
+		return
+	}
+
+	var req struct {
+		Token    string `json:"token" binding:"required"`
+		Audience string `json:"audience"`
+		Title    string `json:"title"`
+		Body     string `json:"body"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := h.useCase.SendTestPush(c.Request.Context(), req.Token, req.Audience, req.Title, req.Body)
+	if err != nil {
+		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }

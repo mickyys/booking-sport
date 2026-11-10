@@ -601,16 +601,32 @@ type User struct {
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
 }
 
+// Apps que registran dispositivos. El panel y la app de clientes pueden
+// convivir en el mismo teléfono con tokens distintos: sin `app` un
+// administrador que usa la app de clientes recibiría avisos del panel.
+const (
+	DeviceAppClient = "client"
+	DeviceAppAdmin  = "admin"
+)
+
+// UserDevice es un token FCM registrado por una app.
+//
+// `user_id` identifica a un usuario autenticado (sub de Auth0) y
+// `guest_device_id` al invitado que reservó sin cuenta. Un mismo dispositivo
+// puede tener varios documentos: uno por app.
 type UserDevice struct {
 	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
-	UserID         string             `bson:"user_id" json:"user_id"`
-	SportCenterID  string             `bson:"sport_center_id" json:"sport_center_id"`
-	FCMToken       string             `bson:"fcm_token" json:"fcm_token"`
+	App            string             `bson:"app" json:"app"` // client | admin
+	UserID         string             `bson:"user_id,omitempty" json:"user_id,omitempty"`
+	SportCenterID  string             `bson:"sport_center_id,omitempty" json:"sport_center_id,omitempty"`
+	GuestDeviceID  string             `bson:"guest_device_id,omitempty" json:"-"`
+	FCMToken       string             `bson:"fcm_token" json:"-"`
 	Platform       string             `bson:"platform" json:"platform"` // ios, android, web
 	DeviceName     string             `bson:"device_name" json:"device_name"`
 	OSVersion      string             `bson:"os_version" json:"os_version"`
 	LastActivityAt time.Time          `bson:"last_activity_at" json:"last_activity_at"`
 	CreatedAt      time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt      time.Time          `bson:"updated_at" json:"updated_at"`
 }
 
 // UserProfile guarda datos de contacto de un usuario autenticado (identificado
@@ -721,11 +737,15 @@ type Booking struct {
 	SportCenterName string             `bson:"sport_center_name,omitempty" json:"sport_center_name,omitempty"`
 	UserID          string             `bson:"user_id,omitempty" json:"user_id,omitempty"`
 	GuestDeviceID   string             `bson:"guest_device_id,omitempty" json:"guest_device_id,omitempty"`
-	GuestDetails    *GuestDetails      `bson:"guest_details,omitempty" json:"guest_details,omitempty"`
-	Date            time.Time          `bson:"date" json:"date"`
-	LocalDate       string             `bson:"local_date,omitempty" json:"local_date,omitempty"`
-	Timezone        string             `bson:"timezone,omitempty" json:"timezone,omitempty"`
-	ScheduledAt     time.Time          `bson:"scheduled_at,omitempty" json:"scheduled_at,omitempty"`
+	// BookingSource identifica el canal donde se creó la reserva (mobile, web).
+	// Solo las reservas creadas desde la app cliente reciben recordatorio push.
+	// Se setea en el servidor a partir de X-Client; nunca se acepta del cliente.
+	BookingSource string        `bson:"booking_source,omitempty" json:"-"`
+	GuestDetails  *GuestDetails `bson:"guest_details,omitempty" json:"guest_details,omitempty"`
+	Date          time.Time     `bson:"date" json:"date"`
+	LocalDate     string        `bson:"local_date,omitempty" json:"local_date,omitempty"`
+	Timezone      string        `bson:"timezone,omitempty" json:"timezone,omitempty"`
+	ScheduledAt   time.Time     `bson:"scheduled_at,omitempty" json:"scheduled_at,omitempty"`
 	// EndsAt es el fin exclusivo del intervalo, en UTC. Derivado de
 	// scheduled_at + duration_minutes en documentos v2.
 	EndsAt time.Time `bson:"ends_at,omitempty" json:"ends_at,omitempty"`
@@ -1009,15 +1029,23 @@ func (c *SportCenter) IsOperational() bool {
 	return c.Status == "" || c.Status == SportCenterStatusActive
 }
 
+// Orígenes de creación de una reserva.
+const (
+	BookingSourceMobile = "mobile"
+	BookingSourceWeb    = "web"
+)
+
 // Tipos de mensaje de la bandeja del cliente.
 const (
-	InboxBookingConfirmed = "booking_confirmed"
-	InboxBookingCancelled = "booking_cancelled"
-	InboxBookingReminder  = "booking_reminder"
+	InboxBookingConfirmed   = "booking_confirmed"
+	InboxBookingCancelled   = "booking_cancelled"
+	InboxBookingReminder    = "booking_reminder"
+	InboxBookingRescheduled = "booking_rescheduled"
 )
 
 // InboxMessage es un aviso in-app para un usuario autenticado (bandeja de
-// "Mensajes" de la app cliente). DedupeKey (type + booking) evita duplicados.
+// "Mensajes" de la app cliente). DedupeKey (type + booking + horario) evita
+// duplicados, pero permite un aviso nuevo si la reserva se mueve.
 type InboxMessage struct {
 	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	UserID    string             `bson:"user_id" json:"-"`

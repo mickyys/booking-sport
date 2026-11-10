@@ -102,6 +102,7 @@ func main() {
 	blockRepo := mongo.NewBlockRepository(db)
 	userProfileRepo := mongo.NewUserProfileRepository(db)
 	inboxRepo := mongo.NewInboxRepository(db)
+	notificationDeliveryRepo := mongo.NewNotificationDeliveryRepository(db)
 
 	log.Infow("repositories_initialized")
 
@@ -174,6 +175,9 @@ func main() {
 	bookingUC.SetJobLockRepository(jobLockRepo)
 	bookingUC.SetInbox(inboxRepo)
 	bookingUC.SetReminderFinder(bookingRepo)
+	// El dispatcher selecciona dispositivos por app, deduplica y poda tokens
+	// inválidos. Con Firebase sin configurar, `notifier` es nil y no envía nada.
+	bookingUC.SetPushService(app.NewPushService(userDeviceRepo, sportCenterRepo, notifier, notificationDeliveryRepo))
 	if getEnv("MP_RECONCILE_ENABLED", "true") != "false" {
 		mpInterval, err := time.ParseDuration(getEnv("MP_RECONCILE_INTERVAL", "3m"))
 		if err != nil || mpInterval <= 0 {
@@ -288,6 +292,7 @@ func main() {
 	spaceHandler := infra.NewSpaceHandler(spaceUC)
 	scheduleHandler := infra.NewScheduleHandler(scheduleUC)
 	userProfileHandler := infra.NewUserProfileHandler(app.NewUserProfileUseCase(userProfileRepo))
+	accountHandler := infra.NewAccountHandler(auth0Mgmt, sportCenterUC)
 	bookingClaimHandler := infra.NewBookingClaimHandler(bookingRepo)
 	inboxHandler := infra.NewInboxHandler(app.NewInboxUseCase(inboxRepo))
 
@@ -373,10 +378,14 @@ func main() {
 	r.POST("/api/internal/sync-payment", bookingHandler.SyncConfirmedPayment)
 	r.POST("/api/internal/jobs/recurring-generate", bookingHandler.GenerateRecurringBookingsInternal)
 	r.POST("/api/internal/jobs/booking-reminders", bookingHandler.SendBookingRemindersInternal)
+	r.POST("/api/internal/jobs/test-push", bookingHandler.TestPush)
 	r.GET("/api/bookings/code/:code", bookingHandler.GetByBookingCode)
 	r.GET("/api/bookings/code/:code/payment-status", bookingHandler.GetPaymentStatus)
 	r.POST("/api/bookings/code/:code/cancel", bookingHandler.CancelByBookingCode)
 	r.POST("/api/bookings", bookingHandler.CreateBooking)
+	// Alta de push para invitados: el código de su reserva prueba que el
+	// `guest_device_id` es suyo.
+	r.POST("/api/public/devices", bookingHandler.RegisterGuestDevice)
 	r.POST("/api/contact", contactHandler.Submit)
 
 	// Verificación de socios y cotización con descuentos (público, sin login)
@@ -402,9 +411,12 @@ func main() {
 	{
 		// Registro de dispositivos para notificaciones
 		api.POST("/users/devices", bookingHandler.RegisterDevice)
+		api.DELETE("/users/devices", bookingHandler.UnregisterDevice)
 		// Teléfono guardado del usuario autenticado (precarga en reservas)
 		api.GET("/users/me/phone", userProfileHandler.GetPhone)
 		api.PUT("/users/me/phone", userProfileHandler.SavePhone)
+		// Eliminación de la propia cuenta en Auth0. No borra datos de Mongo.
+		api.DELETE("/users/me/account", accountHandler.DeleteMyAccount)
 		// Bandeja de mensajes del cliente
 		api.GET("/users/me/messages", inboxHandler.List)
 		api.GET("/users/me/messages/unread-count", inboxHandler.UnreadCount)
@@ -494,6 +506,9 @@ func main() {
 		api.GET("/admin/users", sportCenterHandler.GetCenterUsers)
 		api.POST("/admin/users", sportCenterHandler.InviteCenterUser)
 		api.DELETE("/admin/users/:userId", sportCenterHandler.RemoveCenterUser)
+		// Elimina la cuenta del administrador en Auth0 (además de quitarlo del
+		// centro). RemoveCenterUser solo quita el acceso.
+		api.DELETE("/admin/users/:userId/account", sportCenterHandler.DeleteCenterUserAccount)
 
 		// Panel superadmin (rol "superadmin" en Auth0)
 		sa := api.Group("/superadmin", middleware.RequireSuperAdmin(auth0Mgmt))
