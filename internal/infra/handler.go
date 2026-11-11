@@ -298,15 +298,25 @@ func (h *SportCenterHandler) OnboardCreate(c *gin.Context) {
 	isNewAccount := auth0User == nil
 
 	if auth0User == nil {
-		// Cuenta nueva: la clave es obligatoria y la define el usuario en el
-		// formulario. Se crea la cuenta directamente al completar el registro.
-		if !validarClave(body.Clave) {
+		// Cuenta nueva. Si el formulario no trae clave (alta desde el panel de
+		// superadmin) se genera una aleatoria que el usuario nunca necesita:
+		// define la suya con el ticket del correo de bienvenida. Si la trae, se
+		// valida la política para no crear cuentas con claves débiles.
+		clave := body.Clave
+		if clave == "" {
+			generated, pwErr := randomTemporaryPassword()
+			if pwErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo crear la cuenta"})
+				return
+			}
+			clave = generated
+		} else if !validarClave(clave) {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": "debes definir una clave de al menos 8 caracteres con mayúscula, minúscula y número",
 			})
 			return
 		}
-		created, err := h.auth0.CreateAccount(c.Request.Context(), adminEmail, body.Clave)
+		created, err := h.auth0.CreateAccount(c.Request.Context(), adminEmail, clave)
 		if err != nil {
 			log.Printf("[ONBOARD] error creando cuenta Auth0 para %s: %v", adminEmail, err)
 			c.JSON(http.StatusBadGateway, gin.H{"error": "no se pudo crear tu cuenta en este momento, intenta nuevamente"})
@@ -387,6 +397,7 @@ func (h *SportCenterHandler) OnboardCreate(c *gin.Context) {
 	if h.mailer != nil {
 		welcomeErr = h.mailer.SendCenterOnboardWelcome(c.Request.Context(), welcome)
 	}
+	emailSent := h.mailer != nil && welcomeErr == nil
 	if welcomeErr != nil {
 		log.Printf("[ONBOARD] centro creado pero falló el correo de bienvenida para %s: %v", adminEmail, welcomeErr)
 	}
@@ -401,12 +412,98 @@ func (h *SportCenterHandler) OnboardCreate(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"id":          center.ID.Hex(),
-		"slug":        center.Slug,
-		"name":        center.Name,
-		"city":        center.City,
-		"coordinates": coord,
-		"message":     "Centro creado exitosamente",
+		"id":            center.ID.Hex(),
+		"slug":          center.Slug,
+		"name":          center.Name,
+		"city":          center.City,
+		"coordinates":   coord,
+		"admin_user_id": auth0User.ID,
+		"email_sent":    emailSent,
+		"message":       "Centro creado exitosamente",
+	})
+}
+
+// ResendCenterAdminInvite reenvía al administrador del centro el correo de
+// bienvenida con un enlace nuevo para definir su contraseña (el del alta puede
+// no haber llegado o haber expirado). Lo usa el panel de superadmin.
+//
+//	POST /superadmin/sport-centers/:id/admin-invite/resend
+func (h *SportCenterHandler) ResendCenterAdminInvite(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	center, err := h.useCase.FindByID(c.Request.Context(), id)
+	if err != nil || center == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "center not found"})
+		return
+	}
+
+	email := strings.ToLower(strings.TrimSpace(center.AdminEmail))
+	if email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "el centro no tiene correo de administrador"})
+		return
+	}
+
+	traceID := inviteTraceID(email)
+	c.Header("X-Invite-Trace-Id", traceID)
+	logf := inviteLogger(traceID, c.Writer.Header().Get("X-Trace-ID"))
+	logf("reenvío solicitado center=%s email=%s", center.ID.Hex(), email)
+
+	ctx := auth0mgmt.WithTrace(c.Request.Context(), traceID)
+
+	auth0User, err := h.auth0.FindByEmail(ctx, email)
+	if err != nil {
+		logf("ERROR consultando Auth0 por %s: %v", email, err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "no se pudo validar la cuenta en este momento, intenta nuevamente"})
+		return
+	}
+	if auth0User == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no existe una cuenta con ese correo"})
+		return
+	}
+
+	setupURL, ticketErr := h.auth0.CreatePasswordSetupTicket(ctx, auth0User.ID)
+	if ticketErr != nil {
+		logf("ERROR generando ticket de clave para %s: %v", email, ticketErr)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "no se pudo generar el enlace de acceso, intenta nuevamente"})
+		return
+	}
+
+	invite := app.CenterWelcomeEmail{
+		To:         email,
+		UserName:   auth0User.Name,
+		CenterName: center.Name,
+		Address:    center.Address,
+		TenantURL:  tenantSiteURL(center.Slug),
+		LoginURL:   strings.TrimRight(os.Getenv("URL_FRONTEND"), "/") + "/admin",
+		SetupURL:   setupURL,
+	}
+
+	emailSent := false
+	if h.mailer != nil {
+		if mailErr := h.mailer.SendCenterOnboardWelcome(ctx, invite); mailErr != nil {
+			logf("WARN enlace generado pero falló el correo a %s: %v", email, mailErr)
+		} else {
+			emailSent = true
+			logf("reenvío completado")
+		}
+	}
+
+	if !emailSent {
+		c.JSON(http.StatusOK, gin.H{
+			"message":    "enlace generado, pero no se pudo enviar el correo",
+			"email_sent": false,
+			"trace_id":   traceID,
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"message":    "invitación reenviada",
+		"email_sent": true,
+		"trace_id":   traceID,
 	})
 }
 

@@ -32,6 +32,7 @@ type SuperAdminCenterFilter struct {
 	PaymentMode string
 	City        string
 	Featured    *bool
+	Onboarding  string
 }
 
 type SuperAdminBookingFilter struct {
@@ -91,6 +92,12 @@ func centerFilter(f SuperAdminCenterFilter) bson.M {
 		} else {
 			q["is_featured"] = bson.M{"$ne": true}
 		}
+	}
+	if f.Onboarding == "pending" {
+		// Los centros legacy (campo vacío) no están pendientes de onboarding.
+		q["onboarding_status"] = "pending"
+	} else if f.Onboarding == "completed" {
+		q["onboarding_status"] = bson.M{"$ne": "pending"}
 	}
 	return q
 }
