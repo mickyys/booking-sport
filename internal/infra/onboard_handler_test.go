@@ -17,6 +17,7 @@ package infra
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -35,6 +36,8 @@ type mockCenterRepoForOnboardHandler struct {
 	existingBySlug       *domain.SportCenter
 	existingByNameAndRUT *domain.SportCenter
 	existingByAdminEmail *domain.SportCenter
+	centerByID           *domain.SportCenter
+	findByIDErr          error
 	createCalls          int
 	lastCreated          *domain.SportCenter
 	centersByUser        []domain.SportCenter
@@ -58,7 +61,7 @@ func (m *mockCenterRepoForOnboardHandler) UpdateSettings(ctx context.Context, id
 	return nil
 }
 func (m *mockCenterRepoForOnboardHandler) FindByID(ctx context.Context, id primitive.ObjectID) (*domain.SportCenter, error) {
-	return nil, nil
+	return m.centerByID, m.findByIDErr
 }
 func (m *mockCenterRepoForOnboardHandler) FindBySlug(ctx context.Context, slug string) (*domain.SportCenter, error) {
 	if m.existingBySlug != nil {
@@ -232,6 +235,7 @@ func newOnboardRouter(t *testing.T, repo *mockCenterRepoForOnboardHandler, auth0
 	r.Use(middleware.Recovery()) // paridad con cmd/app/main.go:174
 	r.POST("/api/sport-centers/onboard", h.OnboardCreate)
 	r.GET("/api/sport-centers/onboard/verification-status", h.OnboardVerificationStatus)
+	r.POST("/api/superadmin/sport-centers/:id/admin-invite/resend", h.ResendCenterAdminInvite)
 	return r
 }
 
@@ -317,25 +321,42 @@ func TestOnboardHandler_EmailNoVerificado_CreaCentroYAsignaRol(t *testing.T) {
 
 // ---------- POST /onboard: creación de cuenta con clave ----------
 
-func TestOnboardHandler_CuentaNuevaSinClave_Retorna400(t *testing.T) {
+// El alta desde el panel de superadmin no envía clave: el backend genera una
+// aleatoria (que el usuario nunca usa) y el admin define la suya con el ticket
+// del correo de bienvenida.
+func TestOnboardHandler_CuentaNuevaSinClave_GeneraClaveYCreaCuenta(t *testing.T) {
 	auth0Mock := &mockAuth0Client{} // user nil = cuenta nueva
 	repo := &mockCenterRepoForOnboardHandler{}
-	r := newOnboardRouter(t, repo, auth0Mock)
+	mailerMock := &mockMailer{}
+	t.Setenv("URL_FRONTEND", "https://app.reservaloya.cl")
+	r := newOnboardRouter(t, repo, auth0Mock, mailerMock)
 
 	w := doRequest(t, r, http.MethodPost, "/api/sport-centers/onboard", validPayload)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("cuenta nueva sin clave: status = %d, want %d. body=%s",
-			w.Code, http.StatusBadRequest, w.Body.String())
+	if w.Code != http.StatusCreated {
+		t.Fatalf("cuenta nueva sin clave: status = %d, want %d. body=%s",
+			w.Code, http.StatusCreated, w.Body.String())
 	}
-	var resp map[string]string
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err == nil && !strings.Contains(resp["error"], "clave") {
-		t.Errorf("error = %q, want mencionar la clave", resp["error"])
+	if auth0Mock.accountCalls != 1 {
+		t.Fatalf("CreateAccount llamado %d veces, want 1", auth0Mock.accountCalls)
 	}
-	if auth0Mock.accountCalls != 0 {
-		t.Errorf("CreateAccount llamado %d veces, want 0", auth0Mock.accountCalls)
+	if !validarClave(auth0Mock.lastAccountPassword) {
+		t.Errorf("clave generada %q no cumple la política", auth0Mock.lastAccountPassword)
 	}
-	if repo.createCalls != 0 {
-		t.Errorf("repo.Create llamado %d veces, want 0", repo.createCalls)
+	if repo.createCalls != 1 {
+		t.Errorf("repo.Create llamado %d veces, want 1", repo.createCalls)
+	}
+	if mailerMock.welcomeCalls != 1 || mailerMock.lastWelcome.SetupURL == "" {
+		t.Errorf("bienvenida calls=%d setup=%q, want 1 con enlace de clave",
+			mailerMock.welcomeCalls, mailerMock.lastWelcome.SetupURL)
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err == nil {
+		if resp["email_sent"] != true {
+			t.Errorf("email_sent = %v, want true", resp["email_sent"])
+		}
+		if resp["admin_user_id"] != "auth0|creado" {
+			t.Errorf("admin_user_id = %v, want auth0|creado", resp["admin_user_id"])
+		}
 	}
 }
 
@@ -1031,5 +1052,97 @@ func TestOnboardingWizard_Finalizar_Completo_MarcaCompleted(t *testing.T) {
 	}
 	if repo.lastUpdated.OnboardingStep != 5 {
 		t.Errorf("onboarding_step = %d, want 5", repo.lastUpdated.OnboardingStep)
+	}
+}
+
+// ---------- POST /superadmin/sport-centers/:id/admin-invite/resend ----------
+
+func TestResendAdminInvite_SinAdminEmail_Retorna400(t *testing.T) {
+	repo := &mockCenterRepoForOnboardHandler{centerByID: &domain.SportCenter{}}
+	r := newOnboardRouter(t, repo, verifiedAuth0Client(), &mockMailer{})
+
+	w := doRequest(t, r, http.MethodPost, "/api/superadmin/sport-centers/"+primitive.NewObjectID().Hex()+"/admin-invite/resend", "")
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d. body=%s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+}
+
+func TestResendAdminInvite_CentroInexistente_Retorna404(t *testing.T) {
+	repo := &mockCenterRepoForOnboardHandler{}
+	r := newOnboardRouter(t, repo, verifiedAuth0Client(), &mockMailer{})
+
+	w := doRequest(t, r, http.MethodPost, "/api/superadmin/sport-centers/"+primitive.NewObjectID().Hex()+"/admin-invite/resend", "")
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d. body=%s", w.Code, http.StatusNotFound, w.Body.String())
+	}
+}
+
+func TestResendAdminInvite_CuentaInexistenteEnAuth0_Retorna404(t *testing.T) {
+	repo := &mockCenterRepoForOnboardHandler{centerByID: &domain.SportCenter{AdminEmail: "nuevo@club.cl"}}
+	r := newOnboardRouter(t, repo, &mockAuth0Client{}, &mockMailer{})
+
+	w := doRequest(t, r, http.MethodPost, "/api/superadmin/sport-centers/"+primitive.NewObjectID().Hex()+"/admin-invite/resend", "")
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d. body=%s", w.Code, http.StatusNotFound, w.Body.String())
+	}
+}
+
+func TestResendAdminInvite_FalloMailgun_RespondeEmailNoEnviado(t *testing.T) {
+	repo := &mockCenterRepoForOnboardHandler{centerByID: &domain.SportCenter{AdminEmail: "admin@club.cl", Name: "Club"}}
+	mailer := &mockMailer{welcomeErr: errors.New("mailgun caído")}
+	r := newOnboardRouter(t, repo, verifiedAuth0Client(), mailer)
+
+	w := doRequest(t, r, http.MethodPost, "/api/superadmin/sport-centers/"+primitive.NewObjectID().Hex()+"/admin-invite/resend", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d. body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err == nil && resp["email_sent"] != false {
+		t.Errorf("email_sent = %v, want false", resp["email_sent"])
+	}
+}
+
+func TestResendAdminInvite_Exitoso_EnviaTicketDeClave(t *testing.T) {
+	repo := &mockCenterRepoForOnboardHandler{centerByID: &domain.SportCenter{
+		AdminEmail: "Admin@Club.CL",
+		Name:       "Club Andino",
+		Address:    "Av. Ossa 123",
+		Slug:       "club-andino",
+	}}
+	auth0Mock := verifiedAuth0Client()
+	auth0Mock.setupTicketURL = "https://tenant.auth0.com/changepw/nuevo"
+	mailer := &mockMailer{}
+	t.Setenv("URL_FRONTEND", "https://app.reservaloya.cl")
+	t.Setenv("PLATFORM_DOMAIN", "reservaloya.cl")
+	r := newOnboardRouter(t, repo, auth0Mock, mailer)
+
+	w := doRequest(t, r, http.MethodPost, "/api/superadmin/sport-centers/"+primitive.NewObjectID().Hex()+"/admin-invite/resend", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d. body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if auth0Mock.setupTicketCalls != 1 || auth0Mock.lastSetupTicketUID != verifiedAuth0ID {
+		t.Errorf("ticket calls=%d uid=%q, want 1 para %s",
+			auth0Mock.setupTicketCalls, auth0Mock.lastSetupTicketUID, verifiedAuth0ID)
+	}
+	if mailer.welcomeCalls != 1 {
+		t.Fatalf("bienvenida calls = %d, want 1", mailer.welcomeCalls)
+	}
+	if mailer.lastWelcome.To != "admin@club.cl" {
+		t.Errorf("to = %q, want admin@club.cl (normalizado)", mailer.lastWelcome.To)
+	}
+	if mailer.lastWelcome.SetupURL != "https://tenant.auth0.com/changepw/nuevo" {
+		t.Errorf("setup_url = %q, want el ticket de Auth0", mailer.lastWelcome.SetupURL)
+	}
+	if mailer.lastWelcome.LoginURL != "https://app.reservaloya.cl/admin" {
+		t.Errorf("login_url = %q, want https://app.reservaloya.cl/admin", mailer.lastWelcome.LoginURL)
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err == nil {
+		if resp["email_sent"] != true {
+			t.Errorf("email_sent = %v, want true", resp["email_sent"])
+		}
+		if resp["trace_id"] == "" || resp["trace_id"] == nil {
+			t.Error("trace_id vacío")
+		}
 	}
 }

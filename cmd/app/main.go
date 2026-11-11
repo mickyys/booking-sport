@@ -519,6 +519,7 @@ func main() {
 			sa.GET("/sport-centers/stats", superAdminHandler.CenterStats)
 			sa.POST("/sport-centers", superAdminHandler.Audit("center.create", "sport_center", "id"), sportCenterHandler.OnboardCreate)
 			sa.GET("/sport-centers/:id", superAdminHandler.GetCenter)
+			sa.POST("/sport-centers/:id/admin-invite/resend", superAdminHandler.Audit("center.admin_invite_resend", "sport_center", "id"), sportCenterHandler.ResendCenterAdminInvite)
 			sa.PATCH("/sport-centers/:id/settings", superAdminHandler.Audit("center.settings", "sport_center", "id"), sportCenterHandler.UpdateSportCenterSettings)
 			sa.PUT("/sport-centers/:id/status", superAdminHandler.SetStatus)
 			sa.PUT("/sport-centers/:id/featured", superAdminHandler.SetFeatured)

@@ -66,6 +66,7 @@ func (h *SuperAdminHandler) ListCenters(c *gin.Context) {
 		Status:      c.Query("status"),
 		PaymentMode: c.Query("payment_mode"),
 		City:        strings.TrimSpace(c.Query("city")),
+		Onboarding:  c.Query("onboarding"),
 	}
 	if v := c.Query("featured"); v != "" {
 		b := v == "true"
