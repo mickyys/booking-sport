@@ -178,6 +178,9 @@ func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, 
 				{Key: "priority", Value: -1},
 				{Key: "featured_priority", Value: -1},
 				{Key: "distance", Value: 1},
+				// Desempate estable: sin esto el orden depende del plan de
+				// ejecución de Mongo y puede cambiar entre consultas.
+				{Key: "_id", Value: 1},
 			}}},
 		)
 	} else {
@@ -201,6 +204,16 @@ func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, 
 		}
 
 		pipeline = append(pipeline, bson.D{{Key: "$match", Value: matchStage}})
+
+		// Orden estable del listado público: destacados primero y luego por
+		// antigüedad (_id codifica la fecha de creación). Sin $sort, Mongo
+		// devuelve el orden natural (no determinista), por lo que "el primer
+		// centro" podía cambiar entre consultas.
+		pipeline = append(pipeline, bson.D{{Key: "$sort", Value: bson.D{
+			{Key: "is_featured", Value: -1},
+			{Key: "featured_priority", Value: -1},
+			{Key: "_id", Value: 1},
+		}}})
 	}
 
 	if hour != nil && date != nil {
@@ -352,8 +365,15 @@ func (r *SportCenterRepository) FindPaged(ctx context.Context, page, limit int, 
 }
 
 func (r *SportCenterRepository) FindByUserID(ctx context.Context, userID string) ([]domain.SportCenter, error) {
-	// MongoDB find where "users" array contains userID
-	cursor, err := r.collection.Find(ctx, bson.M{"users": userID})
+	// MongoDB find where "users" array contains userID.
+	// Orden estable (más antiguo primero, _id codifica la creación): varias
+	// partes del panel admin usan `centers[0]` como "mi centro" y sin $sort ese
+	// primero no era determinista.
+	cursor, err := r.collection.Find(
+		ctx,
+		bson.M{"users": userID},
+		options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}),
+	)
 	if err != nil {
 		return nil, err
 	}
