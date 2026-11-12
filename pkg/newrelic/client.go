@@ -5,8 +5,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/newrelic/go-agent/v3/newrelic"
 	"github.com/hamp/booking-sport/pkg/logger"
+	"github.com/newrelic/go-agent/v3/newrelic"
 )
 
 var app *newrelic.Application

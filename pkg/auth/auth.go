@@ -55,6 +55,26 @@ func getPemCert(domain string, token *jwt.Token) (string, error) {
 	return cert, err
 }
 
+// claimEmail retorna el correo del usuario desde los claims del token.
+//
+// Auth0 no incluye `email` en los access tokens emitidos para una API custom
+// (solo en el ID token), así que la Action Post Login lo publica con namespace
+// y aquí se acepta cualquier claim terminado en `/email`.
+func claimEmail(claims jwt.MapClaims) string {
+	if email, ok := claims["email"].(string); ok && strings.TrimSpace(email) != "" {
+		return email
+	}
+	for key, val := range claims {
+		if !strings.HasSuffix(key, "/email") {
+			continue
+		}
+		if email, ok := val.(string); ok && strings.TrimSpace(email) != "" {
+			return email
+		}
+	}
+	return ""
+}
+
 func EnsureValidToken(domain, audience string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
@@ -124,7 +144,7 @@ func EnsureValidToken(domain, audience string) gin.HandlerFunc {
 		if name, ok := claims["name"].(string); ok {
 			c.Set("user_name", name)
 		}
-		if email, ok := claims["email"].(string); ok {
+		if email := claimEmail(claims); email != "" {
 			c.Set("user_email", email)
 		}
 		if picture, ok := claims["picture"].(string); ok {
@@ -154,6 +174,11 @@ func EnsureValidToken(domain, audience string) gin.HandlerFunc {
 			}
 		}
 		c.Set("user_roles", roles)
+		claimKeys := make([]string, 0, len(claims))
+		for key := range claims {
+			claimKeys = append(claimKeys, key)
+		}
+		c.Set("token_claim_keys", claimKeys)
 
 		c.Next()
 	}

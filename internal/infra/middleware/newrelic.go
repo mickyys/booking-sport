@@ -2,8 +2,8 @@ package middleware
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/newrelic/go-agent/v3/integrations/nrgin"
 	"github.com/hamp/booking-sport/pkg/newrelic"
+	"github.com/newrelic/go-agent/v3/integrations/nrgin"
 )
 
 func NewRelicMiddleware() gin.HandlerFunc {

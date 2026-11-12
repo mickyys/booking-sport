@@ -3,17 +3,22 @@ package infra
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hamp/booking-sport/internal/app"
 	"github.com/hamp/booking-sport/internal/domain"
+	"github.com/hamp/booking-sport/internal/infra/auth0mgmt"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -27,13 +32,19 @@ type Auth0User struct {
 
 type SportCenterHandler struct {
 	useCase     *app.SportCenterUseCase
+	facilityUC  *app.FacilityUseCase
 	baseHandler *BaseHandler
+	auth0       auth0mgmt.Client
+	mailer      app.Mailer
 }
 
-func NewSportCenterHandler(uc *app.SportCenterUseCase) *SportCenterHandler {
+func NewSportCenterHandler(uc *app.SportCenterUseCase, auth0 auth0mgmt.Client, mailer app.Mailer, facilityUC *app.FacilityUseCase) *SportCenterHandler {
 	return &SportCenterHandler{
 		useCase:     uc,
+		facilityUC:  facilityUC,
 		baseHandler: NewBaseHandler(),
+		auth0:       auth0,
+		mailer:      mailer,
 	}
 }
 
@@ -86,7 +97,56 @@ func (h *SportCenterHandler) List(c *gin.Context) {
 		date = &today
 	}
 
-	response, err := h.useCase.ListSportCentersPaged(c.Request.Context(), page, limit, name, city, date, hour)
+	var lat, lng *float64
+	latStr := c.Query("lat")
+	lngStr := c.Query("lng")
+	if latStr != "" || lngStr != "" {
+		if latStr == "" || lngStr == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "lat and lng must be provided together"})
+			return
+		}
+		latF, err := strconv.ParseFloat(latStr, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid lat format"})
+			return
+		}
+		lngF, err := strconv.ParseFloat(lngStr, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid lng format"})
+			return
+		}
+		if latF < -90 || latF > 90 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "lat must be between -90 and 90"})
+			return
+		}
+		if lngF < -180 || lngF > 180 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "lng must be between -180 and 180"})
+			return
+		}
+		lat, lng = &latF, &lngF
+	}
+
+	// Radio de búsqueda en km. Solo tiene sentido con coordenadas.
+	var radiusKm *float64
+	radiusStr := c.Query("radius")
+	if radiusStr != "" {
+		if lat == nil || lng == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "radius requires lat and lng"})
+			return
+		}
+		radiusF, err := strconv.ParseFloat(radiusStr, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid radius format"})
+			return
+		}
+		if radiusF <= 0 || radiusF > 500 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "radius must be greater than 0 and at most 500 km"})
+			return
+		}
+		radiusKm = &radiusF
+	}
+
+	response, err := h.useCase.ListSportCentersPaged(c.Request.Context(), page, limit, name, city, date, hour, lat, lng, radiusKm)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -112,12 +172,33 @@ func (h *SportCenterHandler) GetBySlug(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Sport center not found"})
 		return
 	}
+	if !center.IsOperational() {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Sport center not found"})
+		return
+	}
 	cancellationPolicy := gin.H{
 		"hours":             center.CancellationHours,
 		"retention_percent": center.RetentionPercent,
 	}
 
-	c.JSON(http.StatusOK, gin.H{"center": center, "cancellation_policy": cancellationPolicy})
+	// Facilities (quincho/sede/piscina) incluidas en el detalle del centro para
+	// que la UI cargue centro + facilities en una sola llamada. Si falla la
+	// consulta se degrada a lista vacía para no romper el detalle.
+	facilities := []domain.Facility{}
+	if h.facilityUC != nil {
+		list, err := h.facilityUC.ListByCenterID(c.Request.Context(), center.ID)
+		if err != nil {
+			log.Printf("GetBySlug: error listando facilities para slug %s: %v", slug, err)
+		} else if list != nil {
+			facilities = list
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"center":              center,
+		"cancellation_policy": cancellationPolicy,
+		"facilities":          facilities,
+	})
 }
 
 func (h *SportCenterHandler) Create(c *gin.Context) {
@@ -140,6 +221,325 @@ func (h *SportCenterHandler) Create(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"center": center, "cancellation_policy": cancellationPolicy})
+}
+
+// validarClave verifica que la clave definida por el usuario cumpla una
+// política mínima compatible con Auth0: al menos 8 caracteres con mayúscula,
+// minúscula y número.
+func validarClave(clave string) bool {
+	var hasUpper, hasLower, hasDigit bool
+	for _, r := range clave {
+		switch {
+		case unicode.IsUpper(r):
+			hasUpper = true
+		case unicode.IsLower(r):
+			hasLower = true
+		case unicode.IsNumber(r):
+			hasDigit = true
+		}
+	}
+	return len(clave) >= 8 && hasUpper && hasLower && hasDigit
+}
+
+// tenantSiteURL construye la URL pública del sitio de un centro a partir de su
+// slug y PLATFORM_DOMAIN (default reservaloya.cl), misma convención de
+// tenant_usecase.go.
+func tenantSiteURL(slug string) string {
+	if slug == "" {
+		return ""
+	}
+	domain := strings.TrimSpace(os.Getenv("PLATFORM_DOMAIN"))
+	if domain == "" {
+		domain = "reservaloya.cl"
+	}
+	return "https://" + slug + "." + domain
+}
+
+func (h *SportCenterHandler) OnboardCreate(c *gin.Context) {
+	var body struct {
+		Nombre    string   `json:"nombre" binding:"required,min=1,max=100"`
+		Rut       string   `json:"rut" binding:"required"`
+		Direccion string   `json:"direccion" binding:"required,min=1"`
+		Email     string   `json:"email" binding:"required,email"`
+		Slug      string   `json:"slug,omitempty"`
+		Ciudad    string   `json:"ciudad" binding:"max=100"`
+		Latitud   *float64 `json:"latitud"`
+		Longitud  *float64 `json:"longitud"`
+		Clave     string   `json:"clave,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	adminEmail := strings.ToLower(strings.TrimSpace(body.Email))
+
+	// Ciudad y coordenadas las determina el frontend al seleccionar una
+	// sugerencia de Mapbox. Si vienen, deben venir completas y en rango.
+	if (body.Latitud == nil) != (body.Longitud == nil) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "debes enviar latitud y longitud juntas"})
+		return
+	}
+	if body.Latitud != nil && (*body.Latitud < -90 || *body.Latitud > 90) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "latitud debe estar entre -90 y 90"})
+		return
+	}
+	if body.Longitud != nil && (*body.Longitud < -180 || *body.Longitud > 180) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "longitud debe estar entre -180 y 180"})
+		return
+	}
+
+	auth0User, err := h.auth0.FindByEmail(c.Request.Context(), adminEmail)
+	if err != nil {
+		log.Printf("[ONBOARD] error consultando Auth0 para %s: %v", adminEmail, err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "no se pudo validar tu cuenta en este momento, intenta nuevamente"})
+		return
+	}
+	isNewAccount := auth0User == nil
+
+	if auth0User == nil {
+		// Cuenta nueva. Si el formulario no trae clave (alta desde el panel de
+		// superadmin) se genera una aleatoria que el usuario nunca necesita:
+		// define la suya con el ticket del correo de bienvenida. Si la trae, se
+		// valida la política para no crear cuentas con claves débiles.
+		clave := body.Clave
+		if clave == "" {
+			generated, pwErr := randomTemporaryPassword()
+			if pwErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo crear la cuenta"})
+				return
+			}
+			clave = generated
+		} else if !validarClave(clave) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "debes definir una clave de al menos 8 caracteres con mayúscula, minúscula y número",
+			})
+			return
+		}
+		created, err := h.auth0.CreateAccount(c.Request.Context(), adminEmail, clave)
+		if err != nil {
+			log.Printf("[ONBOARD] error creando cuenta Auth0 para %s: %v", adminEmail, err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "no se pudo crear tu cuenta en este momento, intenta nuevamente"})
+			return
+		}
+		auth0User = created
+	} else if existingCenter, centerErr := h.useCase.FindByAdminEmail(c.Request.Context(), adminEmail); centerErr == nil && existingCenter != nil {
+		// El correo ya administra un centro: no permitir crear otro.
+		c.JSON(http.StatusConflict, gin.H{"error": "este correo ya está registrado en un centro deportivo"})
+		return
+	}
+
+	// Rol de administrador (idempotente). Si no hay rol configurado,
+	// AssignRole hace log WARN y no bloquea el flujo.
+	if err := h.auth0.AssignRole(c.Request.Context(), auth0User.ID, os.Getenv("AUTH0_ADMIN_ROLE_ID")); err != nil {
+		log.Printf("[ONBOARD] error asignando rol Auth0 a %s: %v", auth0User.ID, err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "no se pudo asignar el rol de administrador, intenta nuevamente"})
+		return
+	}
+
+	var lat, lng float64
+	if body.Latitud != nil && body.Longitud != nil {
+		lat, lng = *body.Latitud, *body.Longitud
+	}
+
+	center, err := h.useCase.CreateSportCenterOnboard(c.Request.Context(),
+		body.Nombre,
+		body.Rut,
+		body.Direccion,
+		body.Slug,
+		adminEmail,
+		auth0User.ID,
+		strings.TrimSpace(body.Ciudad),
+		lat,
+		lng,
+	)
+	if err != nil {
+		errMsg := err.Error()
+		switch {
+		case strings.Contains(errMsg, "RUT inválido"):
+			c.JSON(http.StatusBadRequest, gin.H{"error": errMsg})
+		case strings.Contains(errMsg, "correo inválido"):
+			c.JSON(http.StatusBadRequest, gin.H{"error": errMsg})
+		case strings.Contains(errMsg, "correo ya registrado"):
+			c.JSON(http.StatusConflict, gin.H{"error": "este correo ya está registrado en un centro deportivo"})
+		case strings.Contains(errMsg, "ya está en uso") && strings.Contains(errMsg, "slug"):
+			c.JSON(http.StatusConflict, gin.H{"error": errMsg})
+		case strings.Contains(errMsg, "ya existe un centro"):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": errMsg})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg})
+		}
+		return
+	}
+
+	// Correo de bienvenida vía Mailgun: uno solo por creación de centro,
+	// best-effort (si falla, el registro igualmente se confirma y el error
+	// queda en los logs). Para cuentas nuevas incluye el enlace de Auth0
+	// para configurar la clave (ticket sin correo de Auth0).
+	loginURL := strings.TrimRight(os.Getenv("URL_FRONTEND"), "/") + "/admin"
+	welcome := app.CenterWelcomeEmail{
+		To:         adminEmail,
+		UserName:   auth0User.Name,
+		CenterName: center.Name,
+		Address:    center.Address,
+		TenantURL:  tenantSiteURL(center.Slug),
+		LoginURL:   loginURL,
+	}
+	if isNewAccount {
+		setupURL, ticketErr := h.auth0.CreatePasswordSetupTicket(c.Request.Context(), auth0User.ID)
+		if ticketErr != nil {
+			log.Printf("[ONBOARD] centro creado pero falló el ticket de configuración de clave para %s: %v", adminEmail, ticketErr)
+		} else {
+			welcome.SetupURL = setupURL
+		}
+	}
+	var welcomeErr error
+	if h.mailer != nil {
+		welcomeErr = h.mailer.SendCenterOnboardWelcome(c.Request.Context(), welcome)
+	}
+	emailSent := h.mailer != nil && welcomeErr == nil
+	if welcomeErr != nil {
+		log.Printf("[ONBOARD] centro creado pero falló el correo de bienvenida para %s: %v", adminEmail, welcomeErr)
+	}
+
+	// Return response matching the spec
+	coord := gin.H{
+		"lat": center.Coordinates.Lat,
+		"lng": center.Coordinates.Lng,
+	}
+	if center.Coordinates.Lat == 0 && center.Coordinates.Lng == 0 {
+		coord = nil
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"id":            center.ID.Hex(),
+		"slug":          center.Slug,
+		"name":          center.Name,
+		"city":          center.City,
+		"coordinates":   coord,
+		"admin_user_id": auth0User.ID,
+		"email_sent":    emailSent,
+		"message":       "Centro creado exitosamente",
+	})
+}
+
+// ResendCenterAdminInvite reenvía al administrador del centro el correo de
+// bienvenida con un enlace nuevo para definir su contraseña (el del alta puede
+// no haber llegado o haber expirado). Lo usa el panel de superadmin.
+//
+//	POST /superadmin/sport-centers/:id/admin-invite/resend
+func (h *SportCenterHandler) ResendCenterAdminInvite(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	center, err := h.useCase.FindByID(c.Request.Context(), id)
+	if err != nil || center == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "center not found"})
+		return
+	}
+
+	email := strings.ToLower(strings.TrimSpace(center.AdminEmail))
+	if email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "el centro no tiene correo de administrador"})
+		return
+	}
+
+	traceID := inviteTraceID(email)
+	c.Header("X-Invite-Trace-Id", traceID)
+	logf := inviteLogger(traceID, c.Writer.Header().Get("X-Trace-ID"))
+	logf("reenvío solicitado center=%s email=%s", center.ID.Hex(), email)
+
+	ctx := auth0mgmt.WithTrace(c.Request.Context(), traceID)
+
+	auth0User, err := h.auth0.FindByEmail(ctx, email)
+	if err != nil {
+		logf("ERROR consultando Auth0 por %s: %v", email, err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "no se pudo validar la cuenta en este momento, intenta nuevamente"})
+		return
+	}
+	if auth0User == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no existe una cuenta con ese correo"})
+		return
+	}
+
+	setupURL, ticketErr := h.auth0.CreatePasswordSetupTicket(ctx, auth0User.ID)
+	if ticketErr != nil {
+		logf("ERROR generando ticket de clave para %s: %v", email, ticketErr)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "no se pudo generar el enlace de acceso, intenta nuevamente"})
+		return
+	}
+
+	invite := app.CenterWelcomeEmail{
+		To:         email,
+		UserName:   auth0User.Name,
+		CenterName: center.Name,
+		Address:    center.Address,
+		TenantURL:  tenantSiteURL(center.Slug),
+		LoginURL:   strings.TrimRight(os.Getenv("URL_FRONTEND"), "/") + "/admin",
+		SetupURL:   setupURL,
+	}
+
+	emailSent := false
+	if h.mailer != nil {
+		if mailErr := h.mailer.SendCenterOnboardWelcome(ctx, invite); mailErr != nil {
+			logf("WARN enlace generado pero falló el correo a %s: %v", email, mailErr)
+		} else {
+			emailSent = true
+			logf("reenvío completado")
+		}
+	}
+
+	if !emailSent {
+		c.JSON(http.StatusOK, gin.H{
+			"message":    "enlace generado, pero no se pudo enviar el correo",
+			"email_sent": false,
+			"trace_id":   traceID,
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"message":    "invitación reenviada",
+		"email_sent": true,
+		"trace_id":   traceID,
+	})
+}
+
+// OnboardVerificationStatus consulta si ya existe una cuenta para el correo
+// en Auth0, si fue verificada y si ya administra un centro deportivo. Lo usa
+// el frontend del onboarding para bloquear correos ya registrados.
+func (h *SportCenterHandler) OnboardVerificationStatus(c *gin.Context) {
+	emailParam := c.Query("email")
+	email := strings.ToLower(strings.TrimSpace(emailParam))
+	if email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "email es requerido"})
+		return
+	}
+
+	user, err := h.auth0.FindByEmail(c.Request.Context(), email)
+	if err != nil {
+		log.Printf("[ONBOARD] error consultando estado de cuenta para %s: %v", email, err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "no se pudo consultar el estado de la cuenta en este momento, intenta nuevamente"})
+		return
+	}
+
+	hasCenter := false
+	if user != nil {
+		center, centerErr := h.useCase.FindByAdminEmail(c.Request.Context(), email)
+		if centerErr == nil && center != nil {
+			hasCenter = true
+		}
+	}
+
+	exists := user != nil
+	verified := exists && user.EmailVerified
+	c.JSON(http.StatusOK, gin.H{
+		"exists":     exists,
+		"verified":   verified,
+		"has_center": hasCenter,
+	})
 }
 
 func (h *SportCenterHandler) Update(c *gin.Context) {
@@ -172,29 +572,99 @@ func (h *SportCenterHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"center": center, "cancellation_policy": cancellationPolicy})
 }
 
-// UpdateSportCenterSettings actualiza la configuración de un centro deportivo
+// UpdateSportCenterSettings actualiza la configuración del centro del usuario
+// autenticado.
+//
+//	PATCH /admin/sport-centers/:id/settings
+//
+// Solo permite editar el centro propio. La comisión de la plataforma
+// (marketplace_fee_percent) no es editable por el centro: la fija el
+// superadmin con SuperAdminUpdateSettings.
 func (h *SportCenterHandler) UpdateSportCenterSettings(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := primitive.ObjectIDFromHex(idStr)
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in token"})
+		return
+	}
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID format"})
 		return
 	}
+	centers, err := h.useCase.FindByUserID(c.Request.Context(), userID.(string))
+	if err != nil || len(centers) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No sport center associated with this user"})
+		return
+	}
+	owned := false
+	for _, center := range centers {
+		if center.ID == id {
+			owned = true
+			break
+		}
+	}
+	if !owned {
+		c.JSON(http.StatusForbidden, gin.H{"error": "no tienes acceso a este centro"})
+		return
+	}
+	h.applySettings(c, id, false)
+}
 
+// SuperAdminUpdateSettings actualiza la configuración de cualquier centro. A
+// diferencia de la ruta del centro, permite fijar la comisión de la plataforma.
+//
+//	PATCH /superadmin/sport-centers/:id/settings
+func (h *SportCenterHandler) SuperAdminUpdateSettings(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID format"})
+		return
+	}
+	h.applySettings(c, id, true)
+}
+
+// applySettings aplica el cuerpo de settings. Con platform=false descarta los
+// campos reservados a la plataforma.
+func (h *SportCenterHandler) applySettings(c *gin.Context, id primitive.ObjectID, platform bool) {
 	var body struct {
-		Slug                  *string `json:"slug"`
-		CancellationHours     *int    `json:"cancellation_hours"`
-		RetentionPercent      *int    `json:"retention_percent"`
-		PartialPaymentEnabled *bool   `json:"partial_payment_enabled"`
-		PartialPaymentPercent *int    `json:"partial_payment_percent"`
-		ImageURL              *string `json:"image_url"`
+		Slug                  *string                     `json:"slug"`
+		CancellationHours     *int                        `json:"cancellation_hours"`
+		RetentionPercent      *int                        `json:"retention_percent"`
+		PartialPaymentEnabled *bool                       `json:"partial_payment_enabled"`
+		PartialPaymentPercent *int                        `json:"partial_payment_percent"`
+		ImageURL              *string                     `json:"image_url"`
+		MarketplaceFeePercent *int                        `json:"marketplace_fee_percent"`
+		Branding              *domain.SportCenterBranding `json:"branding"`
+		Address               *string                     `json:"address"`
+		City                  *string                     `json:"city"`
+		Coordinates           *domain.Coordinates         `json:"coordinates"`
+		PaymentMode           *string                     `json:"payment_mode"`
+		GooglePlaceID         *string                     `json:"google_place_id"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if !platform {
+		body.MarketplaceFeePercent = nil
+	}
 
-	if err := h.useCase.UpdateSettings(c.Request.Context(), id, body.Slug, body.CancellationHours, body.RetentionPercent, body.PartialPaymentEnabled, body.PartialPaymentPercent, body.ImageURL); err != nil {
+	if body.GooglePlaceID != nil {
+		if err := h.useCase.UpdateGooglePlaceID(c.Request.Context(), id, *body.GooglePlaceID); err != nil {
+			if errors.Is(err, app.ErrInvalidGooglePlaceID) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
+	if err := h.useCase.UpdateSettings(c.Request.Context(), id, body.Slug, body.CancellationHours, body.RetentionPercent, body.PartialPaymentEnabled, body.PartialPaymentPercent, body.ImageURL, body.MarketplaceFeePercent, body.Branding, body.Address, body.City, body.Coordinates, body.PaymentMode); err != nil {
+		if errors.Is(err, app.ErrInvalidPaymentMode) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -223,6 +693,170 @@ func (h *SportCenterHandler) GetMySportCenter(c *gin.Context) {
 
 	// Por ahora retornamos el primero asociado
 	c.JSON(http.StatusOK, gin.H{"center": centers[0]})
+}
+
+// UpdateMySportCenterOnboarding persiste una etapa del wizard post-login
+// (RES-23..27) para el centro del usuario autenticado. Cada "Guardar y
+// continuar" envía step + los datos de esa etapa; finalize marca el centro
+// como completado.
+func (h *SportCenterHandler) UpdateMySportCenterOnboarding(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in token"})
+		return
+	}
+	userIDStr := userID.(string)
+
+	var body struct {
+		Step        int                    `json:"step"`
+		Nombre      *string                `json:"nombre,omitempty"`
+		Rut         *string                `json:"rut,omitempty"`
+		Email       *string                `json:"email,omitempty"`
+		Direccion   *string                `json:"direccion,omitempty"`
+		Telefono    *string                `json:"telefono,omitempty"`
+		Templates   []domain.SpaceTemplate `json:"templates,omitempty"`
+		PaymentMode *string                `json:"payment_mode,omitempty"`
+		ImageURL    *string                `json:"image_url,omitempty"`
+		Finalize    bool                   `json:"finalize,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	input := app.UpdateOnboardingInput{
+		Step:        body.Step,
+		Nombre:      body.Nombre,
+		Rut:         body.Rut,
+		Email:       body.Email,
+		Direccion:   body.Direccion,
+		Telefono:    body.Telefono,
+		Templates:   body.Templates,
+		PaymentMode: body.PaymentMode,
+		ImageURL:    body.ImageURL,
+		Finalize:    body.Finalize,
+	}
+
+	if err := h.useCase.UpdateSportCenterOnboarding(c.Request.Context(), userIDStr, input); err != nil {
+		errMsg := err.Error()
+		switch {
+		case strings.Contains(errMsg, "no se encontró un centro"):
+			c.JSON(http.StatusNotFound, gin.H{"error": errMsg})
+		case strings.Contains(errMsg, "inválid"), strings.Contains(errMsg, "te falta"), strings.Contains(errMsg, "registrar al menos"), strings.Contains(errMsg, "cantidad de"), strings.Contains(errMsg, "horarios de"), strings.Contains(errMsg, "valores de"), strings.Contains(errMsg, "duplicado"):
+			c.JSON(http.StatusBadRequest, gin.H{"error": errMsg})
+		default:
+			log.Printf("[ONBOARD] error actualizando onboarding para %s: %v", userIDStr, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo guardar tu progreso, intenta nuevamente"})
+		}
+		return
+	}
+
+	message := "onboarding actualizado"
+	if body.Finalize {
+		message = "onboarding completado"
+	}
+	c.JSON(http.StatusOK, gin.H{"message": message})
+}
+
+// GetMyOnboardingStatus devuelve el avance del onboarding calculado con datos
+// reales. Lo usan la web y la app mobile para mostrar el mismo checklist.
+//
+//	GET /admin/my-sport-center/onboarding/status
+func (h *SportCenterHandler) GetMyOnboardingStatus(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in token"})
+		return
+	}
+	st, err := h.useCase.GetOnboardingStatus(c.Request.Context(), userID.(string))
+	if err != nil {
+		if strings.Contains(err.Error(), "no se encontró un centro") {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		log.Printf("[ONBOARD] error calculando estado para %v: %v", userID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo calcular el avance, intenta nuevamente"})
+		return
+	}
+	c.JSON(http.StatusOK, st)
+}
+
+// CompleteMyOnboarding cierra el onboarding con los espacios y horarios que el
+// centro ya tiene (p. ej. creados desde la app mobile), sin duplicarlos.
+//
+//	POST /admin/my-sport-center/onboarding/complete
+func (h *SportCenterHandler) CompleteMyOnboarding(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in token"})
+		return
+	}
+	st, err := h.useCase.CompleteOnboardingFromExisting(c.Request.Context(), userID.(string))
+	if err != nil {
+		var incomplete *app.OnboardingIncompleteError
+		switch {
+		case errors.As(err, &incomplete):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "missing": incomplete.Missing, "status": st})
+		case strings.Contains(err.Error(), "no se encontró un centro"):
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		default:
+			log.Printf("[ONBOARD] error completando onboarding para %v: %v", userID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo completar el onboarding, intenta nuevamente"})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "onboarding completado", "status": st})
+}
+
+// ForceCompleteCenterOnboarding lo usa el superadmin para cerrar el onboarding
+// de un centro aunque falten datos. Exige un motivo, que queda en la auditoría.
+//
+//	POST /superadmin/sport-centers/:id/onboarding/complete { "reason": "..." }
+func (h *SportCenterHandler) ForceCompleteCenterOnboarding(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	if strings.TrimSpace(body.Reason) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "indica el motivo"})
+		return
+	}
+	if err := h.useCase.ForceCompleteOnboarding(c.Request.Context(), id); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.Set("audit_reason", strings.TrimSpace(body.Reason))
+	c.JSON(http.StatusOK, gin.H{"message": "onboarding completado"})
+}
+
+// SetCenterFirstMonthFree activa o desactiva el primer mes gratis de la
+// suscripción del centro. Es un cobro de la plataforma: solo lo define el
+// superadmin.
+//
+//	PUT /superadmin/sport-centers/:id/first-month-free { "enabled": true }
+func (h *SportCenterHandler) SetCenterFirstMonthFree(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.Enabled == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "indica enabled: true o false"})
+		return
+	}
+	if err := h.useCase.SetFirstMonthFree(c.Request.Context(), id, *body.Enabled); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"first_month_free": *body.Enabled})
 }
 
 func (h *SportCenterHandler) GetByID(c *gin.Context) {
@@ -267,8 +901,8 @@ func (h *SportCenterHandler) GetCenterUsers(c *gin.Context) {
 		auth0User := Auth0User{UserID: uID}
 
 		userData := fetchAuth0UserByID(auth0Domain, uID)
-		log.Printf("GetCenterUsers: other user %s - name=%s, picture=%s, last_login=%s", uID, userData.Name, userData.Picture, userData.LastLogin)
 		if userData != nil {
+			log.Printf("GetCenterUsers: user %s - name=%s", uID, userData.Name)
 			auth0User.Name = userData.Name
 			auth0User.Email = userData.Email
 			auth0User.Picture = userData.Picture
@@ -313,6 +947,15 @@ func (h *SportCenterHandler) RemoveCenterUser(c *gin.Context) {
 	}
 
 	center := centers[0]
+
+	if userIDToRemove == userIDStr {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no puedes quitar tu propio acceso"})
+		return
+	}
+	if len(center.Users) <= 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "el centro debe tener al menos un administrador"})
+		return
+	}
 
 	found := false
 	newUsers := make([]string, 0, len(center.Users))
@@ -827,6 +1470,7 @@ func (h *CourtHandler) DeleteAdminCourt(c *gin.Context) {
 }
 
 func (h *SportCenterHandler) GetSchedules(c *gin.Context) {
+	startedAt := time.Now()
 	idStr := c.Param("id")
 	var centerID primitive.ObjectID
 	// Try parse as ObjectID first; if fails, treat as slug and resolve
@@ -859,6 +1503,8 @@ func (h *SportCenterHandler) GetSchedules(c *gin.Context) {
 		return
 	}
 
+	// Expone el tiempo del handler en la pestaña Timing del navegador.
+	c.Header("Server-Timing", fmt.Sprintf("app;dur=%.1f", float64(time.Since(startedAt).Microseconds())/1000))
 	c.JSON(http.StatusOK, schedules)
 }
 
@@ -988,6 +1634,45 @@ func (h *SportCenterHandler) GetAdminSchedulesWithBookings(c *gin.Context) {
 		filteredCenters = centers
 	}
 
+	// Soporte por rango de fechas: si se pasan `from` y `to`, se retorna un
+	// slice de { date, courts } para cada fecha del rango en una sola llamada.
+	fromStr := c.Query("from")
+	toStr := c.Query("to")
+	if fromStr != "" && toStr != "" {
+		loc := domain.GetSantiagoLocation()
+		from, errFrom := time.ParseInLocation("2006-01-02", fromStr, loc)
+		to, errTo := time.ParseInLocation("2006-01-02", toStr, loc)
+		if errFrom != nil || errTo != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid from/to date format, expected YYYY-MM-DD"})
+			return
+		}
+
+		byDate := make(map[string][]app.CourtScheduleResponse)
+		for _, center := range filteredCenters {
+			rangeResults, err := h.useCase.GetSportCenterSchedulesWithBookingDetailsRange(c.Request.Context(), center.ID, from, to, all)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			for _, rr := range rangeResults {
+				byDate[rr.Date] = append(byDate[rr.Date], rr.Courts...)
+			}
+		}
+
+		dates := make([]string, 0, len(byDate))
+		for d := range byDate {
+			dates = append(dates, d)
+		}
+		sort.Strings(dates)
+
+		result := make([]app.CourtScheduleByDate, 0, len(dates))
+		for _, d := range dates {
+			result = append(result, app.CourtScheduleByDate{Date: d, Courts: byDate[d]})
+		}
+		c.JSON(http.StatusOK, result)
+		return
+	}
+
 	// Collect all schedules from filtered centers (same format as public endpoint)
 	var allSchedules []app.CourtScheduleResponse
 	for _, center := range filteredCenters {
@@ -1000,6 +1685,127 @@ func (h *SportCenterHandler) GetAdminSchedulesWithBookings(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, allSchedules)
+}
+
+type SpaceHandler struct {
+	useCase *app.SpaceUseCase
+}
+
+func NewSpaceHandler(useCase *app.SpaceUseCase) *SpaceHandler {
+	return &SpaceHandler{useCase: useCase}
+}
+
+// GetAdminSpaces lista los espacios (canchas, quinchos, sedes y piscinas) del
+// centro del admin autenticado.
+func (h *SpaceHandler) GetAdminSpaces(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in context"})
+		return
+	}
+	spaces, err := h.useCase.ListByUser(c.Request.Context(), userID.(string))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if spaces == nil {
+		spaces = []domain.Space{}
+	}
+	c.JSON(http.StatusOK, gin.H{"spaces": spaces})
+}
+
+// Create crea un espacio (cancha, quincho, sede o piscina) para el centro del admin.
+func (h *SpaceHandler) Create(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in context"})
+		return
+	}
+
+	var body struct {
+		SportCenterID string `json:"sport_center_id"`
+		domain.Space
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	centerID, err := primitive.ObjectIDFromHex(body.SportCenterID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid sport_center_id format"})
+		return
+	}
+
+	if body.Category == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "category is required (cancha, quincho, sede, piscina)"})
+		return
+	}
+
+	space := body.Space
+	space.SportCenterID = centerID
+
+	if err := h.useCase.Create(c.Request.Context(), &space, userID.(string)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"space": space})
+}
+
+// Update actualiza un espacio por id.
+func (h *SpaceHandler) Update(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in context"})
+		return
+	}
+
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid space ID format"})
+		return
+	}
+
+	var body struct {
+		domain.Space
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	space := body.Space
+
+	if err := h.useCase.Update(c.Request.Context(), id, &space, userID.(string)); err != nil {
+		status := http.StatusInternalServerError
+		var appErr *domain.AppError
+		if errors.As(err, &appErr) {
+			status = appErr.StatusCode
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Space updated successfully"})
+}
+
+// Delete elimina un espacio por id.
+func (h *SpaceHandler) Delete(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in context"})
+		return
+	}
+
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid space ID format"})
+		return
+	}
+
+	if err := h.useCase.Delete(c.Request.Context(), id, userID.(string)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Space deleted successfully"})
 }
 
 type UserHandler struct {

@@ -17,11 +17,16 @@ import (
 
 type mockBookingRepoForHold struct {
 	FindConfirmedBySlotFn        func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error)
+	FindOccupancyFn              func(ctx context.Context, courtID primitive.ObjectID, startUTC, endUTC time.Time, excludeBookingID *primitive.ObjectID) ([]domain.Booking, error)
 	FindPendingBySlotFn          func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error)
 	UpdateLockExpiresAtFn        func(ctx context.Context, id primitive.ObjectID, expiresAt time.Time) error
 	MarkExpiredFn                func(ctx context.Context, id primitive.ObjectID) error
 	FindByIDFn                   func(ctx context.Context, id primitive.ObjectID) (*domain.Booking, error)
 	FindConfirmedBookingsAfterFn func(ctx context.Context, courtID primitive.ObjectID, hour int, since time.Time) ([]domain.Booking, error)
+	FindByRecurringIDAndDateFn   func(ctx context.Context, recurringID string, date time.Time) (*domain.Booking, error)
+	CreateRecurringBookingFn     func(ctx context.Context, booking *domain.Booking) error
+	CancelFutureByRecurringIDFn  func(ctx context.Context, recurringID string, from time.Time, cancelledBy, reason string) (int64, error)
+	DeleteByRecurringIDFn        func(ctx context.Context, recurringID string) (int64, error)
 	FinishSeriesFn               func(ctx context.Context, seriesID string, centerIDs []primitive.ObjectID, finishedBy, reason string, now time.Time) (int64, error)
 
 	FindConfirmedBySlotCalls []findConfirmedBySlotCall
@@ -57,6 +62,13 @@ func (m *mockBookingRepoForHold) FindConfirmedBySlot(ctx context.Context, courtI
 	m.FindConfirmedBySlotCalls = append(m.FindConfirmedBySlotCalls, findConfirmedBySlotCall{courtID, date, hour, minutes})
 	if m.FindConfirmedBySlotFn != nil {
 		return m.FindConfirmedBySlotFn(ctx, courtID, date, hour, minutes)
+	}
+	return nil, nil
+}
+
+func (m *mockBookingRepoForHold) FindOccupancy(ctx context.Context, courtID primitive.ObjectID, startUTC, endUTC time.Time, excludeBookingID *primitive.ObjectID) ([]domain.Booking, error) {
+	if m.FindOccupancyFn != nil {
+		return m.FindOccupancyFn(ctx, courtID, startUTC, endUTC, excludeBookingID)
 	}
 	return nil, nil
 }
@@ -140,6 +152,33 @@ func (m *mockBookingRepoForHold) FindByCourtAndDate(ctx context.Context, courtID
 func (m *mockBookingRepoForHold) FindBySportCenterAndDate(ctx context.Context, centerID primitive.ObjectID, date time.Time) ([]domain.Booking, error) {
 	return nil, nil
 }
+func (m *mockBookingRepoForHold) FindByRecurringIDAndDate(ctx context.Context, recurringID string, date time.Time) (*domain.Booking, error) {
+	if m.FindByRecurringIDAndDateFn != nil {
+		return m.FindByRecurringIDAndDateFn(ctx, recurringID, date)
+	}
+	return nil, domain.ErrNotFound
+}
+func (m *mockBookingRepoForHold) CreateRecurringBooking(ctx context.Context, booking *domain.Booking) error {
+	if m.CreateRecurringBookingFn != nil {
+		return m.CreateRecurringBookingFn(ctx, booking)
+	}
+	return nil
+}
+func (m *mockBookingRepoForHold) CancelFutureByRecurringID(ctx context.Context, recurringID string, from time.Time, cancelledBy, reason string) (int64, error) {
+	if m.CancelFutureByRecurringIDFn != nil {
+		return m.CancelFutureByRecurringIDFn(ctx, recurringID, from, cancelledBy, reason)
+	}
+	return 0, nil
+}
+func (m *mockBookingRepoForHold) DeleteByRecurringID(ctx context.Context, recurringID string) (int64, error) {
+	if m.DeleteByRecurringIDFn != nil {
+		return m.DeleteByRecurringIDFn(ctx, recurringID)
+	}
+	return 0, nil
+}
+func (m *mockBookingRepoForHold) ClearRecurringID(ctx context.Context, id primitive.ObjectID) error {
+	return nil
+}
 func (m *mockBookingRepoForHold) FindConflictingBooking(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) (*domain.Booking, error) {
 	return nil, nil
 }
@@ -213,6 +252,7 @@ type mockSlotHoldRepo struct {
 	TryClaimSlotCalls              int
 	FindOneAndDeleteIfExpiredCalls int
 	RenewExpirationCalls           int
+	SetBookingIDCalls              int
 	DeleteCalls                    []primitive.ObjectID
 	FindBySlotCalls                int
 }
@@ -245,6 +285,11 @@ func (m *mockSlotHoldRepo) RenewExpiration(ctx context.Context, holdID primitive
 	if m.RenewExpirationFn != nil {
 		return m.RenewExpirationFn(ctx, holdID, newExpiresAt)
 	}
+	return nil
+}
+
+func (m *mockSlotHoldRepo) SetBookingID(ctx context.Context, holdID primitive.ObjectID, bookingID primitive.ObjectID) error {
+	m.SetBookingIDCalls++
 	return nil
 }
 
@@ -402,6 +447,62 @@ func TestClaimOrRenewSlot_SameUserRenewsLockWithHold(t *testing.T) {
 	}
 	if bookingRepo.UpdateLockExpiresAtCalls != 1 {
 		t.Errorf("expected 1 UpdateLockExpiresAt call, got %d", bookingRepo.UpdateLockExpiresAtCalls)
+	}
+	if holdRepo.RenewExpirationCalls != 1 {
+		t.Errorf("expected 1 RenewExpiration call, got %d", holdRepo.RenewExpirationCalls)
+	}
+}
+
+func TestClaimOrRenewSlot_SameUserReusesOrphanHold(t *testing.T) {
+	courtID := newObjectID()
+	date := chileDate(2026, 11, 3)
+	hour := 23
+	userID := "device:abc"
+
+	futureLock := futureLockTime()
+	pendingBooking := &domain.Booking{
+		ID:            newObjectID(),
+		GuestDeviceID: userID,
+		LockExpiresAt: &futureLock,
+	}
+	orphanHold := &domain.SlotHold{
+		ID:      newObjectID(),
+		CourtID: courtID,
+		Hour:    hour,
+		UserID:  userID,
+	}
+
+	bookingRepo := &mockBookingRepoForHold{
+		FindConfirmedBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
+			return nil, nil
+		},
+		FindPendingBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.Booking, error) {
+			return pendingBooking, nil
+		},
+	}
+	holdRepo := &mockSlotHoldRepo{
+		FindBySlotFn: func(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int, minutes int) (*domain.SlotHold, error) {
+			return orphanHold, nil
+		},
+	}
+
+	uc := &BookingUseCase{repo: bookingRepo, holdRepo: holdRepo}
+
+	hold, booking, err := uc.ClaimOrRenewSlot(context.Background(), courtID, date, hour, 0, userID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if hold == nil || hold.ID != orphanHold.ID {
+		t.Fatalf("expected orphan hold to be reused, got %+v", hold)
+	}
+	if booking == nil || booking.ID != pendingBooking.ID {
+		t.Fatalf("expected pending booking, got %+v", booking)
+	}
+	if holdRepo.TryClaimSlotCalls != 0 {
+		t.Errorf("expected no TryClaimSlot calls, got %d", holdRepo.TryClaimSlotCalls)
+	}
+	if holdRepo.SetBookingIDCalls != 1 {
+		t.Errorf("expected 1 SetBookingID call, got %d", holdRepo.SetBookingIDCalls)
 	}
 	if holdRepo.RenewExpirationCalls != 1 {
 		t.Errorf("expected 1 RenewExpiration call, got %d", holdRepo.RenewExpirationCalls)

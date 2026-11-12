@@ -4,8 +4,8 @@ package mongo
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -43,7 +43,7 @@ func (r *BookingRepository) FindByUserIDAndStatusPaged(ctx context.Context, user
 		bson.D{{Key: "$skip", Value: int64(skip)}},
 		bson.D{{Key: "$limit", Value: int64(limit)}},
 		bson.D{{Key: "$lookup", Value: bson.M{
-			"from":         "courts",
+			"from":         "spaces",
 			"localField":   "court_id",
 			"foreignField": "_id",
 			"as":           "court_info",
@@ -110,7 +110,7 @@ func (r *BookingRepository) FindByUserIDAndStatusPaged(ctx context.Context, user
 }
 
 func (r *BookingRepository) Create(ctx context.Context, booking *domain.Booking) error {
-	if err := booking.NormalizeSchedule(); err != nil {
+	if err := booking.PrepareForWrite(nil); err != nil {
 		return err
 	}
 	booking.Version = 1
@@ -131,6 +131,92 @@ func (r *BookingRepository) Create(ctx context.Context, booking *domain.Booking)
 	}
 	booking.ID = res.InsertedID.(primitive.ObjectID)
 	return nil
+}
+
+// CreateRecurringBooking inserta una ocurrencia generada por una recurrencia.
+// A diferencia de Create, no expira pagos pendientes: si el horario está
+// ocupado devuelve domain.ErrBookingSlotTaken para que el generador salte esa
+// fecha y continúe con las siguientes.
+func (r *BookingRepository) CreateRecurringBooking(ctx context.Context, booking *domain.Booking) error {
+	if err := booking.PrepareForWrite(nil); err != nil {
+		return err
+	}
+	booking.Version = 1
+	res, err := r.collection.InsertOne(ctx, booking)
+	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return domain.ErrBookingSlotTaken
+		}
+		return err
+	}
+	booking.ID = res.InsertedID.(primitive.ObjectID)
+	return nil
+}
+
+// FindByRecurringIDAndDate devuelve la ocurrencia generada para una fecha.
+func (r *BookingRepository) FindByRecurringIDAndDate(ctx context.Context, recurringID string, date time.Time) (*domain.Booking, error) {
+	start, end := domain.SantiagoDayBounds(date)
+	var booking domain.Booking
+	err := r.collection.FindOne(ctx, bson.M{
+		"recurring_id": recurringID,
+		"date":         bson.M{"$gte": start, "$lt": end},
+	}).Decode(&booking)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
+	}
+	return &booking, nil
+}
+
+// CancelFutureByRecurringID cancela las ocurrencias futuras (confirmadas o
+// pendientes) de una recurrencia. Las fechas pasadas se preservan. Devuelve la
+// cantidad de reservas modificadas.
+func (r *BookingRepository) CancelFutureByRecurringID(ctx context.Context, recurringID string, from time.Time, cancelledBy, reason string) (int64, error) {
+	now := time.Now()
+	filter := bson.M{
+		"recurring_id": recurringID,
+		"status": bson.M{"$in": []domain.BookingStatus{
+			domain.BookingStatusConfirmed,
+			domain.BookingStatusPending,
+		}},
+		"$or": []bson.M{
+			{"scheduled_at": bson.M{"$gt": from}},
+			{"scheduled_at": bson.M{"$exists": false}, "date": bson.M{"$gte": domain.SantiagoDateStart(from)}},
+		},
+	}
+	res, err := r.collection.UpdateMany(ctx, filter, bson.M{"$set": bson.M{
+		"status":              domain.BookingStatusCancelled,
+		"cancelled_by":        cancelledBy,
+		"cancellation_reason": reason,
+		"updated_at":          now,
+	}})
+	if err != nil {
+		return 0, err
+	}
+	return res.ModifiedCount, nil
+}
+
+// DeleteByRecurringID elimina todas las reservas generadas por una recurrencia.
+// Se usa únicamente para revertir una creación que no pudo generar su primera
+// ocurrencia.
+func (r *BookingRepository) DeleteByRecurringID(ctx context.Context, recurringID string) (int64, error) {
+	res, err := r.collection.DeleteMany(ctx, bson.M{"recurring_id": recurringID})
+	if err != nil {
+		return 0, err
+	}
+	return res.DeletedCount, nil
+}
+
+// ClearRecurringID desvincula una reserva de su recurrencia (por ejemplo, si el
+// administrador la mueve a otra fecha u hora).
+func (r *BookingRepository) ClearRecurringID(ctx context.Context, id primitive.ObjectID) error {
+	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
+		"$unset": bson.M{"recurring_id": ""},
+		"$set":   bson.M{"updated_at": time.Now()},
+	})
+	return err
 }
 
 func (r *BookingRepository) expireStalePending(ctx context.Context, courtID primitive.ObjectID, date time.Time, hour int) {
@@ -162,14 +248,51 @@ func (r *BookingRepository) expireStalePending(ctx context.Context, courtID prim
 	)
 }
 
+// Update persiste el documento completo. Si booking.Version es mayor que cero
+// la escritura es condicional: si otra instancia modificó la reserva entre la
+// lectura y la escritura devuelve domain.ErrVersionConflict en vez de pisar
+// cambios concurrentes (por ejemplo una confirmación de pago).
 func (r *BookingRepository) Update(ctx context.Context, booking *domain.Booking) error {
-	if err := booking.NormalizeSchedule(); err != nil {
+	if err := booking.PrepareForWrite(nil); err != nil {
 		return err
 	}
+
 	filter := bson.M{"_id": booking.ID}
-	update := bson.M{"$set": booking}
-	_, err := r.collection.UpdateOne(ctx, filter, update)
-	return err
+	conditional := booking.Version > 0
+	if conditional {
+		filter["version"] = booking.Version
+	}
+
+	update, err := fullSetUpdate(booking)
+	if err != nil {
+		return err
+	}
+
+	res, err := r.collection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return err
+	}
+	if conditional && res.MatchedCount == 0 {
+		return domain.ErrVersionConflict
+	}
+	booking.Version++
+
+	return nil
+}
+
+// fullSetUpdate builds a $set document from a booking without the version
+// field, which is incremented atomically to support optimistic concurrency.
+func fullSetUpdate(booking *domain.Booking) (bson.M, error) {
+	raw, err := bson.Marshal(booking)
+	if err != nil {
+		return nil, err
+	}
+	var doc bson.M
+	if err := bson.Unmarshal(raw, &doc); err != nil {
+		return nil, err
+	}
+	delete(doc, "version")
+	return bson.M{"$set": doc, "$inc": bson.M{"version": 1}}, nil
 }
 
 func (r *BookingRepository) FindByID(ctx context.Context, id primitive.ObjectID) (*domain.Booking, error) {
@@ -200,10 +323,7 @@ func (r *BookingRepository) FinishSeries(ctx context.Context, seriesID string, c
 		return 0, nil
 	}
 
-	loc, err := time.LoadLocation("America/Santiago")
-	if err != nil {
-		return 0, err
-	}
+	loc := domain.GetSantiagoLocation()
 	nowCL := now.In(loc)
 	futureExpr := bson.M{"$gt": []interface{}{
 		bson.M{"$dateFromParts": bson.M{
@@ -345,18 +465,12 @@ func (r *BookingRepository) FindBySportCenterAndDate(ctx context.Context, center
 	startDate, endDate := domain.SantiagoDayBounds(date)
 	civilDate := domain.SantiagoCivilDate(date)
 	localDate := civilDate.Format("2006-01-02")
-	dayOfWeek := int(civilDate.Weekday())
-
-	log.Printf("🔍 FindBySportCenterAndDate: centerID=%s, date=%s, startDate=%s, endDate=%s, dayOfWeek=%d", centerID, date, startDate, endDate, dayOfWeek)
 
 	cursor, err := r.collection.Find(ctx, bson.M{
 		"sport_center_id": centerID,
 		"$or": []bson.M{
 			{"local_date": localDate},
 			{"local_date": bson.M{"$exists": false}, "date": bson.M{"$gte": startDate, "$lt": endDate}},
-			{
-				"day_of_week": dayOfWeek,
-			},
 		},
 		"status": bson.M{"$in": []string{string(domain.BookingStatusConfirmed), "active"}},
 	})
@@ -377,33 +491,33 @@ func (r *BookingRepository) FindByUserIDPaged(ctx context.Context, userID string
 	filter := bson.M{"user_id": userID}
 
 	loc := domain.GetSantiagoLocation()
-	now := time.Now().In(loc)
-	// Normalize today for date comparison
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-	currentHour := now.Hour()
+	nowLocal := time.Now().In(loc)
+	now := nowLocal.UTC()
+	// Canonical start of today's civil date, matching the persisted `date`.
+	today := domain.SantiagoDateStart(nowLocal)
+	currentHour := nowLocal.Hour()
 
+	// v2 documents are classified by their exclusive end instant, so a booking
+	// that started at 22:30 is still "current" until it ends. Legacy documents
+	// (no ends_at) keep the previous date+hour comparison until the backfill.
 	if isOld {
 		filter["$or"] = []bson.M{
-			// Cases where the date is strictly before today
-			{"date": bson.M{"$lt": today}},
-			// Cases where the date is today but the hour has already passed
+			{"ends_at": bson.M{"$lte": now}},
+			{"ends_at": bson.M{"$exists": false}, "date": bson.M{"$lt": today}},
 			{
-				"$and": []bson.M{
-					{"date": bson.M{"$eq": today}},
-					{"hour": bson.M{"$lt": currentHour}},
-				},
+				"ends_at": bson.M{"$exists": false},
+				"date":    bson.M{"$eq": today},
+				"hour":    bson.M{"$lt": currentHour},
 			},
 		}
 	} else {
 		filter["$or"] = []bson.M{
-			// Cases where the date is strictly in the future
-			{"date": bson.M{"$gt": today}},
-			// Cases where the date is today but the hour is current or in the future
+			{"ends_at": bson.M{"$gt": now}},
+			{"ends_at": bson.M{"$exists": false}, "date": bson.M{"$gt": today}},
 			{
-				"$and": []bson.M{
-					{"date": bson.M{"$eq": today}},
-					{"hour": bson.M{"$gte": currentHour}},
-				},
+				"ends_at": bson.M{"$exists": false},
+				"date":    bson.M{"$eq": today},
+				"hour":    bson.M{"$gte": currentHour},
 			},
 		}
 	}
@@ -419,7 +533,7 @@ func (r *BookingRepository) FindByUserIDPaged(ctx context.Context, userID string
 		{{Key: "$skip", Value: int64(skip)}},
 		{{Key: "$limit", Value: int64(limit)}},
 		{{Key: "$lookup", Value: bson.M{
-			"from":         "courts",
+			"from":         "spaces",
 			"localField":   "court_id",
 			"foreignField": "_id",
 			"as":           "court_info",
@@ -454,7 +568,13 @@ func (r *BookingRepository) FindByUserIDPaged(ctx context.Context, userID string
 			"_id":                  1,
 			"sport_center_name":    1,
 			"date":                 1,
+			"local_date":           1,
+			"timezone":             1,
+			"scheduled_at":         1,
+			"ends_at":              1,
 			"hour":                 1,
+			"minutes":              1,
+			"duration_minutes":     1,
 			"court_name":           1,
 			"status":               1,
 			"price":                1,
@@ -489,7 +609,7 @@ func (r *BookingRepository) FindByUserID(ctx context.Context, userID string) ([]
 		{{Key: "$match", Value: filter}},
 		{{Key: "$sort", Value: bson.M{"created_at": -1}}},
 		{{Key: "$lookup", Value: bson.M{
-			"from":         "courts",
+			"from":         "spaces",
 			"localField":   "court_id",
 			"foreignField": "_id",
 			"as":           "court_info",
@@ -611,7 +731,7 @@ func (r *BookingRepository) GetRecurringSeries(ctx context.Context, centerIDs []
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: match}},
 		{{Key: "$lookup", Value: bson.M{
-			"from":         "courts",
+			"from":         "spaces",
 			"localField":   "court_id",
 			"foreignField": "_id",
 			"as":           "court_info",
@@ -856,7 +976,7 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 		{{Key: "$skip", Value: int64((page - 1) * limit)}},
 		{{Key: "$limit", Value: int64(limit)}},
 		{{Key: "$lookup", Value: bson.M{
-			"from":         "courts",
+			"from":         "spaces",
 			"localField":   "court_id",
 			"foreignField": "_id",
 			"as":           "court_info",
@@ -899,11 +1019,15 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 			"customer_phone":       1,
 			"customer_email":       1,
 			"date":                 1,
+			"local_date":           1,
+			"timezone":             1,
 			"hour":                 1,
+			"minutes":              1,
 			"booking_code":         1,
 			"court_name":           1,
 			"status":               1,
 			"price":                1,
+			"final_price":          1,
 			"user_name":            1,
 			"is_guest":             1,
 			"payment_method":       1,
@@ -990,7 +1114,7 @@ func (r *BookingRepository) UndoBalancePayment(ctx context.Context, id primitive
 		return err
 	}
 
-	pendingAmount := booking.Price - booking.PaidAmount
+	pendingAmount := booking.ChargedPrice() - booking.PaidAmount
 	if pendingAmount < 0 {
 		pendingAmount = 0
 	}
@@ -1029,6 +1153,91 @@ func (r *BookingRepository) FindConfirmedBySlot(ctx context.Context, courtID pri
 		return nil, err
 	}
 	return &booking, nil
+}
+
+// FindOccupancy returns every active booking of a space that overlaps the
+// requested interval.
+//
+// v2 documents are resolved by MongoDB with scheduled_at/ends_at. Legacy
+// documents (no scheduled_at) are fetched by a bounded date window and
+// filtered in Go, because their end depends on date + hour + minutes +
+// duration_minutes. Both sets are merged without duplicates.
+func (r *BookingRepository) FindOccupancy(
+	ctx context.Context,
+	courtID primitive.ObjectID,
+	startUTC time.Time,
+	endUTC time.Time,
+	excludeBookingID *primitive.ObjectID,
+) ([]domain.Booking, error) {
+	if !endUTC.After(startUTC) {
+		return nil, fmt.Errorf("invalid occupancy interval: end must be after start")
+	}
+
+	activeStatuses := bson.M{"$in": []domain.BookingStatus{
+		domain.BookingStatusConfirmed,
+		domain.BookingStatusPending,
+	}}
+
+	v2Filter := bson.M{
+		"court_id":     courtID,
+		"scheduled_at": bson.M{"$lt": endUTC.UTC()},
+		"ends_at":      bson.M{"$gt": startUTC.UTC()},
+		"status":       activeStatuses,
+	}
+	legacyFilter := bson.M{
+		"court_id":     courtID,
+		"scheduled_at": bson.M{"$exists": false},
+		"date": bson.M{
+			"$gte": startUTC.UTC().Add(-domain.MaxBookingDuration),
+			"$lt":  endUTC.UTC(),
+		},
+		"status": activeStatuses,
+	}
+	if excludeBookingID != nil {
+		v2Filter["_id"] = bson.M{"$ne": *excludeBookingID}
+		legacyFilter["_id"] = bson.M{"$ne": *excludeBookingID}
+	}
+
+	seen := map[primitive.ObjectID]struct{}{}
+	result := make([]domain.Booking, 0, 8)
+
+	cursor, err := r.collection.Find(ctx, v2Filter)
+	if err != nil {
+		return nil, err
+	}
+	var v2 []domain.Booking
+	if err := cursor.All(ctx, &v2); err != nil {
+		cursor.Close(ctx)
+		return nil, err
+	}
+	cursor.Close(ctx)
+	for _, b := range v2 {
+		seen[b.ID] = struct{}{}
+		result = append(result, b)
+	}
+
+	cursor, err = r.collection.Find(ctx, legacyFilter)
+	if err != nil {
+		return nil, err
+	}
+	var legacy []domain.Booking
+	if err := cursor.All(ctx, &legacy); err != nil {
+		cursor.Close(ctx)
+		return nil, err
+	}
+	cursor.Close(ctx)
+
+	for _, b := range legacy {
+		if _, ok := seen[b.ID]; ok {
+			continue
+		}
+		if !b.EndInstant().After(startUTC.UTC()) {
+			continue
+		}
+		result = append(result, b)
+	}
+
+	return result, nil
 }
 
 func (r *BookingRepository) FindConfirmedByCourtAndDate(ctx context.Context, courtID primitive.ObjectID, date time.Time) ([]domain.Booking, error) {
@@ -1244,4 +1453,43 @@ func buildDateRangeFilter(start, end time.Time) bson.M {
 	startBound, _ := domain.SantiagoDayBounds(start)
 	_, endBound := domain.SantiagoDayBounds(end)
 	return bson.M{"$gte": startBound, "$lt": endBound}
+}
+
+// FindConfirmedWithUserBetween devuelve reservas confirmadas de usuarios
+// autenticados o de invitados con dispositivo registrado, cuyo inicio cae en
+// [from, to). Consulta por una ventana de fechas amplia y filtra por el
+// instante de inicio exacto.
+func (r *BookingRepository) FindConfirmedWithUserBetween(ctx context.Context, from, to time.Time) ([]domain.Booking, error) {
+	dayFrom := from.AddDate(0, 0, -1)
+	dayTo := to.AddDate(0, 0, 1)
+	cursor, err := r.collection.Find(ctx, bson.M{
+		"status": domain.BookingStatusConfirmed,
+		"$and": []bson.M{
+			{"$or": []bson.M{
+				{"user_id": bson.M{"$exists": true, "$ne": ""}},
+				{"guest_device_id": bson.M{"$exists": true, "$ne": ""}},
+			}},
+			{"$or": []bson.M{
+				{"scheduled_at": bson.M{"$gte": from, "$lt": to}},
+				{"scheduled_at": bson.M{"$exists": false}, "date": bson.M{"$gte": dayFrom, "$lt": dayTo}},
+			}},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var candidates []domain.Booking
+	if err := cursor.All(ctx, &candidates); err != nil {
+		return nil, err
+	}
+	out := candidates[:0]
+	for i := range candidates {
+		start := candidates[i].StartInstant()
+		if !start.Before(from) && start.Before(to) {
+			out = append(out, candidates[i])
+		}
+	}
+	return out, nil
 }

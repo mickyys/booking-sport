@@ -76,6 +76,40 @@ func (r *RecurringReservationRepository) FindActiveByCourtAndHour(ctx context.Co
 	return r.FindByCourtAndHour(ctx, courtID, hour, minutes)
 }
 
+// FindAllActive devuelve todas las recurrencias activas. Es la entrada del job
+// que mantiene generadas las próximas ocurrencias.
+func (r *RecurringReservationRepository) FindAllActive(ctx context.Context) ([]domain.RecurringReservation, error) {
+	cursor, err := r.collection.Find(ctx, bson.M{
+		"status": domain.RecurringReservationStatusActive,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var reservations []domain.RecurringReservation
+	if err := cursor.All(ctx, &reservations); err != nil {
+		return nil, err
+	}
+	return reservations, nil
+}
+
+// UpdateGenerationState persiste el resultado de una corrida del generador.
+func (r *RecurringReservationRepository) UpdateGenerationState(ctx context.Context, id primitive.ObjectID, at time.Time, ok bool, errMsg string, created int, issues []domain.RecurringGenerationIssue) error {
+	if issues == nil {
+		issues = []domain.RecurringGenerationIssue{}
+	}
+	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
+		"last_generated_at":    at,
+		"last_generation_ok":   ok,
+		"last_generated_count": created,
+		"generation_error":     errMsg,
+		"generation_issues":    issues,
+		"updated_at":           time.Now(),
+	}})
+	return err
+}
+
 func (r *RecurringReservationRepository) FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error) {
 	cursor, err := r.collection.Find(ctx, bson.M{
 		"sport_center_id": centerID,

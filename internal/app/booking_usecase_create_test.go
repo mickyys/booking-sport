@@ -14,10 +14,14 @@ import (
 // the bookings passed to Create.
 type mockBookingRepoForCreate struct {
 	*mockBookingRepoForHold
-	Created []*domain.Booking
+	Created   []*domain.Booking
+	CreateErr error
 }
 
 func (m *mockBookingRepoForCreate) Create(ctx context.Context, booking *domain.Booking) error {
+	if m.CreateErr != nil {
+		return m.CreateErr
+	}
 	m.Created = append(m.Created, booking)
 	return nil
 }
@@ -187,7 +191,7 @@ func TestCreate_RejectsHourNotFound(t *testing.T) {
 		Hour:    12,
 		Date:    time.Now().AddDate(0, 0, 2),
 	})
-	assertErrorContains(t, err, "hour 12 not found")
+	assertErrorContains(t, err, "hour 12:00 not found in schedule")
 	if len(bookingRepo.Created) != 0 {
 		t.Errorf("expected no booking to be created, got %d", len(bookingRepo.Created))
 	}
@@ -342,5 +346,90 @@ func TestCreateInternalBooking_RejectsConfirmedConflict(t *testing.T) {
 	assertErrorContains(t, err, "ya existe un proceso de reserva o reserva confirmada")
 	if len(bookingRepo.Created) != 0 {
 		t.Errorf("expected no booking to be created, got %d", len(bookingRepo.Created))
+	}
+}
+
+// newPricedCreateBookingUseCase arma un use case con el servicio de precios
+// real (repos en memoria) para probar el flujo completo de descuentos.
+func newPricedCreateBookingUseCase(t *testing.T, bookingRepo *mockBookingRepoForCreate) (*BookingUseCase, *pricingFixture) {
+	t.Helper()
+	f := newPricingFixture(t)
+	uc := &BookingUseCase{
+		repo:                     bookingRepo,
+		holdRepo:                 &mockSlotHoldRepo{},
+		courtRepo:                &mockCourtRepoForRecurring{FindByIDFn: func(context.Context, primitive.ObjectID) (*domain.Court, error) { return f.court, nil }},
+		centerRepo:               &mockCenterRepoForRecurring{},
+		recurringReservationRepo: &mockRecurringReservationRepo{},
+	}
+	uc.SetPricingService(f.service)
+	return uc, f
+}
+
+func TestCreate_AppliesDiscountCodeAndConfirmsUsage(t *testing.T) {
+	bookingRepo := &mockBookingRepoForCreate{mockBookingRepoForHold: &mockBookingRepoForHold{}}
+	uc, f := newPricedCreateBookingUseCase(t, bookingRepo)
+	code := f.addCode(t, "PROMO10",
+		domain.DiscountValue{Type: domain.DiscountTypePercent, Value: 10},
+		domain.UsageLimit{MaxUses: 5, MaxUsesPerUser: 1, Period: domain.DiscountPeriodTotal},
+		domain.DiscountScope{Mode: domain.DiscountScopeAll},
+	)
+
+	booking := &domain.Booking{
+		CourtID:      f.court.ID,
+		Hour:         10,
+		Date:         time.Now().AddDate(0, 0, 2),
+		DiscountCode: "promo10",
+		GuestDetails: &domain.GuestDetails{Name: "Juan Perez", Email: "ana@example.com"},
+	}
+	if err := uc.Create(context.Background(), booking); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	created := bookingRepo.Created[0]
+	if created.Price != 30000 || created.FinalPrice != 27000 {
+		t.Fatalf("price/final = %v/%v, want 30000/27000", created.Price, created.FinalPrice)
+	}
+	if created.ChargedPrice() != 27000 {
+		t.Fatalf("ChargedPrice() = %v, want 27000", created.ChargedPrice())
+	}
+	if created.Pricing == nil || created.Pricing.CodeID != code.ID.Hex() {
+		t.Fatalf("pricing snapshot = %+v, want code %s", created.Pricing, code.ID.Hex())
+	}
+	if code.UsedCount != 1 {
+		t.Fatalf("used_count = %d, want 1", code.UsedCount)
+	}
+	usage, err := f.discount.FindUsageByBookingID(context.Background(), created.ID)
+	if err != nil || usage == nil {
+		t.Fatalf("usage not stored: %v", err)
+	}
+	if usage.Status != domain.DiscountUsageConfirmed {
+		t.Fatalf("usage status = %q, want confirmed for a confirmed booking", usage.Status)
+	}
+}
+
+func TestCreate_ReleasesDiscountWhenPersistFails(t *testing.T) {
+	bookingRepo := &mockBookingRepoForCreate{
+		mockBookingRepoForHold: &mockBookingRepoForHold{},
+		CreateErr:              domain.NewConflictError("slot ocupado"),
+	}
+	uc, f := newPricedCreateBookingUseCase(t, bookingRepo)
+	code := f.addCode(t, "PROMO10",
+		domain.DiscountValue{Type: domain.DiscountTypePercent, Value: 10},
+		domain.UsageLimit{MaxUses: 5, MaxUsesPerUser: 1, Period: domain.DiscountPeriodTotal},
+		domain.DiscountScope{Mode: domain.DiscountScopeAll},
+	)
+
+	err := uc.Create(context.Background(), &domain.Booking{
+		CourtID:      f.court.ID,
+		Hour:         10,
+		Date:         time.Now().AddDate(0, 0, 2),
+		DiscountCode: "PROMO10",
+		GuestDetails: &domain.GuestDetails{Name: "Juan Perez", Email: "ana@example.com"},
+	})
+	if err == nil {
+		t.Fatal("Create() should fail when persistence fails")
+	}
+	if code.UsedCount != 0 {
+		t.Fatalf("used_count = %d, want 0 after rollback", code.UsedCount)
 	}
 }

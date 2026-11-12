@@ -21,11 +21,13 @@ type mockRecurringReservationRepo struct {
 	FindAdminByCenterIDFn        func(ctx context.Context, centerID primitive.ObjectID) ([]domain.RecurringReservation, error)
 	FindByCenterIDAndDayOfWeekFn func(ctx context.Context, centerID primitive.ObjectID, dayOfWeek int) ([]domain.RecurringReservation, error)
 	FindByCourtIDFn              func(ctx context.Context, courtID primitive.ObjectID) ([]domain.RecurringReservation, error)
+	FindAllActiveFn              func(ctx context.Context) ([]domain.RecurringReservation, error)
 	UpdateFn                     func(ctx context.Context, reservation *domain.RecurringReservation) error
 	CancelFn                     func(ctx context.Context, id primitive.ObjectID, cancelledBy string, reason string) error
 	FinishFn                     func(ctx context.Context, id primitive.ObjectID, finishedBy string, reason string, finishedAt time.Time) error
 	DeleteFn                     func(ctx context.Context, id primitive.ObjectID) error
 	AddCancelledDateFn           func(ctx context.Context, id primitive.ObjectID, date string) error
+	UpdateGenerationStateFn      func(ctx context.Context, id primitive.ObjectID, at time.Time, ok bool, errMsg string, created int, issues []domain.RecurringGenerationIssue) error
 
 	CreateCalls int
 }
@@ -94,6 +96,20 @@ func (m *mockRecurringReservationRepo) FindByCourtID(ctx context.Context, courtI
 	return nil, nil
 }
 
+func (m *mockRecurringReservationRepo) FindAllActive(ctx context.Context) ([]domain.RecurringReservation, error) {
+	if m.FindAllActiveFn != nil {
+		return m.FindAllActiveFn(ctx)
+	}
+	return nil, nil
+}
+
+func (m *mockRecurringReservationRepo) UpdateGenerationState(ctx context.Context, id primitive.ObjectID, at time.Time, ok bool, errMsg string, created int, issues []domain.RecurringGenerationIssue) error {
+	if m.UpdateGenerationStateFn != nil {
+		return m.UpdateGenerationStateFn(ctx, id, at, ok, errMsg, created, issues)
+	}
+	return nil
+}
+
 func (m *mockRecurringReservationRepo) Update(ctx context.Context, reservation *domain.RecurringReservation) error {
 	if m.UpdateFn != nil {
 		return m.UpdateFn(ctx, reservation)
@@ -150,6 +166,14 @@ func (m *mockCourtRepoForRecurring) FindByID(ctx context.Context, id primitive.O
 	}, nil
 }
 
+func (m *mockCourtRepoForRecurring) FindAnyByID(ctx context.Context, id primitive.ObjectID) (*domain.Court, error) {
+	return m.FindByID(ctx, id)
+}
+
+func (m *mockCourtRepoForRecurring) FindAllByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.Court, error) {
+	return m.FindByCenterID(ctx, centerID)
+}
+
 func (m *mockCourtRepoForRecurring) FindByCenterID(ctx context.Context, centerID primitive.ObjectID) ([]domain.Court, error) {
 	return nil, nil
 }
@@ -182,6 +206,10 @@ func (m *mockCourtRepoForRecurring) SyncPartialPaymentSlots(ctx context.Context,
 	return 0, nil
 }
 
+func (m *mockCourtRepoForRecurring) SyncPaymentModeSlots(ctx context.Context, centerID primitive.ObjectID, paymentRequired bool) (int64, error) {
+	return 0, nil
+}
+
 var _ CourtRepository = (*mockCourtRepoForRecurring)(nil)
 
 // ---------- Mock SportCenterRepository (stub) ----------
@@ -201,6 +229,22 @@ func (m *mockCenterRepoForRecurring) FindBySlug(ctx context.Context, slug string
 	return nil, nil
 }
 
+func (m *mockCenterRepoForRecurring) FindBySubdomain(ctx context.Context, subdomain string) (*domain.SportCenter, error) {
+	return nil, nil
+}
+
+func (m *mockCenterRepoForRecurring) FindByNameAndRUT(ctx context.Context, name, rut string) (*domain.SportCenter, error) {
+	return nil, nil
+}
+
+func (m *mockCenterRepoForRecurring) FindByAdminEmail(ctx context.Context, email string) (*domain.SportCenter, error) {
+	return nil, nil
+}
+
+func (m *mockCenterRepoForRecurring) FindByHost(ctx context.Context, host string) (*domain.SportCenter, error) {
+	return nil, nil
+}
+
 func (m *mockCenterRepoForRecurring) FindByUserID(ctx context.Context, userID string) ([]domain.SportCenter, error) {
 	if m.FindByUserIDFn != nil {
 		return m.FindByUserIDFn(ctx, userID)
@@ -212,15 +256,15 @@ func (m *mockCenterRepoForRecurring) FindAll(ctx context.Context) ([]domain.Spor
 	return nil, nil
 }
 
-func (m *mockCenterRepoForRecurring) FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int) ([]domain.SportCenter, int64, error) {
-	return nil, 0, nil
+func (m *mockCenterRepoForRecurring) FindPaged(ctx context.Context, page, limit int, name, city string, date *time.Time, hour *int, lat, lng, radiusKm *float64, priorityCity string) ([]domain.SportCenter, int64, bool, error) {
+	return nil, 0, false, nil
 }
 
 func (m *mockCenterRepoForRecurring) Update(ctx context.Context, center *domain.SportCenter) error {
 	return nil
 }
 
-func (m *mockCenterRepoForRecurring) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string) error {
+func (m *mockCenterRepoForRecurring) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
 	return nil
 }
 
@@ -230,6 +274,10 @@ func (m *mockCenterRepoForRecurring) Create(ctx context.Context, center *domain.
 
 func (m *mockCenterRepoForRecurring) GetCities(ctx context.Context) ([]string, error) {
 	return nil, nil
+}
+
+func (m *mockCenterRepoForRecurring) UpdateMercadoPagoConfig(ctx context.Context, id primitive.ObjectID, config *domain.MercadoPagoConfig) error {
+	return nil
 }
 
 var _ SportCenterRepository = (*mockCenterRepoForRecurring)(nil)
