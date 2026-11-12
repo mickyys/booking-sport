@@ -215,6 +215,7 @@ func main() {
 		}
 		cancelHealth()
 		bookingUC.SetOccupancyCoordinator(coordinator)
+		memberVerificationUC.SetLimiter(coordinator)
 		// Modo por defecto de los centros sin occupancy_authority propio.
 		// "off" permite activar el coordinador centro por centro.
 		defaultMode, ok := app.ParseOccupancyMode(getEnv("BOOKING_OCCUPANCY_MODE", string(app.OccupancyAuthority)))
@@ -355,10 +356,8 @@ func main() {
 	r.GET("/api/cities", sportCenterHandler.ListCities)
 	r.GET("/api/sport-centers/slug/:slug", sportCenterHandler.GetBySlug)
 	r.GET("/api/sport-centers/slug/:slug/reviews", infra.NewGoogleReviewsHandler(sportCenterUC).GetBySlug)
-	r.POST("/api/sport-centers", sportCenterHandler.Create)
 	r.POST("/api/sport-centers/onboard", sportCenterHandler.OnboardCreate)
 	r.GET("/api/sport-centers/onboard/verification-status", sportCenterHandler.OnboardVerificationStatus)
-	r.PUT("/api/sport-centers/:id", sportCenterHandler.Update)
 	r.GET("/api/sport-centers/:id/schedules", sportCenterHandler.GetSchedules)
 	r.GET("/api/courts", courtHandler.List)
 	r.POST("/api/courts", courtHandler.CreateCourt)
@@ -448,7 +447,6 @@ func main() {
 		api.DELETE("/admin/courts/:id", courtHandler.DeleteAdminCourt)
 		api.PUT("/admin/courts/:id/schedule", courtHandler.ConfigureSchedule)
 		api.PATCH("/admin/courts/:id/schedule/slot", courtHandler.UpdateScheduleSlot)
-		api.PUT("/admin/sport-centers/:id", sportCenterHandler.Update)
 		api.PATCH("/admin/sport-centers/:id/settings", sportCenterHandler.UpdateSportCenterSettings)
 		api.GET("/admin/sport-centers/:id", sportCenterHandler.GetByID)
 		api.GET("/admin/facilities", facilityHandler.GetAdmin)
@@ -522,8 +520,12 @@ func main() {
 			sa.POST("/sport-centers", superAdminHandler.Audit("center.create", "sport_center", "id"), sportCenterHandler.OnboardCreate)
 			sa.GET("/sport-centers/:id", superAdminHandler.GetCenter)
 			sa.POST("/sport-centers/:id/admin-invite/resend", superAdminHandler.Audit("center.admin_invite_resend", "sport_center", "id"), sportCenterHandler.ResendCenterAdminInvite)
+			// Reemplaza el documento completo del centro: solo plataforma.
+			sa.PUT("/sport-centers/:id", superAdminHandler.Audit("center.replace", "sport_center", "id"), sportCenterHandler.Update)
+			// Primer mes gratis de la suscripción: cobro de la plataforma.
+			sa.PUT("/sport-centers/:id/first-month-free", superAdminHandler.Audit("center.first_month_free", "sport_center", "id"), sportCenterHandler.SetCenterFirstMonthFree)
 			sa.POST("/sport-centers/:id/onboarding/complete", superAdminHandler.Audit("center.onboarding_complete", "sport_center", "id"), sportCenterHandler.ForceCompleteCenterOnboarding)
-			sa.PATCH("/sport-centers/:id/settings", superAdminHandler.Audit("center.settings", "sport_center", "id"), sportCenterHandler.UpdateSportCenterSettings)
+			sa.PATCH("/sport-centers/:id/settings", superAdminHandler.Audit("center.settings", "sport_center", "id"), sportCenterHandler.SuperAdminUpdateSettings)
 			sa.PUT("/sport-centers/:id/status", superAdminHandler.SetStatus)
 			sa.PUT("/sport-centers/:id/featured", superAdminHandler.SetFeatured)
 			sa.GET("/sport-centers/:id/commercial", commercialHandler.AdminGet)

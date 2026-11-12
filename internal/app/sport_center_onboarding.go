@@ -38,17 +38,16 @@ const (
 // UpdateOnboardingInput es el payload de una etapa del wizard. Solo se aplican
 // los campos correspondientes a la etapa indicada en Step.
 type UpdateOnboardingInput struct {
-	Step           int
-	Nombre         *string
-	Rut            *string
-	Email          *string
-	Direccion      *string
-	Telefono       *string
-	Templates      []domain.SpaceTemplate
-	PaymentMode    *string
-	ImageURL       *string
-	FirstMonthFree *bool
-	Finalize       bool
+	Step        int
+	Nombre      *string
+	Rut         *string
+	Email       *string
+	Direccion   *string
+	Telefono    *string
+	Templates   []domain.SpaceTemplate
+	PaymentMode *string
+	ImageURL    *string
+	Finalize    bool
 }
 
 var chileanPhonePattern = regexp.MustCompile(`^\+56\d{8,10}$`)
@@ -205,9 +204,6 @@ func (uc *SportCenterUseCase) UpdateSportCenterOnboarding(ctx context.Context, u
 	case OnboardingStepImagen:
 		if input.ImageURL != nil {
 			center.ImageURL = *input.ImageURL
-		}
-		if input.FirstMonthFree != nil {
-			center.FirstMonthFree = *input.FirstMonthFree
 		}
 	default:
 		// Step 5 (resumen) no persiste datos nuevos; se valida al finalizar.

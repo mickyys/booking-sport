@@ -572,15 +572,60 @@ func (h *SportCenterHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"center": center, "cancellation_policy": cancellationPolicy})
 }
 
-// UpdateSportCenterSettings actualiza la configuración de un centro deportivo
+// UpdateSportCenterSettings actualiza la configuración del centro del usuario
+// autenticado.
+//
+//	PATCH /admin/sport-centers/:id/settings
+//
+// Solo permite editar el centro propio. La comisión de la plataforma
+// (marketplace_fee_percent) no es editable por el centro: la fija el
+// superadmin con SuperAdminUpdateSettings.
 func (h *SportCenterHandler) UpdateSportCenterSettings(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := primitive.ObjectIDFromHex(idStr)
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in token"})
+		return
+	}
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID format"})
 		return
 	}
+	centers, err := h.useCase.FindByUserID(c.Request.Context(), userID.(string))
+	if err != nil || len(centers) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No sport center associated with this user"})
+		return
+	}
+	owned := false
+	for _, center := range centers {
+		if center.ID == id {
+			owned = true
+			break
+		}
+	}
+	if !owned {
+		c.JSON(http.StatusForbidden, gin.H{"error": "no tienes acceso a este centro"})
+		return
+	}
+	h.applySettings(c, id, false)
+}
 
+// SuperAdminUpdateSettings actualiza la configuración de cualquier centro. A
+// diferencia de la ruta del centro, permite fijar la comisión de la plataforma.
+//
+//	PATCH /superadmin/sport-centers/:id/settings
+func (h *SportCenterHandler) SuperAdminUpdateSettings(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID format"})
+		return
+	}
+	h.applySettings(c, id, true)
+}
+
+// applySettings aplica el cuerpo de settings. Con platform=false descarta los
+// campos reservados a la plataforma.
+func (h *SportCenterHandler) applySettings(c *gin.Context, id primitive.ObjectID, platform bool) {
 	var body struct {
 		Slug                  *string                     `json:"slug"`
 		CancellationHours     *int                        `json:"cancellation_hours"`
@@ -599,6 +644,9 @@ func (h *SportCenterHandler) UpdateSportCenterSettings(c *gin.Context) {
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+	if !platform {
+		body.MarketplaceFeePercent = nil
 	}
 
 	if body.GooglePlaceID != nil {
@@ -660,17 +708,16 @@ func (h *SportCenterHandler) UpdateMySportCenterOnboarding(c *gin.Context) {
 	userIDStr := userID.(string)
 
 	var body struct {
-		Step           int                    `json:"step"`
-		Nombre         *string                `json:"nombre,omitempty"`
-		Rut            *string                `json:"rut,omitempty"`
-		Email          *string                `json:"email,omitempty"`
-		Direccion      *string                `json:"direccion,omitempty"`
-		Telefono       *string                `json:"telefono,omitempty"`
-		Templates      []domain.SpaceTemplate `json:"templates,omitempty"`
-		PaymentMode    *string                `json:"payment_mode,omitempty"`
-		ImageURL       *string                `json:"image_url,omitempty"`
-		FirstMonthFree *bool                  `json:"first_month_free,omitempty"`
-		Finalize       bool                   `json:"finalize,omitempty"`
+		Step        int                    `json:"step"`
+		Nombre      *string                `json:"nombre,omitempty"`
+		Rut         *string                `json:"rut,omitempty"`
+		Email       *string                `json:"email,omitempty"`
+		Direccion   *string                `json:"direccion,omitempty"`
+		Telefono    *string                `json:"telefono,omitempty"`
+		Templates   []domain.SpaceTemplate `json:"templates,omitempty"`
+		PaymentMode *string                `json:"payment_mode,omitempty"`
+		ImageURL    *string                `json:"image_url,omitempty"`
+		Finalize    bool                   `json:"finalize,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -678,17 +725,16 @@ func (h *SportCenterHandler) UpdateMySportCenterOnboarding(c *gin.Context) {
 	}
 
 	input := app.UpdateOnboardingInput{
-		Step:           body.Step,
-		Nombre:         body.Nombre,
-		Rut:            body.Rut,
-		Email:          body.Email,
-		Direccion:      body.Direccion,
-		Telefono:       body.Telefono,
-		Templates:      body.Templates,
-		PaymentMode:    body.PaymentMode,
-		ImageURL:       body.ImageURL,
-		FirstMonthFree: body.FirstMonthFree,
-		Finalize:       body.Finalize,
+		Step:        body.Step,
+		Nombre:      body.Nombre,
+		Rut:         body.Rut,
+		Email:       body.Email,
+		Direccion:   body.Direccion,
+		Telefono:    body.Telefono,
+		Templates:   body.Templates,
+		PaymentMode: body.PaymentMode,
+		ImageURL:    body.ImageURL,
+		Finalize:    body.Finalize,
 	}
 
 	if err := h.useCase.UpdateSportCenterOnboarding(c.Request.Context(), userIDStr, input); err != nil {
@@ -786,6 +832,31 @@ func (h *SportCenterHandler) ForceCompleteCenterOnboarding(c *gin.Context) {
 	}
 	c.Set("audit_reason", strings.TrimSpace(body.Reason))
 	c.JSON(http.StatusOK, gin.H{"message": "onboarding completado"})
+}
+
+// SetCenterFirstMonthFree activa o desactiva el primer mes gratis de la
+// suscripción del centro. Es un cobro de la plataforma: solo lo define el
+// superadmin.
+//
+//	PUT /superadmin/sport-centers/:id/first-month-free { "enabled": true }
+func (h *SportCenterHandler) SetCenterFirstMonthFree(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.Enabled == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "indica enabled: true o false"})
+		return
+	}
+	if err := h.useCase.SetFirstMonthFree(c.Request.Context(), id, *body.Enabled); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"first_month_free": *body.Enabled})
 }
 
 func (h *SportCenterHandler) GetByID(c *gin.Context) {

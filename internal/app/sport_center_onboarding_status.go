@@ -231,3 +231,16 @@ func (uc *SportCenterUseCase) markOnboardingCompleted(ctx context.Context, c *do
 	c.UpdatedAt = time.Now()
 	return uc.repo.Update(ctx, c)
 }
+
+// SetFirstMonthFree activa o desactiva el primer mes gratis de la suscripción
+// del centro. Solo lo invoca el superadmin: es un cobro de la plataforma, no
+// una opción del centro.
+func (uc *SportCenterUseCase) SetFirstMonthFree(ctx context.Context, centerID primitive.ObjectID, enabled bool) error {
+	c, err := uc.repo.FindByID(ctx, centerID)
+	if err != nil || c == nil {
+		return errors.New("no se encontró el centro deportivo")
+	}
+	c.FirstMonthFree = enabled
+	c.UpdatedAt = time.Now()
+	return uc.repo.Update(ctx, c)
+}

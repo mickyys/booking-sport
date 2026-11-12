@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -67,12 +68,15 @@ func TestMemberVerificationHappyPath(t *testing.T) {
 	service, repo, mailer, member := newVerificationFixture(t)
 	ctx := context.Background()
 
-	result, err := service.RequestVerification(ctx, member.SportCenterID, "12.345.678-5", "ANA@example.com", "10.0.0.1")
+	result, err := service.RequestVerification(ctx, member.SportCenterID, "12.345.678-5", "10.0.0.1")
 	if err != nil {
 		t.Fatalf("RequestVerification() error = %v", err)
 	}
 	if result.VerificationID == "" {
 		t.Fatal("verification id is empty")
+	}
+	if result.MaskedEmail != "a**@e******.com" {
+		t.Fatalf("masked email = %q", result.MaskedEmail)
 	}
 	if len(repo.verifs) != 1 {
 		t.Fatalf("verifications stored = %d, want 1", len(repo.verifs))
@@ -110,7 +114,7 @@ func TestMemberVerificationWrongCodeIncrementsAttempts(t *testing.T) {
 	service, repo, _, member := newVerificationFixture(t)
 	ctx := context.Background()
 
-	result, err := service.RequestVerification(ctx, member.SportCenterID, member.DocumentNumber, member.Email, "10.0.0.2")
+	result, err := service.RequestVerification(ctx, member.SportCenterID, member.DocumentNumber, "10.0.0.2")
 	if err != nil {
 		t.Fatalf("RequestVerification() error = %v", err)
 	}
@@ -128,7 +132,7 @@ func TestMemberVerificationBlocksAfterMaxAttempts(t *testing.T) {
 	service, repo, _, member := newVerificationFixture(t)
 	ctx := context.Background()
 
-	result, err := service.RequestVerification(ctx, member.SportCenterID, member.DocumentNumber, member.Email, "10.0.0.3")
+	result, err := service.RequestVerification(ctx, member.SportCenterID, member.DocumentNumber, "10.0.0.3")
 	if err != nil {
 		t.Fatalf("RequestVerification() error = %v", err)
 	}
@@ -140,16 +144,13 @@ func TestMemberVerificationBlocksAfterMaxAttempts(t *testing.T) {
 	}
 }
 
-func TestMemberVerificationGenericWhenMemberNotFound(t *testing.T) {
+func TestMemberVerificationNotFound(t *testing.T) {
 	service, repo, mailer, member := newVerificationFixture(t)
-	ctx := context.Background()
 
-	result, err := service.RequestVerification(ctx, member.SportCenterID, "11111111-1", "otro@example.com", "10.0.0.4")
-	if err != nil {
-		t.Fatalf("RequestVerification() error = %v", err)
-	}
-	if result.VerificationID == "" {
-		t.Fatal("generic response should still include an id")
+	_, err := service.RequestVerification(context.Background(), member.SportCenterID, "11111111-1", "10.0.0.4")
+	var appErr *domain.AppError
+	if !errors.As(err, &appErr) || appErr.StatusCode == 0 {
+		t.Fatalf("err = %v, want AppError", err)
 	}
 	if len(repo.verifs) != 0 {
 		t.Fatalf("verifications stored = %d, want 0", len(repo.verifs))
@@ -161,15 +162,31 @@ func TestMemberVerificationGenericWhenMemberNotFound(t *testing.T) {
 	}
 }
 
-func TestMemberVerificationRejectsEmailMismatch(t *testing.T) {
+func TestMemberVerificationNoEmail(t *testing.T) {
 	service, repo, _, member := newVerificationFixture(t)
-	ctx := context.Background()
+	member.Email = ""
 
-	if _, err := service.RequestVerification(ctx, member.SportCenterID, member.DocumentNumber, "otro@example.com", "10.0.0.5"); err != nil {
-		t.Fatalf("RequestVerification() error = %v", err)
+	_, err := service.RequestVerification(context.Background(), member.SportCenterID, member.DocumentNumber, "10.0.0.5")
+	var appErr *domain.AppError
+	if !errors.As(err, &appErr) || appErr.StatusCode != 422 {
+		t.Fatalf("err = %v, want 422", err)
 	}
 	if len(repo.verifs) != 0 {
-		t.Fatalf("verifications stored = %d, want 0 for email mismatch", len(repo.verifs))
+		t.Fatalf("verifications stored = %d, want 0", len(repo.verifs))
+	}
+}
+
+func TestMaskEmail(t *testing.T) {
+	cases := map[string]string{
+		"hector@gmail.com": "h*****@g****.com",
+		"a@b.cl":           "a*@b*.cl",
+		"ana@example.com":  "a**@e******.com",
+		"invalid":          "",
+	}
+	for in, want := range cases {
+		if got := maskEmail(in); got != want {
+			t.Errorf("maskEmail(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -177,11 +194,11 @@ func TestMemberVerificationRateLimit(t *testing.T) {
 	service, repo, _, member := newVerificationFixture(t)
 	ctx := context.Background()
 
-	if _, err := service.RequestVerification(ctx, member.SportCenterID, member.DocumentNumber, member.Email, "10.0.0.6"); err != nil {
+	if _, err := service.RequestVerification(ctx, member.SportCenterID, member.DocumentNumber, "10.0.0.6"); err != nil {
 		t.Fatalf("first request error = %v", err)
 	}
-	if _, err := service.RequestVerification(ctx, member.SportCenterID, member.DocumentNumber, member.Email, "10.0.0.6"); err != nil {
-		t.Fatalf("second request error = %v", err)
+	if _, err := service.RequestVerification(ctx, member.SportCenterID, member.DocumentNumber, "10.0.0.6"); err == nil {
+		t.Fatal("second request should be rate limited")
 	}
 	if len(repo.verifs) != 1 {
 		t.Fatalf("verifications stored = %d, want 1 (cooldown should block the second)", len(repo.verifs))

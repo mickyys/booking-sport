@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -34,7 +35,6 @@ type verifyRequestInput struct {
 	CenterID   string `json:"center_id"`
 	CenterSlug string `json:"center_slug"`
 	Document   string `json:"document" binding:"required"`
-	Email      string `json:"email" binding:"required"`
 }
 
 // RequestVerification envía un código al correo registrado del socio.
@@ -49,8 +49,13 @@ func (h *MembershipHandler) RequestVerification(c *gin.Context) {
 		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
 		return
 	}
-	result, err := h.verification.RequestVerification(c.Request.Context(), center.ID, input.Document, input.Email, c.ClientIP())
+	result, err := h.verification.RequestVerification(c.Request.Context(), center.ID, input.Document, c.ClientIP())
 	if err != nil {
+		var appErr *domain.AppError
+		if errors.As(err, &appErr) {
+			c.JSON(appErr.StatusCode, gin.H{"error": appErr.Message})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "no pudimos enviar el código, intenta nuevamente"})
 		return
 	}
