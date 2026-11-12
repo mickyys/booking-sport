@@ -28,6 +28,38 @@ type BookingHandler struct {
 	useCase     *app.BookingUseCase
 	baseHandler *BaseHandler
 	facility    *app.FacilityBookingUseCase
+	errs        *ErrorRecorder
+}
+
+// SetErrorRecorder habilita el registro de errores de pago y reserva.
+func (h *BookingHandler) SetErrorRecorder(r *ErrorRecorder) {
+	h.errs = r
+}
+
+// bookingErrorContext extrae los datos de la reserva y del cliente para el log de errores.
+func bookingErrorContext(b *domain.Booking) ErrorContext {
+	ec := ErrorContext{
+		BookingID:     b.ID.Hex(),
+		BookingCode:   b.BookingCode,
+		SportCenterID: b.SportCenterID.Hex(),
+		CourtID:       b.CourtID.Hex(),
+		UserID:        b.UserID,
+	}
+	if b.ID.IsZero() {
+		ec.BookingID = ""
+	}
+	if b.SportCenterID.IsZero() {
+		ec.SportCenterID = ""
+	}
+	if b.CourtID.IsZero() {
+		ec.CourtID = ""
+	}
+	if b.GuestDetails != nil {
+		ec.UserName = b.GuestDetails.Name
+		ec.UserEmail = b.GuestDetails.Email
+		ec.UserPhone = b.GuestDetails.Phone
+	}
+	return ec
 }
 
 func NewBookingHandler(uc *app.BookingUseCase) *BookingHandler {
@@ -493,7 +525,9 @@ func (h *BookingHandler) CancelBooking(c *gin.Context) {
 			"user_id", userID.(string),
 			"error", err,
 		)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		trackingID := h.errs.Record(c, domain.ErrOpBookingCancel, err, http.StatusInternalServerError,
+			ErrorContext{BookingID: bookingID.Hex(), UserID: userID.(string)})
+		c.JSON(http.StatusInternalServerError, errorBody(err, trackingID))
 		return
 	}
 
@@ -752,7 +786,12 @@ func (h *BookingHandler) CreateBooking(c *gin.Context) {
 			"error", err,
 			"court_id", booking.Booking.CourtID.Hex(),
 		)
-		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
+		status := errorStatusCode(err)
+		trackingID := ""
+		if status >= http.StatusInternalServerError {
+			trackingID = h.errs.Record(c, domain.ErrOpBookingCreate, err, status, bookingErrorContext(&booking.Booking))
+		}
+		c.JSON(status, errorBody(err, trackingID))
 		return
 	}
 
@@ -823,7 +862,12 @@ func (h *BookingHandler) RescheduleBooking(c *gin.Context) {
 		h.baseHandler.GetUserID(c),
 	)
 	if err != nil {
-		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
+		status := errorStatusCode(err)
+		trackingID := ""
+		if status >= http.StatusInternalServerError {
+			trackingID = h.errs.Record(c, domain.ErrOpBookingReschedule, err, status, ErrorContext{BookingID: id.Hex()})
+		}
+		c.JSON(status, errorBody(err, trackingID))
 		return
 	}
 
@@ -887,7 +931,9 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 			"booking_code", input.Booking.BookingCode,
 			"error", err,
 		)
-		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
+		status := errorStatusCode(err)
+		trackingID := h.errs.Record(c, domain.ErrOpPaymentCreate, err, status, bookingErrorContext(&input.Booking))
+		c.JSON(status, errorBody(err, trackingID))
 		return
 	}
 
@@ -998,6 +1044,7 @@ func (h *BookingHandler) MercadoPagoWebhook(c *gin.Context) {
 					"payment_id", event.Data.ID,
 					"error", processErr,
 				)
+				h.errs.RecordBackground(traceID, domain.ErrOpPaymentWebhook, processErr, ErrorContext{MPPaymentID: event.Data.ID})
 			}
 		}
 
@@ -1023,6 +1070,7 @@ func (h *BookingHandler) MercadoPagoWebhook(c *gin.Context) {
 				"payment_id", id,
 				"error", processErr,
 			)
+			h.errs.RecordBackground(traceID, domain.ErrOpPaymentWebhook, processErr, ErrorContext{MPPaymentID: id})
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "received"})
 		return

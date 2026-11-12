@@ -17,7 +17,13 @@ import (
 )
 
 type SuperAdminHandler struct {
-	repo *mongo.SuperAdminRepository
+	repo     *mongo.SuperAdminRepository
+	errorLog *mongo.ErrorLogRepository
+}
+
+// SetErrorLogRepository habilita las rutas del log de errores de pago y reserva.
+func (h *SuperAdminHandler) SetErrorLogRepository(r *mongo.ErrorLogRepository) {
+	h.errorLog = r
 }
 
 func NewSuperAdminHandler(repo *mongo.SuperAdminRepository) *SuperAdminHandler {
@@ -280,4 +286,70 @@ func (h *SuperAdminHandler) ListAudit(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"items": items, "total": total, "page": page, "limit": limit})
+}
+
+// ListErrorLogs: GET /superadmin/error-logs?q=&operation=&center_id=&resolved=&from=&to=&page=&limit=
+func (h *SuperAdminHandler) ListErrorLogs(c *gin.Context) {
+	page, limit := pageParams(c, 30, 100)
+	f := mongo.ErrorLogFilter{
+		Query:         strings.TrimSpace(c.Query("q")),
+		Operation:     c.Query("operation"),
+		SportCenterID: c.Query("center_id"),
+	}
+	if v := c.Query("resolved"); v != "" {
+		b := v == "true"
+		f.Resolved = &b
+	}
+	if t, err := time.Parse("2006-01-02", c.Query("from")); err == nil {
+		f.From = t
+	}
+	if t, err := time.Parse("2006-01-02", c.Query("to")); err == nil {
+		f.To = t.AddDate(0, 0, 1)
+	}
+	items, total, err := h.errorLog.List(c.Request.Context(), f, page, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items, "total": total, "page": page, "limit": limit})
+}
+
+// GetErrorLog: GET /superadmin/error-logs/:tracking_id
+func (h *SuperAdminHandler) GetErrorLog(c *gin.Context) {
+	item, err := h.errorLog.GetByTrackingID(c.Request.Context(), strings.ToUpper(c.Param("tracking_id")))
+	if errors.Is(err, domain.ErrNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "error log not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, item)
+}
+
+// ResolveErrorLog: PATCH /superadmin/error-logs/:id/resolve  { "resolved": true }
+func (h *SuperAdminHandler) ResolveErrorLog(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	body := struct {
+		Resolved *bool `json:"resolved"`
+	}{}
+	_ = c.ShouldBindJSON(&body)
+	resolved := body.Resolved == nil || *body.Resolved
+	actor, _ := c.Get("user_id")
+	actorID, _ := actor.(string)
+	err = h.errorLog.SetResolved(c.Request.Context(), id, resolved, actorID)
+	if errors.Is(err, domain.ErrNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "error log not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"resolved": resolved})
 }
