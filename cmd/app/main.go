@@ -277,7 +277,11 @@ func main() {
 
 	bookingHandler := infra.NewBookingHandler(bookingUC)
 	bookingHandler.SetFacilityBookings(facilityBookingUC)
+	errorLogRepo := mongo.NewErrorLogRepository(db)
+	errorRecorder := infra.NewErrorRecorder(errorLogRepo)
+	bookingHandler.SetErrorRecorder(errorRecorder)
 	facilityBookingHandler := infra.NewFacilityBookingHandler(facilityBookingUC)
+	facilityBookingHandler.SetErrorRecorder(errorRecorder)
 	contactHandler := infra.NewContactHandler(bookingMailer)
 	membershipHandler := infra.NewMembershipHandler(membershipUC, memberVerificationUC, sportCenterRepo)
 	discountHandler := infra.NewDiscountHandler(discountUC, membershipUC)
@@ -403,6 +407,7 @@ func main() {
 		log.Warnw("superadmin_indexes_failed", "error", err)
 	}
 	superAdminHandler := infra.NewSuperAdminHandler(superAdminRepo)
+	superAdminHandler.SetErrorLogRepository(errorLogRepo)
 
 	// Rutas Protegidas
 	api := r.Group("/api")
@@ -535,6 +540,9 @@ func main() {
 			sa.GET("/bookings", superAdminHandler.ListBookings)
 			sa.GET("/bookings/export", superAdminHandler.ExportBookings)
 			sa.GET("/audit", superAdminHandler.ListAudit)
+			sa.GET("/error-logs", superAdminHandler.ListErrorLogs)
+			sa.GET("/error-logs/:tracking_id", superAdminHandler.GetErrorLog)
+			sa.PATCH("/error-logs/:id/resolve", superAdminHandler.ResolveErrorLog)
 		}
 
 		// Modelo comercial del centro del usuario autenticado

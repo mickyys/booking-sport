@@ -5,11 +5,18 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/hamp/booking-sport/internal/app"
+	"github.com/hamp/booking-sport/internal/domain"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type FacilityBookingHandler struct {
 	useCase *app.FacilityBookingUseCase
+	errs    *ErrorRecorder
+}
+
+// SetErrorRecorder habilita el registro de errores de reserva.
+func (h *FacilityBookingHandler) SetErrorRecorder(r *ErrorRecorder) {
+	h.errs = r
 }
 
 func NewFacilityBookingHandler(useCase *app.FacilityBookingUseCase) *FacilityBookingHandler {
@@ -49,7 +56,15 @@ func (h *FacilityBookingHandler) Create(c *gin.Context) {
 		Partial:       body.Partial,
 	})
 	if err != nil {
-		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
+		status := errorStatusCode(err)
+		trackingID := ""
+		if status >= http.StatusInternalServerError {
+			trackingID = h.errs.Record(c, domain.ErrOpFacilityCreate, err, status, ErrorContext{
+				UserEmail: body.CustomerEmail, UserName: body.CustomerName, UserPhone: body.CustomerPhone,
+				Provider: "space_id=" + body.SpaceID,
+			})
+		}
+		c.JSON(status, errorBody(err, trackingID))
 		return
 	}
 	c.JSON(http.StatusCreated, result)
