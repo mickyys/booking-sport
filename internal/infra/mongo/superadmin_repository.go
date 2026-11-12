@@ -80,8 +80,15 @@ func centerFilter(f SuperAdminCenterFilter) bson.M {
 	default:
 		q["status"] = f.Status
 	}
+	// Filtrar por modalidad de pago: consideramos tanto el campo legacy `payment_mode`
+	// como `commercial.payment_mode`, ya que algunos centros tienen solo uno u otro.
 	if f.PaymentMode != "" {
-		q["payment_mode"] = f.PaymentMode
+		q = bson.M{
+			"$or": []bson.M{
+				bson.M{"payment_mode": f.PaymentMode},
+				bson.M{"commercial.payment_mode": f.PaymentMode},
+			},
+		}
 	}
 	if f.City != "" {
 		q["city"] = bson.M{"$regex": "^" + regexp.QuoteMeta(f.City), "$options": "i"}
@@ -136,13 +143,18 @@ func (r *SuperAdminRepository) CenterStats(ctx context.Context) (*CenterStats, e
 		n, _ := r.centers.CountDocuments(ctx, q)
 		return n
 	}
+	// Contar pay_online considerando tanto el campo legacy como el comercial.
+	payOnlineQ := bson.M{"$or": []bson.M{
+		bson.M{"payment_mode": "pay_online"},
+		bson.M{"commercial.payment_mode": "PAY_ONLINE"},
+	}}
 	return &CenterStats{
 		Total:     count(bson.M{}),
 		Active:    count(bson.M{"status": bson.M{"$nin": bson.A{domain.SportCenterStatusSuspended, domain.SportCenterStatusBlocked}}}),
 		Suspended: count(bson.M{"status": domain.SportCenterStatusSuspended}),
 		Blocked:   count(bson.M{"status": domain.SportCenterStatusBlocked}),
 		Featured:  count(bson.M{"is_featured": true}),
-		PayOnline: count(bson.M{"payment_mode": "pay_online"}),
+		PayOnline: count(payOnlineQ),
 	}, nil
 }
 
@@ -225,7 +237,7 @@ func (r *SuperAdminRepository) ListBookings(ctx context.Context, f SuperAdminBoo
 		return nil, 0, err
 	}
 	cur, err := r.bookings.Find(ctx, q, options.Find().
-		SetSort(bson.D{{Key: "date", Value: -1}, {Key: "hour", Value: -1}}).
+		SetSort(bson.D{{Key: "created_at", Value: -1}, {Key: "_id", Value: -1}}).
 		SetSkip(int64((page-1)*limit)).SetLimit(int64(limit)))
 	if err != nil {
 		return nil, 0, err
