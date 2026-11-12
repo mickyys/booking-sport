@@ -429,6 +429,8 @@ func main() {
 		// Endpoint para administradores: obtener agenda automáticamente sin pasar id
 		api.GET("/admin/my-sport-center", sportCenterHandler.GetMySportCenter)
 		api.PUT("/admin/my-sport-center/onboarding", sportCenterHandler.UpdateMySportCenterOnboarding)
+		api.GET("/admin/my-sport-center/onboarding/status", sportCenterHandler.GetMyOnboardingStatus)
+		api.POST("/admin/my-sport-center/onboarding/complete", sportCenterHandler.CompleteMyOnboarding)
 		api.GET("/admin/sport-centers/schedules/bookings", sportCenterHandler.GetAdminSchedulesWithBookings)
 		api.GET("/bookings/:id", bookingHandler.GetBookingDetail)
 		api.POST("/bookings/claim", bookingClaimHandler.Claim)
@@ -520,6 +522,7 @@ func main() {
 			sa.POST("/sport-centers", superAdminHandler.Audit("center.create", "sport_center", "id"), sportCenterHandler.OnboardCreate)
 			sa.GET("/sport-centers/:id", superAdminHandler.GetCenter)
 			sa.POST("/sport-centers/:id/admin-invite/resend", superAdminHandler.Audit("center.admin_invite_resend", "sport_center", "id"), sportCenterHandler.ResendCenterAdminInvite)
+			sa.POST("/sport-centers/:id/onboarding/complete", superAdminHandler.Audit("center.onboarding_complete", "sport_center", "id"), sportCenterHandler.ForceCompleteCenterOnboarding)
 			sa.PATCH("/sport-centers/:id/settings", superAdminHandler.Audit("center.settings", "sport_center", "id"), sportCenterHandler.UpdateSportCenterSettings)
 			sa.PUT("/sport-centers/:id/status", superAdminHandler.SetStatus)
 			sa.PUT("/sport-centers/:id/featured", superAdminHandler.SetFeatured)

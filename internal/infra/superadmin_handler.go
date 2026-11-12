@@ -43,7 +43,9 @@ func (h *SuperAdminHandler) Audit(action, entityType, idParam string) gin.Handle
 		if c.Writer.Status() >= 400 {
 			return
 		}
-		h.writeAudit(c, action, entityType, c.Param(idParam), "", nil)
+		reason, _ := c.Get("audit_reason")
+		reasonStr, _ := reason.(string)
+		h.writeAudit(c, action, entityType, c.Param(idParam), reasonStr, nil)
 	}
 }
 
