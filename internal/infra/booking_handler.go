@@ -813,13 +813,75 @@ func (h *BookingHandler) DeleteBooking(c *gin.Context) {
 		return
 	}
 
-	err = h.useCase.DeleteBooking(c.Request.Context(), id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in token"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+	// Eliminar desde el panel admin siempre es cancelar: reembolso, correo y
+	// liberación de cupo se manejan en CancelBooking.
+	err = h.useCase.CancelBooking(c.Request.Context(), id, userID.(string))
+	if err != nil {
+		trackingID := h.errs.Record(c, domain.ErrOpBookingCancel, err, http.StatusInternalServerError,
+			ErrorContext{BookingID: id.Hex(), UserID: userID.(string)})
+		c.JSON(http.StatusInternalServerError, errorBody(err, trackingID))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
+}
+
+// RescheduleBooking mueve una reserva existente a otra fecha/hora. Lo usa el
+// panel de administración al arrastrar un evento en la agenda.
+func (h *BookingHandler) RescheduleBooking(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid booking id"})
+		return
+	}
+
+	var req struct {
+		Date    string `json:"date" binding:"required"`
+		Hour    int    `json:"hour"`
+		Minutes int    `json:"minutes"`
+		CourtID string `json:"court_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	var courtID *primitive.ObjectID
+	if req.CourtID != "" {
+		parsed, err := primitive.ObjectIDFromHex(req.CourtID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid court id"})
+			return
+		}
+		courtID = &parsed
+	}
+
+	booking, err := h.useCase.RescheduleBooking(
+		c.Request.Context(),
+		id,
+		req.Date,
+		req.Hour,
+		req.Minutes,
+		courtID,
+		h.baseHandler.GetUserID(c),
+	)
+	if err != nil {
+		status := errorStatusCode(err)
+		trackingID := ""
+		if status >= http.StatusInternalServerError {
+			trackingID = h.errs.Record(c, domain.ErrOpBookingReschedule, err, status, ErrorContext{BookingID: id.Hex()})
+		}
+		c.JSON(status, errorBody(err, trackingID))
+		return
+	}
+
+	c.JSON(http.StatusOK, booking)
 }
 
 // RescheduleBooking mueve una reserva existente a otra fecha/hora. Lo usa el
