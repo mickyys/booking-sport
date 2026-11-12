@@ -44,6 +44,8 @@ type mockCenterRepoForOnboardHandler struct {
 	lastUpdated          *domain.SportCenter
 	settingsCalls        int
 	lastPaymentMode      *string
+	lastMarketplaceFee   *int
+	lastSettingsID       primitive.ObjectID
 }
 
 func (m *mockCenterRepoForOnboardHandler) Create(ctx context.Context, center *domain.SportCenter) error {
@@ -58,6 +60,8 @@ func (m *mockCenterRepoForOnboardHandler) Update(ctx context.Context, center *do
 func (m *mockCenterRepoForOnboardHandler) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
 	m.settingsCalls++
 	m.lastPaymentMode = paymentMode
+	m.lastMarketplaceFee = marketplaceFeePercent
+	m.lastSettingsID = id
 	return nil
 }
 func (m *mockCenterRepoForOnboardHandler) FindByID(ctx context.Context, id primitive.ObjectID) (*domain.SportCenter, error) {
@@ -999,7 +1003,9 @@ func TestOnboardingWizard_EtapaCobro_ModalidadInvalida_Retorna400(t *testing.T) 
 	}
 }
 
-func TestOnboardingWizard_EtapaImagenYOferta_Guarda(t *testing.T) {
+// El primer mes gratis es un cobro de la plataforma al centro: lo define el
+// superadmin. Si un cliente lo envía en el wizard, el backend no lo aplica.
+func TestOnboardingWizard_EtapaImagen_NoPermiteFijarPrimerMesGratis(t *testing.T) {
 	repo := &mockCenterRepoForOnboardHandler{centersByUser: []domain.SportCenter{wizardCenter()}}
 	r := newOnboardingWizardRouter(t, repo)
 
@@ -1011,8 +1017,8 @@ func TestOnboardingWizard_EtapaImagenYOferta_Guarda(t *testing.T) {
 	if repo.lastUpdated.ImageURL != "https://img.test/foto.jpg" {
 		t.Errorf("image_url = %q, want https://img.test/foto.jpg", repo.lastUpdated.ImageURL)
 	}
-	if !repo.lastUpdated.FirstMonthFree {
-		t.Error("first_month_free = false, want true")
+	if repo.lastUpdated.FirstMonthFree {
+		t.Error("first_month_free = true: el centro no puede activarlo")
 	}
 	if repo.lastUpdated.OnboardingStep != 4 {
 		t.Errorf("onboarding_step = %d, want 4", repo.lastUpdated.OnboardingStep)

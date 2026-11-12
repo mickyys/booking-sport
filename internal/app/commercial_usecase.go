@@ -73,6 +73,9 @@ type SubscriptionView struct {
 	StartedAt    *time.Time `json:"started_at,omitempty"`
 	NextChargeAt *time.Time `json:"next_charge_at,omitempty"`
 	CancelledAt  *time.Time `json:"cancelled_at,omitempty"`
+	// FirstMonthFree indica que el primer mes de la suscripción va sin cobro
+	// (lo activa la plataforma y solo aplica antes de la primera activación).
+	FirstMonthFree bool `json:"first_month_free"`
 }
 
 // CommissionView solo existe para PAY_ONLINE. Effective es lo que se cobra hoy
@@ -154,6 +157,7 @@ func (uc *CommercialUseCase) view(ctx context.Context, c *domain.SportCenter) (*
 			sv.Plan, sv.Amount = s.Subscription.Plan, s.Subscription.Amount
 			sv.StartedAt, sv.NextChargeAt, sv.CancelledAt = s.Subscription.StartedAt, s.Subscription.NextChargeAt, s.Subscription.CancelledAt
 		}
+		sv.FirstMonthFree = freeTrialMonthsFor(c) > 0
 		v.Subscription = sv
 	case domain.CommercialModePayOnline:
 		v.MercadoPago = c.MercadoPagoStatus()
@@ -329,6 +333,18 @@ func (uc *CommercialUseCase) SetCommission(ctx context.Context, centerID primiti
 	return uc.Get(ctx, c.ID)
 }
 
+// freeTrialMonthsFor devuelve los meses gratis de la suscripción: 1 si la
+// plataforma activó el primer mes gratis y la suscripción nunca estuvo activa.
+func freeTrialMonthsFor(c *domain.SportCenter) int {
+	if !c.FirstMonthFree {
+		return 0
+	}
+	if c.Commercial != nil && c.Commercial.Subscription != nil && c.Commercial.Subscription.StartedAt != nil {
+		return 0
+	}
+	return 1
+}
+
 // SubscriptionStart es el resultado de iniciar la suscripción.
 type SubscriptionStart struct {
 	InitPoint string  `json:"init_point"`
@@ -365,6 +381,9 @@ func (uc *CommercialUseCase) StartSubscription(ctx context.Context, centerID pri
 		PayerEmail:  payerEmail,
 		BackURL:     uc.cfg.SubscriptionBack,
 		Amount:      uc.cfg.SubscriptionAmount,
+		// El primer mes gratis lo define la plataforma y solo aplica mientras
+		// la suscripción nunca haya estado activa.
+		FreeTrialMonths: freeTrialMonthsFor(c),
 	})
 	if err != nil {
 		return nil, err

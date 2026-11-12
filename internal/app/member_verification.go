@@ -21,6 +21,7 @@ const (
 	memberVerificationCooldown = 60 * time.Second
 	memberVerificationWindow   = 15 * time.Minute
 	memberVerificationMaxSends = 5
+	memberVerificationIPMax    = 10
 	memberTokenTTL             = 30 * time.Minute
 )
 
@@ -31,17 +32,59 @@ type MemberVerificationMailer interface {
 	SendMemberVerificationCode(ctx context.Context, to, name, centerName, code string, expiresMinutes int) error
 }
 
+// VerificationLimit es el resultado de evaluar los límites de solicitud.
+type VerificationLimit int
+
+const (
+	VerificationLimitOK VerificationLimit = iota
+	VerificationLimitIP
+	VerificationLimitCooldown
+	VerificationLimitDocument
+)
+
+// MemberVerificationLimiter lleva la cuenta de intentos de solicitud de
+// código. La implementación en Redis lo comparte entre instancias.
+type MemberVerificationLimiter interface {
+	AllowVerificationRequest(ctx context.Context, ip, document string) (VerificationLimit, error)
+}
+
 // MemberVerificationService gestiona el flujo RUT + correo + código.
 type MemberVerificationService struct {
 	repo       MembershipRepository
 	centerRepo SportCenterRepository
 	mailer     MemberVerificationMailer
 	limiter    *verificationLimiter
+	shared     MemberVerificationLimiter
+}
+
+// SetLimiter usa un limitador compartido (Redis). Si falla, el servicio
+// vuelve al limitador en memoria de la instancia.
+func (s *MemberVerificationService) SetLimiter(l MemberVerificationLimiter) { s.shared = l }
+
+func (s *MemberVerificationService) checkLimit(ctx context.Context, ip, document string, now time.Time) VerificationLimit {
+	if s.shared != nil {
+		if res, err := s.shared.AllowVerificationRequest(ctx, ip, document); err == nil {
+			return res
+		}
+	}
+	return s.limiter.AllowRequest(ip, document, now)
+}
+
+// AllowRequest aplica los límites en memoria (por IP y por RUT+IP).
+func (l *verificationLimiter) AllowRequest(ip, document string, now time.Time) VerificationLimit {
+	if !l.allowIP(ip, now) {
+		return VerificationLimitIP
+	}
+	if !l.allow(document+"|"+ip, now) {
+		return VerificationLimitCooldown
+	}
+	return VerificationLimitOK
 }
 
 type verificationLimiter struct {
 	mu      sync.Mutex
 	entries map[string]*verificationLimitEntry
+	ips     map[string]*verificationLimitEntry
 }
 
 type verificationLimitEntry struct {
@@ -55,50 +98,46 @@ func NewMemberVerificationService(repo MembershipRepository, centerRepo SportCen
 		repo:       repo,
 		centerRepo: centerRepo,
 		mailer:     mailer,
-		limiter:    &verificationLimiter{entries: map[string]*verificationLimitEntry{}},
+		limiter:    &verificationLimiter{entries: map[string]*verificationLimitEntry{}, ips: map[string]*verificationLimitEntry{}},
 	}
 }
 
-// VerificationRequestResult es la respuesta del primer paso. Siempre es
-// genérica para no revelar si el documento existe.
+// VerificationRequestResult es la respuesta del primer paso. Incluye el
+// correo ofuscado al que se envió el código.
 type VerificationRequestResult struct {
 	VerificationID string    `json:"verification_id"`
 	ExpiresAt      time.Time `json:"expires_at"`
 	ResendIn       int       `json:"resend_in_seconds"`
+	MaskedEmail    string    `json:"masked_email"`
 }
 
-// RequestVerification busca al socio y, si los datos coinciden, envía un
-// código de 6 dígitos a su correo registrado.
-func (s *MemberVerificationService) RequestVerification(ctx context.Context, centerID primitive.ObjectID, document, email, ip string) (*VerificationRequestResult, error) {
+// RequestVerification busca al socio por RUT y envía un código de 6 dígitos
+// a su correo registrado. No recibe correo: siempre se usa el configurado.
+func (s *MemberVerificationService) RequestVerification(ctx context.Context, centerID primitive.ObjectID, document, ip string) (*VerificationRequestResult, error) {
 	now := time.Now()
 	document = normalizeDocument(document)
-	email = normalizeEmail(email)
 
-	result := &VerificationRequestResult{
-		VerificationID: primitive.NewObjectID().Hex(),
-		ExpiresAt:      now.Add(memberVerificationTTL),
-		ResendIn:       int(memberVerificationCooldown.Seconds()),
+	if !validateRUT(document) {
+		return nil, domain.NewBadRequestError("RUT inválido")
 	}
-
-	if !validateRUT(document) || !isValidEmail(email) {
-		return result, nil
-	}
-
-	if !s.limiter.allow(document+"|"+ip, now) {
-		return result, nil
+	switch s.checkLimit(ctx, ip, document, now) {
+	case VerificationLimitIP, VerificationLimitDocument:
+		return nil, &domain.AppError{Message: "demasiados intentos, intenta más tarde", StatusCode: 429}
+	case VerificationLimitCooldown:
+		return nil, &domain.AppError{Message: "espera un momento antes de solicitar otro código", StatusCode: 429}
 	}
 
 	member, err := s.repo.FindMemberByDocument(ctx, centerID, document)
-	if err != nil || member == nil {
-		return result, nil
+	if err != nil || member == nil || !member.IsUsable(now) {
+		return nil, domain.NewNotFoundError("No encontramos un socio activo con ese RUT")
 	}
-	if normalizeEmail(member.Email) != email || !member.IsUsable(now) {
-		return result, nil
+	if !isValidEmail(normalizeEmail(member.Email)) {
+		return nil, &domain.AppError{Message: "Tu cuenta no tiene correo registrado, contacta al centro", StatusCode: 422}
 	}
 
 	code, err := generateNumericCode(6)
 	if err != nil {
-		return result, err
+		return nil, err
 	}
 
 	verificationID := primitive.NewObjectID()
@@ -112,11 +151,15 @@ func (s *MemberVerificationService) RequestVerification(ctx context.Context, cen
 		CreatedAt:     now,
 	}
 	if err := s.repo.CreateVerification(ctx, verification); err != nil {
-		return result, err
+		return nil, err
 	}
 
-	result.VerificationID = verificationID.Hex()
-	result.ExpiresAt = verification.ExpiresAt
+	result := &VerificationRequestResult{
+		VerificationID: verificationID.Hex(),
+		ExpiresAt:      verification.ExpiresAt,
+		ResendIn:       int(memberVerificationCooldown.Seconds()),
+		MaskedEmail:    maskEmail(member.Email),
+	}
 
 	if s.mailer != nil {
 		center, _ := s.centerRepo.FindByID(ctx, centerID)
@@ -124,14 +167,41 @@ func (s *MemberVerificationService) RequestVerification(ctx context.Context, cen
 		if center != nil && center.Name != "" {
 			centerName = center.Name
 		}
-		// El envío es best-effort: no revelamos fallos de infraestructura en
-		// un endpoint público ni bloqueamos el checkout.
+		// El envío es best-effort: no bloqueamos el checkout por fallos de
+		// infraestructura del correo.
 		go func() {
 			_ = s.mailer.SendMemberVerificationCode(context.Background(), member.Email, member.Name, centerName, code, int(memberVerificationTTL.Minutes()))
 		}()
 	}
 
 	return result, nil
+}
+
+// maskEmail ofusca un correo: "hector@gmail.com" -> "h*****@g****.com".
+func maskEmail(email string) string {
+	email = strings.TrimSpace(email)
+	at := strings.LastIndex(email, "@")
+	if at <= 0 || at == len(email)-1 {
+		return ""
+	}
+	local, host := email[:at], email[at+1:]
+	domainName, tld := host, ""
+	if dot := strings.LastIndex(host, "."); dot > 0 {
+		domainName, tld = host[:dot], host[dot:]
+	}
+	return maskPart(local) + "@" + maskPart(domainName) + tld
+}
+
+func maskPart(s string) string {
+	r := []rune(s)
+	if len(r) == 0 {
+		return ""
+	}
+	n := len(r) - 1
+	if n < 1 {
+		n = 1
+	}
+	return string(r[0]) + strings.Repeat("*", n)
 }
 
 // VerificationConfirmResult contiene el token temporal que acredita al socio.
@@ -222,6 +292,23 @@ func (l *verificationLimiter) allow(key string, now time.Time) bool {
 		return false
 	}
 	entry.lastSent = now
+	entry.count++
+	return true
+}
+
+// allowIP limita los intentos por IP sin importar el RUT, para frenar la
+// enumeración de documentos.
+func (l *verificationLimiter) allowIP(ip string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry, ok := l.ips[ip]
+	if !ok || now.Sub(entry.window) > memberVerificationWindow {
+		l.ips[ip] = &verificationLimitEntry{window: now, count: 1}
+		return true
+	}
+	if entry.count >= memberVerificationIPMax {
+		return false
+	}
 	entry.count++
 	return true
 }

@@ -16,6 +16,9 @@ type SubscriptionInput struct {
 	BackURL     string
 	Amount      float64
 	Currency    string
+	// FreeTrialMonths son los meses sin cobro antes del primer cargo (primer
+	// mes gratis). 0 = sin período de prueba.
+	FreeTrialMonths int
 }
 
 // SubscriptionResult es el estado de una suscripción (preapproval) en MP.
@@ -47,18 +50,25 @@ func (c *Client) CreateSubscription(ctx context.Context, in SubscriptionInput) (
 	if currency == "" {
 		currency = "CLP"
 	}
+	recurring := &preapproval.AutoRecurringRequest{
+		Frequency:         1,
+		FrequencyType:     "months",
+		TransactionAmount: in.Amount,
+		CurrencyID:        currency,
+	}
+	if in.FreeTrialMonths > 0 {
+		recurring.FreeTrial = &preapproval.FreeTrialRequest{
+			Frequency:     in.FreeTrialMonths,
+			FrequencyType: "months",
+		}
+	}
 	res, err := preapproval.NewClient(cfg).Create(ctx, preapproval.Request{
 		Reason:            in.Reason,
 		ExternalReference: in.ExternalRef,
 		PayerEmail:        in.PayerEmail,
 		BackURL:           in.BackURL,
 		Status:            "pending",
-		AutoRecurring: &preapproval.AutoRecurringRequest{
-			Frequency:         1,
-			FrequencyType:     "months",
-			TransactionAmount: in.Amount,
-			CurrencyID:        currency,
-		},
+		AutoRecurring:     recurring,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error creating mercadopago subscription: %w", err)

@@ -254,24 +254,19 @@ func TestUpdateOnboarding_Cobro_ModalidadInvalida_Rechaza(t *testing.T) {
 	}
 }
 
-func TestUpdateOnboarding_ImagenYOferta_Guarda(t *testing.T) {
+func TestUpdateOnboarding_Imagen_Guarda(t *testing.T) {
 	repo := &mockOnboardingRepo{centers: []domain.SportCenter{onboardingCenter()}}
 	uc := onboardingUCWithRepo(repo)
 	image := "https://img.test/foto.jpg"
-	offer := true
 	err := uc.UpdateSportCenterOnboarding(context.Background(), "auth0|wizard", UpdateOnboardingInput{
-		Step:           OnboardingStepImagen,
-		ImageURL:       &image,
-		FirstMonthFree: &offer,
+		Step:     OnboardingStepImagen,
+		ImageURL: &image,
 	})
 	if err != nil {
 		t.Fatalf("UpdateSportCenterOnboarding retornó error = %v", err)
 	}
 	if repo.lastUpdate.ImageURL != image {
 		t.Errorf("image_url = %q, want %q", repo.lastUpdate.ImageURL, image)
-	}
-	if !repo.lastUpdate.FirstMonthFree {
-		t.Error("first_month_free = false, want true")
 	}
 }
 

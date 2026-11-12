@@ -23,13 +23,14 @@ type Coordinator struct {
 	prefix      string
 	maxDuration time.Duration
 
-	acquire, renew, beginCommit, commit, release, importScript *goredis.Script
+	acquire, renew, beginCommit, commit, release, importScript, verifyLimit *goredis.Script
 }
 
 var (
-	_ app.OccupancyCoordinator = (*Coordinator)(nil)
-	_ app.OccupancyImporter    = (*Coordinator)(nil)
-	_ app.GenerationPublisher  = (*Coordinator)(nil)
+	_ app.OccupancyCoordinator      = (*Coordinator)(nil)
+	_ app.OccupancyImporter         = (*Coordinator)(nil)
+	_ app.GenerationPublisher       = (*Coordinator)(nil)
+	_ app.MemberVerificationLimiter = (*Coordinator)(nil)
 )
 
 // Config for NewCoordinator.
@@ -84,6 +85,7 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		commit:       goredis.NewScript(flags + luaCommit),
 		release:      goredis.NewScript(flags + luaRelease),
 		importScript: goredis.NewScript(flags + luaImport),
+		verifyLimit:  goredis.NewScript(flags + luaVerifyLimit),
 	}, nil
 }
 
