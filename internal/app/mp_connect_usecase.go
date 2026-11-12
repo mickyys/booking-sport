@@ -52,11 +52,20 @@ func NewMPConnectUseCase(centerRepo SportCenterRepository, connectClient *mercad
 	}
 }
 
-// encodeState firma y codifica el ID del centro en el parámetro `state` del
-// flujo OAuth. La firma HMAC evita que un atacante forje o reutilice un state
-// de otro centro (protección contra tampering/CSRF).
-func (uc *MPConnectUseCase) encodeState(centerID string) string {
-	payload := centerID + "." + uc.signState(centerID)
+// MPConnectSourceApp marca que la conexión se inició desde la app mobile: al
+// terminar el callback devuelve al usuario a la app en vez de a la web.
+const MPConnectSourceApp = "app"
+
+// encodeState firma y codifica el ID del centro (y opcionalmente el origen) en
+// el parámetro `state` del flujo OAuth. La firma HMAC cubre ambos valores, así
+// que un atacante no puede forjar ni reutilizar un state de otro centro ni
+// cambiar el destino del redirect (protección contra tampering/CSRF).
+func (uc *MPConnectUseCase) encodeState(centerID, source string) string {
+	value := centerID
+	if source != "" {
+		value += "|" + source
+	}
+	payload := value + "." + uc.signState(value)
 	return base64.RawURLEncoding.EncodeToString([]byte(payload))
 }
 
@@ -68,27 +77,40 @@ func (uc *MPConnectUseCase) signState(value string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// decodeState verifica la firma del state y recupera el ID del centro.
-func (uc *MPConnectUseCase) decodeState(state string) (string, error) {
+// decodeState verifica la firma del state y recupera el ID del centro y el
+// origen (vacío si fue la web).
+func (uc *MPConnectUseCase) decodeState(state string) (string, string, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(state)
 	if err != nil {
-		return "", fmt.Errorf("invalid state")
+		return "", "", fmt.Errorf("invalid state")
 	}
 	parts := strings.SplitN(string(raw), ".", 2)
 	if len(parts) != 2 {
-		return "", fmt.Errorf("invalid state")
+		return "", "", fmt.Errorf("invalid state")
 	}
-	centerID, sig := parts[0], parts[1]
-	if !hmac.Equal([]byte(sig), []byte(uc.signState(centerID))) {
-		return "", fmt.Errorf("invalid state signature")
+	value, sig := parts[0], parts[1]
+	if !hmac.Equal([]byte(sig), []byte(uc.signState(value))) {
+		return "", "", fmt.Errorf("invalid state signature")
 	}
-	return centerID, nil
+	centerID, source, _ := strings.Cut(value, "|")
+	return centerID, source, nil
 }
 
 // DecodeState expone la decodificación del parámetro `state` del callback para
 // que los handlers puedan loguear el center_id involucrado.
 func (uc *MPConnectUseCase) DecodeState(state string) (string, error) {
-	return uc.decodeState(state)
+	centerID, _, err := uc.decodeState(state)
+	return centerID, err
+}
+
+// DecodeStateSource devuelve el origen de la conexión (`app` o vacío) si el
+// state es válido.
+func (uc *MPConnectUseCase) DecodeStateSource(state string) string {
+	_, source, err := uc.decodeState(state)
+	if err != nil {
+		return ""
+	}
+	return source
 }
 
 // getCenterByUserID resuelve el sport center administrado por el usuario.
@@ -105,13 +127,16 @@ func (uc *MPConnectUseCase) getCenterByUserID(ctx context.Context, userID string
 
 // GetAuthorizationURL genera la URL de autorización de Mercado Pago para el
 // sport center administrado por el usuario.
-func (uc *MPConnectUseCase) GetAuthorizationURL(ctx context.Context, userID string) (string, error) {
+func (uc *MPConnectUseCase) GetAuthorizationURL(ctx context.Context, userID, source string) (string, error) {
 	center, err := uc.getCenterByUserID(ctx, userID)
 	if err != nil {
 		return "", err
 	}
+	if source != MPConnectSourceApp {
+		source = ""
+	}
 
-	return uc.connectClient.GetAuthorizationURL(uc.encodeState(center.ID.Hex())), nil
+	return uc.connectClient.GetAuthorizationURL(uc.encodeState(center.ID.Hex(), source)), nil
 }
 
 // HandleCallback procesa el callback de Mercado Pago: intercambia el
@@ -119,7 +144,7 @@ func (uc *MPConnectUseCase) GetAuthorizationURL(ctx context.Context, userID stri
 func (uc *MPConnectUseCase) HandleCallback(ctx context.Context, code, state string) (*domain.MercadoPagoConfig, error) {
 	log := logger.FromContext(ctx)
 
-	centerIDStr, err := uc.decodeState(state)
+	centerIDStr, _, err := uc.decodeState(state)
 	if err != nil {
 		log.Warnw("mp_connect_callback_invalid_state", "error", err)
 		return nil, fmt.Errorf("invalid oauth state")

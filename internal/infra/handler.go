@@ -712,6 +712,82 @@ func (h *SportCenterHandler) UpdateMySportCenterOnboarding(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": message})
 }
 
+// GetMyOnboardingStatus devuelve el avance del onboarding calculado con datos
+// reales. Lo usan la web y la app mobile para mostrar el mismo checklist.
+//
+//	GET /admin/my-sport-center/onboarding/status
+func (h *SportCenterHandler) GetMyOnboardingStatus(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in token"})
+		return
+	}
+	st, err := h.useCase.GetOnboardingStatus(c.Request.Context(), userID.(string))
+	if err != nil {
+		if strings.Contains(err.Error(), "no se encontró un centro") {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		log.Printf("[ONBOARD] error calculando estado para %v: %v", userID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo calcular el avance, intenta nuevamente"})
+		return
+	}
+	c.JSON(http.StatusOK, st)
+}
+
+// CompleteMyOnboarding cierra el onboarding con los espacios y horarios que el
+// centro ya tiene (p. ej. creados desde la app mobile), sin duplicarlos.
+//
+//	POST /admin/my-sport-center/onboarding/complete
+func (h *SportCenterHandler) CompleteMyOnboarding(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found in token"})
+		return
+	}
+	st, err := h.useCase.CompleteOnboardingFromExisting(c.Request.Context(), userID.(string))
+	if err != nil {
+		var incomplete *app.OnboardingIncompleteError
+		switch {
+		case errors.As(err, &incomplete):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "missing": incomplete.Missing, "status": st})
+		case strings.Contains(err.Error(), "no se encontró un centro"):
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		default:
+			log.Printf("[ONBOARD] error completando onboarding para %v: %v", userID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo completar el onboarding, intenta nuevamente"})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "onboarding completado", "status": st})
+}
+
+// ForceCompleteCenterOnboarding lo usa el superadmin para cerrar el onboarding
+// de un centro aunque falten datos. Exige un motivo, que queda en la auditoría.
+//
+//	POST /superadmin/sport-centers/:id/onboarding/complete { "reason": "..." }
+func (h *SportCenterHandler) ForceCompleteCenterOnboarding(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	if strings.TrimSpace(body.Reason) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "indica el motivo"})
+		return
+	}
+	if err := h.useCase.ForceCompleteOnboarding(c.Request.Context(), id); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.Set("audit_reason", strings.TrimSpace(body.Reason))
+	c.JSON(http.StatusOK, gin.H{"message": "onboarding completado"})
+}
+
 func (h *SportCenterHandler) GetByID(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := primitive.ObjectIDFromHex(idStr)
