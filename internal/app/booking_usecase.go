@@ -650,6 +650,13 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 		refundPercentage = 100
 	}
 
+	// Las reservas recurrentes son pagos presenciales: solo se marcan como
+	// canceladas, sin devolución.
+	isRecurring := booking.RecurringID != ""
+	if isRecurring {
+		refundPercentage = 0
+	}
+
 	if booking.Status == domain.BookingStatusCancelled {
 		return fmt.Errorf("booking is already cancelled")
 	}
@@ -691,6 +698,10 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 		return fmt.Errorf("error updating booking status: %w", err)
 	}
 	uc.releaseDiscount(ctx, id)
+	if isRecurring {
+		// Evita que el generador vuelva a crear esta fecha.
+		uc.markRecurringDateCancelled(ctx, booking.RecurringID, booking.Date)
+	}
 
 	if booking.HoldID != nil {
 		uc.holdRepo.Delete(ctx, *booking.HoldID)
@@ -721,7 +732,8 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id primitive.Object
 	uc.notifyCustomer(ctx, booking, domain.InboxBookingCancelled, "Reserva cancelada", body)
 
 	// Enviar correo de confirmación de cancelación si está configurado
-	if uc.mailer != nil {
+	hasEmail := booking.GuestDetails != nil && booking.GuestDetails.Email != ""
+	if uc.mailer != nil && (!isRecurring || hasEmail) {
 		go func(b *domain.Booking) {
 			if err := uc.mailer.SendBookingCancellation(context.Background(), b); err != nil {
 				logger.FromContext(context.Background()).Errorw("mail_booking_cancellation_error",

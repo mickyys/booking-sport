@@ -813,13 +813,23 @@ func (h *BookingHandler) DeleteBooking(c *gin.Context) {
 		return
 	}
 
-	err = h.useCase.DeleteBooking(c.Request.Context(), id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in token"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+	// Eliminar desde el panel admin siempre es cancelar: reembolso, correo y
+	// liberación de cupo se manejan en CancelBooking.
+	err = h.useCase.CancelBooking(c.Request.Context(), id, userID.(string))
+	if err != nil {
+		trackingID := h.errs.Record(c, domain.ErrOpBookingCancel, err, http.StatusInternalServerError,
+			ErrorContext{BookingID: id.Hex(), UserID: userID.(string)})
+		c.JSON(http.StatusInternalServerError, errorBody(err, trackingID))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
 }
 
 // RescheduleBooking mueve una reserva existente a otra fecha/hora. Lo usa el
