@@ -3,6 +3,7 @@ package infra
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
@@ -162,9 +163,16 @@ func truncate(s string, n int) string {
 	return s
 }
 
-// errorBody arma el JSON de error, con tracking_id si se pudo registrar.
+// errorBody arma el JSON de error, con tracking_id si se pudo registrar y los
+// detalles estructurados del AppError (por ejemplo, lock_expires_at).
 func errorBody(err error, trackingID string) gin.H {
 	body := gin.H{"error": err.Error()}
+	var appErr *domain.AppError
+	if errors.As(err, &appErr) {
+		for k, v := range appErr.Details {
+			body[k] = v
+		}
+	}
 	if trackingID != "" {
 		body["tracking_id"] = trackingID
 	}

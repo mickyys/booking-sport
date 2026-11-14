@@ -349,7 +349,8 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 	}
 
 	now := time.Now().In(loc)
-	expiresAt := now.Add(mpHoldTTL)
+	// Bloqueo de un intento nuevo: ventana base + gracia.
+	expiresAt := holdDeadline(now, now)
 
 	log := logger.FromContext(ctx)
 
@@ -384,18 +385,33 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 			"user_id", pending.UserID,
 			"current_user", userID,
 		)
-		if pending.LockExpiresAt != nil && now.Before(*pending.LockExpiresAt) {
+		// La ventana de pago se cuenta desde que se creó la reserva pendiente:
+		// si el cliente vuelve después del 2/3 de la ventana se extiende una
+		// sola vez, y nunca pasa del tope. Al vencer, el horario sigue
+		// bloqueado durante la gracia por si el pago ya fue enviado.
+		anchor := paymentAnchor(pending, now)
+		payUntil := paymentDeadline(anchor, now)
+		lockEnd := payUntil.Add(mpHoldGrace)
+		// El lock persistido puede ser posterior (datos de antes del
+		// despliegue): se informa el mayor para no prometer una liberación
+		// antes de la real.
+		if pending.LockExpiresAt != nil && pending.LockExpiresAt.After(lockEnd) {
+			lockEnd = *pending.LockExpiresAt
+		}
+		if now.Before(lockEnd) {
 			log.Infow("claim_renew_lock_active",
 				"booking_code", pending.BookingCode,
-				"lock_expires_at", pending.LockExpiresAt.Format(time.RFC3339),
+				"lock_expires_at", lockEnd.Format(time.RFC3339),
+				"pay_until", payUntil.Format(time.RFC3339),
 				"now", now.Format(time.RFC3339),
 			)
-			if userID != "" && (pending.GuestDeviceID == userID || pending.UserID == userID) {
+			sameUser := userID != "" && (pending.GuestDeviceID == userID || pending.UserID == userID)
+			if sameUser && now.Before(payUntil) {
 				log.Infow("claim_renew_same_user_renew",
 					"booking_code", pending.BookingCode,
 					"user", userID,
 				)
-				uc.repo.UpdateLockExpiresAt(ctx, pending.ID, expiresAt)
+				uc.repo.UpdateLockExpiresAt(ctx, pending.ID, lockEnd)
 				hold, _ := uc.holdRepo.FindByBookingID(ctx, pending.ID)
 				if hold == nil {
 					// Hold huérfano (sin booking_id): si es del mismo usuario se
@@ -412,7 +428,8 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 					}
 				}
 				if hold != nil {
-					uc.holdRepo.RenewExpiration(ctx, hold.ID, expiresAt)
+					uc.holdRepo.RenewExpiration(ctx, hold.ID, lockEnd)
+					hold.ExpiresAt = lockEnd
 				} else {
 					newHold := &domain.SlotHold{
 						CourtID:   courtID,
@@ -421,22 +438,35 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 						Minutes:   minutes,
 						UserID:    userID,
 						BookingID: pending.ID,
-						ExpiresAt: expiresAt,
+						ExpiresAt: lockEnd,
 						CreatedAt: now,
 					}
 					hold, _ = uc.holdRepo.TryClaimSlot(ctx, newHold)
 				}
 				return hold, pending, nil
 			}
+			if sameUser {
+				// Su ventana de pago venció pero el horario sigue retenido por la
+				// gracia: no puede reanudar el pago ni empezar otro intento
+				// todavía, porque el pago anterior podría confirmarse.
+				log.Infow("claim_renew_payment_window_closed_same_user",
+					"booking_code", pending.BookingCode,
+					"pay_until", payUntil.Format(time.RFC3339),
+					"lock_expires_at", lockEnd.Format(time.RFC3339),
+				)
+				return nil, nil, paymentWindowExpiredError(lockEnd, now)
+			}
 			log.Infow("claim_renew_different_user_blocked",
 				"booking_code", pending.BookingCode,
 				"pending_user", pending.UserID,
 				"requesting_user", userID,
+				"lock_expires_at", lockEnd.Format(time.RFC3339),
 			)
-			return nil, nil, domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
+			return nil, nil, slotInPaymentError(lockEnd, now)
 		}
 		log.Infow("claim_renew_lock_expired_marking",
 			"booking_code", pending.BookingCode,
+			"pay_until", payUntil.Format(time.RFC3339),
 			"lock_expires_at", pending.LockExpiresAt,
 			"hold_id", pending.HoldID,
 		)
@@ -495,14 +525,32 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 		log.Infow("claim_renew_same_user_hold_renew",
 			"hold_id", existingHold.ID.Hex(),
 		)
-		uc.holdRepo.RenewExpiration(ctx, existingHold.ID, expiresAt)
+		// El bloqueo se renueva hasta el fin de la ventana de pago (más la
+		// gracia). Si la ventana ya venció, el bloqueo se libera y el intento
+		// empieza de cero.
+		renewTo := expiresAt
 		booking, _ := uc.repo.FindByID(ctx, existingHold.BookingID)
+		if booking != nil && booking.Status == domain.BookingStatusPending {
+			renewTo = holdDeadline(paymentAnchor(booking, now), now)
+			if !now.Before(renewTo) {
+				log.Infow("claim_renew_hold_window_closed",
+					"hold_id", existingHold.ID.Hex(),
+					"booking_id", booking.ID.Hex(),
+				)
+				uc.holdRepo.Delete(ctx, existingHold.ID)
+				uc.repo.MarkExpired(ctx, booking.ID)
+				uc.releaseDiscount(ctx, booking.ID)
+				return uc.ClaimOrRenewSlot(ctx, courtID, date, hour, minutes, userID)
+			}
+		}
+		uc.holdRepo.RenewExpiration(ctx, existingHold.ID, renewTo)
+		existingHold.ExpiresAt = renewTo
 		if booking != nil && booking.Status == domain.BookingStatusPending {
 			log.Infow("claim_renew_updating_booking_lock",
 				"booking_id", booking.ID.Hex(),
 				"booking_status", booking.Status,
 			)
-			uc.repo.UpdateLockExpiresAt(ctx, booking.ID, expiresAt)
+			uc.repo.UpdateLockExpiresAt(ctx, booking.ID, renewTo)
 		} else {
 			log.Infow("claim_renew_booking_not_found_or_not_pending",
 				"booking_id", existingHold.BookingID.Hex(),
@@ -531,13 +579,13 @@ func (uc *BookingUseCase) ClaimOrRenewSlot(ctx context.Context, courtID primitiv
 		log.Infow("claim_renew_find_and_delete_returned_nil",
 			"hold_id", existingHold.ID.Hex(),
 		)
-		return nil, nil, domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
+		return nil, nil, slotInPaymentError(existingHold.ExpiresAt, now)
 	}
 
 	log.Infow("claim_renew_hold_still_active",
 		"hold_id", existingHold.ID.Hex(),
 	)
-	return nil, nil, domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
+	return nil, nil, slotInPaymentError(existingHold.ExpiresAt, now)
 }
 
 // ==================== MercadoPago Payment Methods ====================
@@ -881,7 +929,7 @@ func (uc *BookingUseCase) RescheduleBooking(ctx context.Context, id primitive.Ob
 	if uc.holdRepo != nil {
 		activeHold, _ := uc.holdRepo.FindBySlot(ctx, booking.CourtID, booking.Date, booking.Hour, booking.Minutes)
 		if activeHold != nil && time.Now().Before(activeHold.ExpiresAt) {
-			return nil, domain.NewConflictError("otro usuario está en proceso de pago para este horario")
+			return nil, slotInPaymentError(activeHold.ExpiresAt, time.Now())
 		}
 	}
 
@@ -893,7 +941,7 @@ func (uc *BookingUseCase) RescheduleBooking(ctx context.Context, id primitive.Ob
 			uc.repo.MarkExpired(ctx, pending.ID)
 			uc.releaseDiscount(ctx, pending.ID)
 		} else {
-			return nil, domain.NewConflictError("otro usuario está en proceso de pago para este horario")
+			return nil, slotInPaymentError(*pending.LockExpiresAt, time.Now())
 		}
 	}
 
@@ -1247,7 +1295,7 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 
 	activeHold, _ := uc.holdRepo.FindBySlot(ctx, booking.CourtID, booking.Date, booking.Hour, booking.Minutes)
 	if activeHold != nil && time.Now().Before(activeHold.ExpiresAt) {
-		return domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
+		return slotInPaymentError(activeHold.ExpiresAt, time.Now())
 	}
 
 	pending, _ := uc.repo.FindPendingBySlot(ctx, booking.CourtID, booking.Date, booking.Hour, booking.Minutes)
@@ -1259,7 +1307,7 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 			uc.repo.MarkExpired(ctx, pending.ID)
 			uc.releaseDiscount(ctx, pending.ID)
 		} else {
-			return domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
+			return slotInPaymentError(*pending.LockExpiresAt, time.Now())
 		}
 	}
 
@@ -1591,7 +1639,7 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 
 	activeHold, _ := uc.holdRepo.FindBySlot(ctx, booking.CourtID, booking.Date, booking.Hour, booking.Minutes)
 	if activeHold != nil && time.Now().Before(activeHold.ExpiresAt) {
-		return domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
+		return slotInPaymentError(activeHold.ExpiresAt, time.Now())
 	}
 
 	pendingBooking, _ := uc.repo.FindPendingBySlot(ctx, booking.CourtID, booking.Date, booking.Hour, booking.Minutes)
@@ -1603,7 +1651,7 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 			uc.repo.MarkExpired(ctx, pendingBooking.ID)
 			uc.releaseDiscount(ctx, pendingBooking.ID)
 		} else {
-			return domain.NewConflictError("otro usuario esta en proceso de pago, intentalo en unos minutos por si no confirma la reserva")
+			return slotInPaymentError(*pendingBooking.LockExpiresAt, time.Now())
 		}
 	}
 
