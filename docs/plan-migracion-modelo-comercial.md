@@ -129,19 +129,22 @@ Siempre con dry-run primero.
 export MONGO_URI=mongodb://localhost:27017 MONGO_DB=sport_booking_prod
 make audit-indexes
 make audit-bookings
+mongodump de sport_centers   # obligatorio: remove-fintoc-credentials no tiene rollback
 go run ./cmd/remove-fintoc-bookings && APPLY=true go run ./cmd/remove-fintoc-bookings
-# mongodump de sport_centers y luego:
 go run ./cmd/remove-fintoc-credentials && APPLY=true go run ./cmd/remove-fintoc-credentials
 export BOOKING_CODES=633c7e11,3a46b3e1,b5427ce4 RECURRING_IDS=69e6ca4e5526854c22ccd068
 go run ./cmd/migrate-resolve-duplicates && APPLY=true go run ./cmd/migrate-resolve-duplicates
+unset BOOKING_CODES RECURRING_IDS
 go run ./cmd/migrate-spaces
 go run ./cmd/migrate-geo
 DRY_RUN=true go run ./cmd/migrate-schedule-rules && go run ./cmd/migrate-schedule-rules
-go run ./cmd/migrate-quincho-day && APPLY=true go run ./cmd/migrate-quincho-day
-# Último paso (ver "Generación inicial de recurrentes"):
-go run ./cmd/migrate-recurring-bookings
 go run ./cmd/migrate-sport-center-timezone && APPLY=true go run ./cmd/migrate-sport-center-timezone
 go run ./cmd/migrate-booking-schedule-fields && APPLY=true go run ./cmd/migrate-booking-schedule-fields
+# quinchos: necesita local_date (3.6), por eso va después
+go run ./cmd/migrate-quincho-day && APPLY=true go run ./cmd/migrate-quincho-day
+go run ./cmd/migrate-mp-connection-type && APPLY=true go run ./cmd/migrate-mp-connection-type
+# Último paso de la fase 1, ya con el backend nuevo desplegado (ver "Generación inicial de recurrentes"):
+go run ./cmd/migrate-recurring-bookings
 ```
 
 Verificación esperada: `spaces` = 6, 0 reservas sin `scheduled_at`, sin franjas de duración cero, 0 centros sin timezone.
@@ -266,8 +269,10 @@ Esperado: bookings 1375, recurring 85, sin `commercial` 0, 0 centros con `review
 
 ## 6. Rollback
 - `ROLLBACK=true APPLY=true go run ./cmd/migrate-commercial-model` quita `commercial` solo de los centros migrados por este comando.
+- `ROLLBACK=true APPLY=true go run ./cmd/migrate-mp-connection-type` quita `mercadopago.connection_type` solo de los documentos que escribió (marca `connection_type_migrated_at`).
 - Flag `COMMERCIAL_MODEL_ENFORCED=false` restaura el comportamiento anterior.
 - Las migraciones previas no borran `courts` ni `spaces.schedule` hasta la limpieza final.
+- Revertir duplicados o reservas Fintoc **después** del backfill deja los documentos restaurados sin `local_date`/`scheduled_at`/`timezone`: volver a correr `APPLY=true go run ./cmd/migrate-booking-schedule-fields` y confirmar `Total de hallazgos: 0` en `audit-bookings`.
 
 ## 7. Criterios de aceptación
 - Los del punto 13 de `docs/refactor-modelo-comercial.md`.
@@ -279,6 +284,7 @@ Esperado: bookings 1375, recurring 85, sin `commercial` 0, 0 centros con `review
 
 ## 8. Estado de implementación (copia local `sport_booking`)
 
+- **Ensayo completo con dump fresco de producción (11-11-2026)** sobre `sport_booking_prod`: pasos 3.1–3.11 con verificación en cada uno, idempotencia y rollback de todos los pasos reversibles. Resultado: 1448 reservas (1016/246/186), 6 espacios (3 cancha, 3 quincho), 7 reglas, 60 franjas (miércoles de Catolica Cancha 1 con 13), ambos centros `America/Santiago` con `location`, `courts_count` 2 y 1, `audit-bookings` 0 hallazgos, `migration_backups` 20 documentos, `courts` idéntico al original y `mercadopago` de ambos centros sin cambios. `audit-indexes` baja de 6 a 4 hallazgos al arrancar el backend nuevo. Validación por API en una instancia aislada (backend contra una copia restaurada como `sport_booking` en otro puerto): `/facilities` con los 3 quinchos, disponibilidad de quincho 00:00-24:00, miércoles con 13 franjas, orden por distancia correcto en ambos sentidos y `slot_holds` con sus 4 índices.
 - Fase 3 aplicada en `sport_booking` (respaldo previo en `sport_booking_local` y archivo de `sport_centers`). Checksums de bookings, recurring_reservations, courts y user_devices idénticos; segunda ejecución sin cambios; rollback y re-apply probados.
 - Fase 4 implementada detrás de `COMMERCIAL_MODEL_ENFORCED` (por defecto `false`):
   - `domain/commercial.go`: modelo, `CanPublishSportCenter`, comisión efectiva (0% explícito).

@@ -1,6 +1,6 @@
 # Runbook: migración a producción (modelo comercial)
 
-Diseño y decisiones: `docs/plan-migracion-modelo-comercial.md`. Este documento es la guía de ejecución en producción. Todo se probó antes en la copia local `sport_booking`; el ensayo con datos frescos (punto 1) es obligatorio.
+Diseño y decisiones: `docs/plan-migracion-modelo-comercial.md`. Este documento es la guía de ejecución en producción. Todo se probó antes sobre una copia restaurada del dump de producción del 11-11-2026 (`sport_booking_prod`), incluidos idempotencia, rollbacks de cada paso y validación por API; el ensayo con datos frescos (punto 1) es obligatorio.
 
 Reglas generales:
 - Cada comando es dry-run por defecto; aplicar con `APPLY=true` solo después de revisar la salida.
@@ -41,11 +41,18 @@ go run ./cmd/audit-indexes
 go run ./cmd/audit-bookings
 ```
 
-Las 4 anomalías de índices de `users` son preexistentes y no bloquean. Guardar la salida.
+`audit-indexes` reporta los índices esperados que faltan. Hay dos casos:
+
+- **6 hallazgos** si el backend nuevo nunca arrancó contra esta base: 4 mensajes sobre `users` (2 índices de `slot_holds` creados por error en esa colección, cada uno con 2 motivos; preexistentes, no bloquean) + 2 índices de `slot_holds` que crea `EnsureIndexes` al arrancar el backend (§4.1).
+- **4 hallazgos** si el backend nuevo ya arrancó (creó esos 2 índices). Es el estado actual de producción.
+
+Antes de migrar, confirmar qué backend está sirviendo: `curl -s https://api.reservaloya.cl/api/sport-centers/slug/<slug>/facilities` responde 200 solo con `feature/2.0`. Si responde 200 y `spaces` está vacío, la app pública muestra `courts: 0`: la ventana ya está abierta y hay que migrar de inmediato.
 
 ## 3. Migración de datos (en este orden)
 
 Para cada comando: ejecutar sin `APPLY`, revisar, ejecutar con `APPLY=true` cuando aplique.
+
+> Alternativa automatizada: `scripts/migrate-prod.sh` ejecuta esta sección completa con guardas (exige `CONFIRM=migrar-produccion` y `MODE=apply`, respalda `bookings` y `sport_centers` antes de tocarlos, verifica el resultado de cada paso y aborta si algo no cuadra). Sin `MODE` corre solo los dry-runs y omite `migrate-spaces`/`migrate-geo`, que escriben siempre. Validado contra el dump del 11-11-2026: reproduce exactamente el estado de la copia de referencia.
 
 ```bash
 # 3.1 Reservas de Fintoc (aborta si hay futuras confirmadas)
@@ -89,11 +96,21 @@ APPLY=true go run ./cmd/migrate-commercial-model
 unset DEFAULT_COMMISSION OVERRIDES
 
 # 3.10 Credenciales de Fintoc: SIN rollback. Antes, mongodump de sport_centers.
+mongodump --uri="$MONGO_URI" --db="$MONGO_DB" --collection=sport_centers --gzip \
+  --archive="logs/migrations/sport_centers-pre-fintoc-$(date -u +%Y%m%d-%H%M%S).gz"
 go run ./cmd/remove-fintoc-credentials
 APPLY=true go run ./cmd/remove-fintoc-credentials
+
+# 3.11 Tipo de conexión de Mercado Pago (opcional, deja explícito el split)
+go run ./cmd/migrate-mp-connection-type
+APPLY=true go run ./cmd/migrate-mp-connection-type
 ```
 
 Comprobaciones por paso: spaces = cantidad de `courts`; 0 centros sin timezone; 0 reservas sin `scheduled_at`; 0 hallazgos en `audit-bookings`; `courts_count` de cada centro = número de canchas (los quinchos ya no cuentan).
+
+El 3.11 no es bloqueante: el backend infiere el tipo con `EffectiveConnectionType` cuando el campo falta. Hoy ambos centros quedan como `manual` (token compartido a mano, sin `refresh_token` ni `connected_at`), y una conexión `manual` **no** admite `marketplace_fee`: el split con comisión solo funciona con conexión OAuth.
+
+No reutilizar `OVERRIDES` del paso 3.9: en `migrate-commercial-model` vale `id=PAY_AT_CENTER|PAY_ONLINE` y en `migrate-mp-connection-type` vale `id=oauth|manual`; el comando aborta si el tipo no es válido. Si se necesita forzar un centro en 3.11, hacerlo en una variable aparte.
 
 ## 4. Despliegue y recurrentes
 
@@ -107,7 +124,19 @@ APPLY=true API_BASE_URL=https://<backend-produccion> RECURRING_JOB_TOKEN=<token>
 ```
 
    Anotar el instante `inicio=...` que imprime (sirve para el rollback con `SINCE`). Debe terminar con `OK`: segunda corrida sin crear nada, sin duplicados y cada serie con sus fechas.
-3. Si `BOOKING_REDIS_AUTHORITY=true`: ejecutar `reconcile-occupancy`.
+
+   > La petición puede tardar más de 100 s y Cloudflare corta con `524` aunque el backend siga generando (el `job_lock` evita que dos corridas se solapen). No repetir a ciegas: esperar a que el contador de `bookings` con `recurring_id` deje de crecer y volver a correr el comando; debe salir `Created:0`, `AlreadyExists:N` y `OK: generadas=0`.
+3. Si `BOOKING_REDIS_AUTHORITY=true`: reconciliar la ocupación en Redis. **Sin `MODE` el comando aborta**, y `REDIS_URL` es obligatorio (no se toma de `.env`):
+
+```bash
+export REDIS_URL='redis://<host>:6379'
+MODE=import go run ./cmd/reconcile-occupancy                 # dry-run
+MODE=import APPLY=true go run ./cmd/reconcile-occupancy
+MODE=reconcile go run ./cmd/reconcile-occupancy              # dry-run
+MODE=reconcile APPLY=true go run ./cmd/reconcile-occupancy
+```
+
+   `MODE=import` carga en Redis los horarios legacy que aún no tienen equivalente v2 (en el ensayo: 22 candidatos, 22 importados, 0 conflictos). `MODE=reconcile` sólo compara y reporta divergencias. Verificar la salida antes de cada `APPLY=true`.
 4. Levantar la app y habilitar el workflow diario de GitHub (06:00 UTC). Desde aquí agrega solo la ocurrencia siguiente de cada serie.
 
 ## 5. Verificación
@@ -121,10 +150,11 @@ db.sport_centers.countDocuments({fintoc: {$exists: true}})      // 0
 db.bookings.aggregate([{$match: {status: "confirmed"}},
   {$group: {_id: {c: "$court_id", d: "$local_date", h: "$hour", m: "$minutes"}, n: {$sum: 1}}},
   {$match: {n: {$gt: 1}}}]).toArray().length                    // 0
-db.sport_centers.find({}, {slug: 1, courts_count: 1, "commercial.payment_mode": 1, location: 1, timezone: 1})
+db.sport_centers.find({}, {slug: 1, courts_count: 1, "commercial.payment_mode": 1, location: 1, timezone: 1,
+  "mercadopago.connection_type": 1})
 ```
 
-Esperado: Orellana `PAY_ONLINE` con comisión 0% (`source=CENTER`), Catolica `PAY_AT_CENTER` con suscripción `LEGACY` en monto 0, `location` y `timezone` presentes, credenciales de Mercado Pago iguales a las del snapshot.
+Esperado: Orellana `PAY_ONLINE` con comisión 0% (`source=CENTER`), Catolica `PAY_AT_CENTER` con suscripción `LEGACY` en monto 0, `location` y `timezone` presentes, `connection_type=manual` en ambos, credenciales de Mercado Pago iguales a las del snapshot.
 
 API y flujos:
 - [ ] `GET /api/sport-centers?lat=..&lng=..` devuelve los centros ordenados por distancia.
@@ -145,6 +175,8 @@ API y flujos:
 | Recurrentes | `ROLLBACK=true APPLY=true SINCE=<inicio> go run ./cmd/migrate-recurring-bookings` |
 | Credenciales de Fintoc | Solo desde el `mongodump` previo (no hay copia en la base) |
 | Todo | Restaurar el snapshot de Atlas y volver al backend anterior (lo más seguro) |
+
+> **Orden importa.** Si se revierte 3.1 (Fintoc) o 3.2 (duplicados) **después** de 3.6, los documentos restaurados desde `migration_backups` vuelven sin `local_date`/`scheduled_at`/`timezone` y `audit-bookings` los reporta como hallazgos. En el ensayo fueron 3 documentos. Después de cualquier rollback de esos dos pasos, volver a correr `APPLY=true go run ./cmd/migrate-booking-schedule-fields` y confirmar `Total de hallazgos: 0`.
 
 `spaces`, `schedule_rules` y los campos temporales de `bookings` no tienen rollback propio: `courts` se conserva intacta hasta la limpieza final, y el backend anterior sigue funcionando sobre ella.
 
