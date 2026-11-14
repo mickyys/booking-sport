@@ -12,6 +12,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/hamp/booking-sport/internal/app"
+	"github.com/hamp/booking-sport/internal/domain"
 	"github.com/hamp/booking-sport/internal/infra"
 	"github.com/hamp/booking-sport/internal/infra/auth0mgmt"
 	mg "github.com/hamp/booking-sport/internal/infra/mailgun"
@@ -225,17 +226,36 @@ func main() {
 		bookingUC.SetOccupancyDefaultMode(defaultMode)
 		log.Infow("occupancy_default_mode", "mode", string(defaultMode))
 
-		interval, err := time.ParseDuration(getEnv("BOOKING_RECONCILE_INTERVAL", "60s"))
-		if err != nil || interval <= 0 {
-			log.Fatalw("invalid_booking_reconcile_interval", "error", err)
-		}
 		reconciler := &app.OccupancyReconciler{
 			Store: mongo.NewOccupancyReconcileStore(db),
 			Coord: coordinator,
 			Locks: jobLockRepo,
 			Apply: true,
 		}
-		go reconciler.Loop(context.Background(), interval)
+		// El intervalo fijo queda sólo como compatibilidad: el horario por
+		// defecto corre a las 06:00 y cada hora entre 09:00 y 22:00.
+		if rawInterval := getEnv("BOOKING_RECONCILE_INTERVAL", ""); rawInterval != "" {
+			interval, err := time.ParseDuration(rawInterval)
+			if err != nil || interval <= 0 {
+				log.Fatalw("invalid_booking_reconcile_interval", "value", rawInterval, "error", err)
+			}
+			log.Warnw("booking_reconcile_interval_deprecated",
+				"interval", interval, "hint", "usar BOOKING_RECONCILE_SCHEDULE")
+			go reconciler.Loop(context.Background(), interval)
+		} else {
+			loc, err := domain.LoadTimezone(getEnv("BOOKING_RECONCILE_TZ", domain.SantiagoTimezone))
+			if err != nil {
+				log.Fatalw("invalid_booking_reconcile_timezone", "error", err)
+			}
+			schedule, err := app.ParseReconcileSchedule(
+				getEnv("BOOKING_RECONCILE_SCHEDULE", "06:00,09:00-22:00"), loc)
+			if err != nil {
+				log.Fatalw("invalid_booking_reconcile_schedule", "error", err)
+			}
+			log.Infow("occupancy_reconcile_schedule",
+				"hours", schedule.Hours(), "timezone", loc.String())
+			go reconciler.LoopSchedule(context.Background(), schedule.Next)
+		}
 		log.Infow("occupancy_coordinator_enabled")
 	}
 
