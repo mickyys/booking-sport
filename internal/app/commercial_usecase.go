@@ -161,7 +161,7 @@ func (uc *CommercialUseCase) view(ctx context.Context, c *domain.SportCenter) (*
 		v.Subscription = sv
 	case domain.CommercialModePayOnline:
 		v.MercadoPago = c.MercadoPagoStatus()
-		rate, source := c.EffectiveCommission(CommercialModelEnforced(), defaultMarketplaceFeePercent)
+		rate, source := c.EffectiveCommission(true, defaultMarketplaceFeePercent)
 		// Sólo una conexión manual activa cambia el cobro: con token compartido
 		// Mercado Pago rechaza marketplace_fee, así que no se retiene nada en el
 		// split, la comisión se factura aparte y la efectiva para el centro es 0.
@@ -320,8 +320,8 @@ func (uc *CommercialUseCase) SetCommission(ctx context.Context, centerID primiti
 	if value == nil {
 		cfg.Value, cfg.Source = intRef(defaultMarketplaceFeePercent), domain.CommissionSourceDefault
 	} else {
-		if *value < 0 || *value > 100 {
-			return nil, domain.NewBadRequestError("la comisión debe estar entre 0 y 100")
+		if err := validateCommissionRate(*value); err != nil {
+			return nil, err
 		}
 		cfg.Value, cfg.Source = value, domain.CommissionSourceCenter
 	}

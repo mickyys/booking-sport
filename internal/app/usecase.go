@@ -373,7 +373,14 @@ func (uc *SportCenterUseCase) FindByID(ctx context.Context, id primitive.ObjectI
 }
 
 func (uc *SportCenterUseCase) FindBySlug(ctx context.Context, slug string) (*domain.SportCenter, error) {
-	return uc.repo.FindBySlug(ctx, slug)
+	center, err := uc.repo.FindBySlug(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+	if center != nil {
+		center.ServiceFeePercent = ServiceFeePercent(center)
+	}
+	return center, nil
 }
 
 // googlePlaceIDUpdater es opcional para no ampliar SportCenterRepository.
@@ -399,6 +406,11 @@ func (uc *SportCenterUseCase) UpdateGooglePlaceID(ctx context.Context, id primit
 }
 
 func (uc *SportCenterUseCase) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
+	if marketplaceFeePercent != nil {
+		if err := validateCommissionRate(*marketplaceFeePercent); err != nil {
+			return err
+		}
+	}
 	if paymentMode != nil && !isValidPaymentMode(*paymentMode) {
 		return ErrInvalidPaymentMode
 	}
@@ -1517,6 +1529,10 @@ func (uc *SportCenterUseCase) ListSportCentersPaged(ctx context.Context, page, l
 	// Asegurar que centers sea un array vacío si es nil para el JSON
 	if centers == nil {
 		centers = []domain.SportCenter{}
+	}
+
+	for i := range centers {
+		centers[i].ServiceFeePercent = ServiceFeePercent(&centers[i])
 	}
 
 	totalPages := int((total + int64(limit) - 1) / int64(limit))

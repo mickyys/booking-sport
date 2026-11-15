@@ -56,7 +56,9 @@ func (uc *BookingUseCase) processMercadoPagoRefund(ctx context.Context, booking 
 		if refundAmount >= booking.PaidAmount {
 			refundResult, refundErr = mpClient.CreateRefund(ctx, mpPaymentID)
 		} else {
-			refundResult, refundErr = mpClient.CreatePartialRefund(ctx, mpPaymentID, refundAmount)
+			// El cliente pagó el precio más el recargo: se devuelve también la
+			// parte proporcional del recargo.
+			refundResult, refundErr = mpClient.CreatePartialRefund(ctx, mpPaymentID, grossFromBase(center, refundAmount))
 		}
 		if refundErr != nil {
 			log.Errorw("booking_cancel_refund_error",

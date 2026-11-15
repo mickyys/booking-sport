@@ -156,7 +156,10 @@ type SportCenter struct {
 	PartialPaymentEnabled bool               `bson:"partial_payment_enabled" json:"partial_payment_enabled"`
 	PartialPaymentPercent int                `bson:"partial_payment_percent" json:"partial_payment_percent"`
 	MarketplaceFeePercent int                `bson:"marketplace_fee_percent" json:"marketplace_fee_percent"`
-	IsPrivate             bool               `bson:"is_private" json:"is_private"`
+	// ServiceFeePercent es el cargo por servicio (%) que ve el cliente al pagar
+	// online. Se calcula al responder; no se persiste.
+	ServiceFeePercent int  `bson:"-" json:"service_fee_percent"`
+	IsPrivate         bool `bson:"is_private" json:"is_private"`
 	// AccessForm configura la solicitud de acceso cuando el centro es privado.
 	// No se expone en el listado público; la ficha la devuelve saneada.
 	AccessForm *CenterAccessForm    `bson:"access_form,omitempty" json:"access_form,omitempty"`
@@ -856,6 +859,9 @@ type PaymentInfo struct {
 	// recalcula si el centro cambia su porcentaje.
 	CommissionRate   int     `bson:"commission_rate,omitempty" json:"commission_rate,omitempty"`
 	CommissionAmount float64 `bson:"commission_amount,omitempty" json:"commission_amount,omitempty"`
+	// MPFeeAmount es la comisión real que Mercado Pago cobró por este pago
+	// (fee_details.mercadopago_fee), para contrastarla con la tarifa estimada.
+	MPFeeAmount float64 `bson:"mp_fee_amount,omitempty" json:"mp_fee_amount,omitempty"`
 }
 
 type MockPaymentResult struct {

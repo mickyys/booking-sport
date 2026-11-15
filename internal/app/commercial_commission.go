@@ -1,10 +1,16 @@
 package app
 
 import (
+	"context"
+	"fmt"
 	"math"
+	"os"
+	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"github.com/hamp/booking-sport/internal/domain"
+	"github.com/hamp/booking-sport/pkg/mercadopago"
 )
 
 // defaultMarketplaceFeePercent es la comisión global para centros que no
@@ -24,22 +30,74 @@ func CommercialModelEnforced() bool { return commercialModelEnforced.Load() }
 // centerCommissionRate resuelve el porcentaje de comisión (0-100) que se cobra
 // hoy a un centro. Un 0% explícito se respeta.
 func centerCommissionRate(center *domain.SportCenter) int {
-	rate, _ := center.EffectiveCommission(CommercialModelEnforced(), defaultMarketplaceFeePercent)
+	rate, _ := center.EffectiveCommission(true, defaultMarketplaceFeePercent)
 	return rate
 }
 
-// marketplaceFeeFor resuelve el marketplace_fee a enviar a Mercado Pago.
-//
-// Sólo los centros conectados por OAuth autorizaron a la plataforma a retener
-// la comisión en el split. Con un access token compartido (conexión manual)
-// Mercado Pago rechaza la preferencia si se envía marketplace_fee, así que en
-// ese caso se omite y la comisión se factura fuera de Mercado Pago. La comisión
-// igual queda registrada en la reserva vía applyCommissionSnapshot.
-func marketplaceFeeFor(center *domain.SportCenter, amount float64) float64 {
-	if center == nil || !center.MercadoPago.SupportsMarketplaceFee() {
-		return 0
+// defaultMPEffectiveRate es la tasa efectiva de Mercado Pago Chile con
+// acreditación al instante: 3,19% + IVA 19% = 3,7961%. Se puede sobreescribir
+// con MP_EFFECTIVE_RATE (porcentaje, p. ej. "3.7961").
+const defaultMPEffectiveRate = 3.7961
+
+func mpEffectiveRate() float64 {
+	if v := strings.TrimSpace(os.Getenv("MP_EFFECTIVE_RATE")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 && f < 100 {
+			return f
+		}
 	}
-	return commissionFee(amount, centerCommissionRate(center))
+	return defaultMPEffectiveRate
+}
+
+// SurchargeCharge es el desglose de un cobro con comisión sumada al precio.
+type SurchargeCharge struct {
+	Base           float64 // precio que debe recibir el centro
+	Rate           int     // % de comisión de ReservaloYA
+	Surcharge      float64 // comisión sumada al precio
+	Total          float64 // lo que paga el cliente
+	MPCost         float64 // costo de Mercado Pago sobre el total
+	MarketplaceFee float64 // marketplace_fee enviado a Mercado Pago
+}
+
+// computeSurchargeCharge suma la comisión al precio. Mercado Pago descuenta su
+// costo al vendedor, así que el marketplace_fee es comisión − costo MP para que
+// el centro reciba exactamente el precio. Todo en pesos enteros.
+func computeSurchargeCharge(base float64, ratePercent int, mpRatePercent float64) SurchargeCharge {
+	c := SurchargeCharge{Base: base, Total: base}
+	if base <= 0 || ratePercent <= 0 || ratePercent > 100 {
+		return c
+	}
+	c.Rate = ratePercent
+	c.Surcharge = math.Round(base * float64(ratePercent) / 100)
+	c.Total = base + c.Surcharge
+	c.MPCost = math.Round(c.Total * mpRatePercent / 100)
+	c.MarketplaceFee = c.Surcharge - c.MPCost
+	if c.MarketplaceFee < 0 {
+		c.MarketplaceFee = 0
+	}
+	return c
+}
+
+// surchargeChargeFor resuelve el cobro de una reserva. Solo los centros OAuth
+// reciben recargo; con conexión manual la comisión se factura aparte y el
+// cliente paga el precio.
+func surchargeChargeFor(center *domain.SportCenter, base float64) SurchargeCharge {
+	if center == nil || !center.MercadoPago.SupportsMarketplaceFee() {
+		return SurchargeCharge{Base: base, Total: base}
+	}
+	return computeSurchargeCharge(base, centerCommissionRate(center), mpEffectiveRate())
+}
+
+// baseFromGross revierte el recargo: dado lo pagado por el cliente devuelve el
+// monto que corresponde al precio de la reserva.
+func baseFromGross(center *domain.SportCenter, gross float64) float64 {
+	if center == nil || !center.MercadoPago.SupportsMarketplaceFee() {
+		return gross
+	}
+	rate := centerCommissionRate(center)
+	if rate <= 0 || rate > 100 {
+		return gross
+	}
+	return math.Round(gross * 100 / float64(100+rate))
 }
 
 // commissionFee calcula la comisión en moneda local para un porcentaje ya
@@ -49,4 +107,55 @@ func commissionFee(amount float64, ratePercent int) float64 {
 		return 0
 	}
 	return math.Round(amount*float64(ratePercent)) / 100
+}
+
+// newMPClient permite reemplazar el cliente de Mercado Pago en tests.
+var newMPClient = mercadopago.NewClient
+
+// createSurchargePreference crea la preferencia aplicando el recargo: `base` es
+// lo que debe recibir el centro; el cliente paga el total con comisión.
+func createSurchargePreference(ctx context.Context, center *domain.SportCenter, base float64, in mercadopago.PreferenceInput) (*mercadopago.PreferenceResult, SurchargeCharge, error) {
+	ch := surchargeChargeFor(center, base)
+	in.Amount = ch.Total
+	in.MarketplaceFee = ch.MarketplaceFee
+	res, err := newMPClient(center.MercadoPago.AccessToken).CreatePreference(ctx, in)
+	return res, ch, err
+}
+
+// grossFromBase es la inversa de baseFromGross: lo que corresponde devolver al
+// cliente (incluido el recargo proporcional) por un monto base.
+func grossFromBase(center *domain.SportCenter, base float64) float64 {
+	if center == nil || !center.MercadoPago.SupportsMarketplaceFee() {
+		return base
+	}
+	rate := centerCommissionRate(center)
+	if rate <= 0 || rate > 100 {
+		return base
+	}
+	return math.Round(base * float64(100+rate) / 100)
+}
+
+// ServiceFeePercent es el cargo por servicio (%) que se suma al precio para
+// mostrarlo al cliente. 0 si no aplica recargo.
+func ServiceFeePercent(center *domain.SportCenter) int {
+	if center == nil || !center.MercadoPago.SupportsMarketplaceFee() {
+		return 0
+	}
+	if center.EffectiveCommercialMode() == domain.CommercialModePayAtCenter {
+		return 0
+	}
+	return centerCommissionRate(center)
+}
+
+// validateCommissionRate rechaza comisiones que no cubren el costo de Mercado
+// Pago: con 1–3% el marketplace_fee sería 0 y el centro recibiría menos que su
+// precio. 0% (sin recargo) sí es válido.
+func validateCommissionRate(v int) error {
+	if v < 0 || v > 100 {
+		return domain.NewBadRequestError("la comisión debe estar entre 0 y 100")
+	}
+	if v > 0 && float64(v) <= mpEffectiveRate() {
+		return domain.NewBadRequestError(fmt.Sprintf("la comisión debe ser 0 o mayor a %.2f%% (costo de Mercado Pago)", mpEffectiveRate()))
+	}
+	return nil
 }

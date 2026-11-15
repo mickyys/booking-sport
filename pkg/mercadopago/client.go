@@ -12,6 +12,7 @@ import (
 	"github.com/mercadopago/sdk-go/pkg/payment"
 	"github.com/mercadopago/sdk-go/pkg/preference"
 	"github.com/mercadopago/sdk-go/pkg/refund"
+	"github.com/mercadopago/sdk-go/pkg/requester"
 
 	"github.com/hamp/booking-sport/pkg/logger"
 )
@@ -52,6 +53,16 @@ func NewClient(accessToken string) *Client {
 			"error", err,
 		)
 	}
+	return &Client{accessToken: accessToken, config: cfg}
+}
+
+// NewClientWithRequester crea un cliente con un transporte HTTP propio (tests).
+func NewClientWithRequester(accessToken string, r requester.Requester) *Client {
+	cfg, err := mp.New(accessToken)
+	if err != nil {
+		return &Client{accessToken: accessToken}
+	}
+	cfg.Requester = r
 	return &Client{accessToken: accessToken, config: cfg}
 }
 

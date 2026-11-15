@@ -140,7 +140,7 @@ func (uc *BookingUseCase) applyApprovedPayment(ctx context.Context, store Paymen
 	paymentIDStr := strconv.Itoa(pay.ID)
 
 	charged := booking.ChargedPrice()
-	paidAmount := pay.TransactionAmount
+	paidAmount := baseFromGross(center, pay.TransactionAmount)
 	pendingAmount := charged - paidAmount
 	if pendingAmount < 0 {
 		pendingAmount = 0
@@ -187,6 +187,7 @@ func (uc *BookingUseCase) applyApprovedPayment(ctx context.Context, store Paymen
 		rate := centerCommissionRate(center)
 		paymentInfo.CommissionRate = rate
 		paymentInfo.CommissionAmount = commissionFee(paidAmount, rate)
+		paymentInfo.MPFeeAmount = mercadoPagoFee(pay)
 	}
 
 	claimPending := pendingAmount
@@ -456,4 +457,17 @@ func (uc *BookingUseCase) RunPaymentReconcileLoop(ctx context.Context, locks Job
 			}
 		}
 	}
+}
+
+// mercadoPagoFee suma la comisión de procesamiento que Mercado Pago cobró por
+// el pago. Es el valor real; la tarifa configurada (MP_EFFECTIVE_RATE) es solo
+// una estimación para calcular el marketplace_fee.
+func mercadoPagoFee(pay *payment.Response) float64 {
+	var total float64
+	for _, f := range pay.FeeDetails {
+		if f.Type == "mercadopago_fee" {
+			total += f.Amount
+		}
+	}
+	return total
 }

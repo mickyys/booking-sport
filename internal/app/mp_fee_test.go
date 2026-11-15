@@ -45,14 +45,14 @@ func TestCenterCommissionRate(t *testing.T) {
 	defer SetCommercialModelEnforced(false)
 
 	SetCommercialModelEnforced(false)
-	if got := centerCommissionRate(explicitZero); got != defaultMarketplaceFeePercent {
-		t.Errorf("flag off: 0%% explícito = %d, want %d (comportamiento histórico)", got, defaultMarketplaceFeePercent)
+	if got := centerCommissionRate(explicitZero); got != 0 {
+		t.Errorf("0%% explícito = %d, want 0 (sin depender de la bandera)", got)
 	}
 	if got := centerCommissionRate(legacy); got != defaultMarketplaceFeePercent {
-		t.Errorf("flag off: legacy = %d, want default", got)
+		t.Errorf("legacy = %d, want default", got)
 	}
 	if got := centerCommissionRate(ownFee); got != 4 {
-		t.Errorf("flag off: fee propio = %d, want 4", got)
+		t.Errorf("fee propio = %d, want 4", got)
 	}
 
 	SetCommercialModelEnforced(true)
