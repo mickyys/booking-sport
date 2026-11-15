@@ -80,6 +80,10 @@ func (h *SuperAdminHandler) ListCenters(c *gin.Context) {
 		b := v == "true"
 		f.Featured = &b
 	}
+	if v := c.Query("private"); v != "" {
+		b := v == "true"
+		f.Private = &b
+	}
 	items, total, err := h.repo.ListCenters(c.Request.Context(), f, page, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -153,6 +157,46 @@ func (h *SuperAdminHandler) SetStatus(c *gin.Context) {
 	}
 	h.writeAudit(c, "center.status", "sport_center", id.Hex(), reason, map[string]interface{}{"status": body.Status})
 	c.JSON(http.StatusOK, gin.H{"status": body.Status})
+}
+
+// SetPrivate activa o desactiva el acceso restringido del centro.
+func (h *SuperAdminHandler) SetPrivate(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	var body struct {
+		IsPrivate *bool  `json:"is_private"`
+		Reason    string `json:"reason"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if body.IsPrivate == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "is_private es obligatorio"})
+		return
+	}
+	reason := strings.TrimSpace(body.Reason)
+	if *body.IsPrivate && len(reason) < 5 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "el motivo es obligatorio para marcar un centro como privado (mínimo 5 caracteres)"})
+		return
+	}
+	actor, _ := c.Get("user_id")
+	actorID, _ := actor.(string)
+	if err := h.repo.SetPrivate(c.Request.Context(), id, *body.IsPrivate, reason, actorID); err != nil {
+		if errors.Is(err, mongodb.ErrNoDocuments) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "center not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	h.writeAudit(c, "center.private", "sport_center", id.Hex(), reason, map[string]interface{}{
+		"is_private": *body.IsPrivate,
+	})
+	c.JSON(http.StatusOK, gin.H{"is_private": *body.IsPrivate})
 }
 
 func (h *SuperAdminHandler) SetFeatured(c *gin.Context) {

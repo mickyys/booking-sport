@@ -71,8 +71,14 @@ type FacilityBookingUseCase struct {
 	schedule   *ScheduleUseCase
 	mpClient   *mercadopago.Client
 	mailer     FacilityMailer
+	access     *CenterAccessUseCase
 	async      func(func())
 	now        func() time.Time
+}
+
+// SetAccessUseCase inyecta la validación de acceso para centros privados.
+func (uc *FacilityBookingUseCase) SetAccessUseCase(access *CenterAccessUseCase) {
+	uc.access = access
 }
 
 func NewFacilityBookingUseCase(
@@ -146,6 +152,8 @@ type CreateFacilityBookingInput struct {
 	PaymentMethod string
 	// Partial solicita pagar solo el abono configurado por el centro.
 	Partial bool
+	// AccessToken es obligatorio en centros privados.
+	AccessToken string
 }
 
 type FacilityBookingResult struct {
@@ -259,6 +267,11 @@ func (uc *FacilityBookingUseCase) Create(ctx context.Context, in CreateFacilityB
 	center, err := uc.centerRepo.FindByID(ctx, space.SportCenterID)
 	if err != nil {
 		return nil, domain.NewNotFoundError("centro no encontrado")
+	}
+	if uc.access != nil {
+		if err := uc.access.EnsureBookingAccess(ctx, center, in.AccessToken, false); err != nil {
+			return nil, err
+		}
 	}
 	method, err := resolveFacilityPaymentMethod(center, in.PaymentMethod)
 	if err != nil {

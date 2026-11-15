@@ -70,3 +70,30 @@ func (c *Coordinator) AllowVerificationRequest(ctx context.Context, ip, document
 	}
 	return app.VerificationLimitOK, nil
 }
+
+// AllowAccessRequest implementa app.CenterAccessLimiter con un prefijo propio
+// para no consumir el cupo de la verificación de socios.
+func (c *Coordinator) AllowAccessRequest(ctx context.Context, ip, key string) (app.VerificationLimit, error) {
+	tag := fmt.Sprintf("%s:access:{v}", c.prefix)
+	pair := sha256.Sum256([]byte(strings.ToLower(key) + "|" + ip))
+	keys := []string{
+		tag + ":cd:" + hex.EncodeToString(pair[:16]),
+		tag + ":ip:" + ip,
+		tag + ":key:" + hex.EncodeToString(pair[:16]),
+	}
+	res, err := c.verifyLimit.Run(ctx, c.client, keys,
+		verifyIPMax, verifyDocMax, verifyWindow.Milliseconds(), verifyCooldown.Milliseconds(),
+	).Int()
+	if err != nil {
+		return app.VerificationLimitOK, err
+	}
+	switch res {
+	case 1:
+		return app.VerificationLimitIP, nil
+	case 2:
+		return app.VerificationLimitCooldown, nil
+	case 3:
+		return app.VerificationLimitDocument, nil
+	}
+	return app.VerificationLimitOK, nil
+}

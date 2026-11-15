@@ -655,3 +655,119 @@ func (m *MailgunMailer) SendMemberVerificationCode(ctx context.Context, to, name
 	_, _, err := m.mg.Send(sendCtx, message)
 	return err
 }
+
+// accessTemplatesFS contiene los correos del flujo de acceso a centros
+// privados (solicitud recibida, aprobada, rechazada y código de verificación).
+//
+//go:embed templates/access_request_received.html templates/access_request_approved.html templates/access_request_rejected.html templates/access_verification_code.html
+var accessTemplatesFS embed.FS
+
+var accessTemplates = template.Must(template.ParseFS(
+	accessTemplatesFS,
+	"templates/access_request_received.html",
+	"templates/access_request_approved.html",
+	"templates/access_request_rejected.html",
+	"templates/access_verification_code.html",
+))
+
+type accessEmailData struct {
+	Name           string
+	CenterName     string
+	TenantURL      string
+	Reason         string
+	ContactEmail   string
+	Code           string
+	ExpiresMinutes int
+}
+
+// sendAccessTemplate renderiza y envía uno de los correos del flujo de acceso.
+func (m *MailgunMailer) sendAccessTemplate(ctx context.Context, templateName, subject, to string, data accessEmailData) error {
+	if to == "" {
+		return fmt.Errorf("no recipient email for %s", templateName)
+	}
+	if data.Name == "" {
+		data.Name = "solicitante"
+	}
+	if data.CenterName == "" {
+		data.CenterName = "ReservaloYA"
+	}
+	tpl := accessTemplates.Lookup(templateName)
+	if tpl == nil {
+		return fmt.Errorf("access template %s not found", templateName)
+	}
+	var body bytes.Buffer
+	if err := tpl.Execute(&body, data); err != nil {
+		return err
+	}
+	message := m.mg.NewMessage(m.from, subject, "", to)
+	message.SetHtml(body.String())
+
+	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_, id, err := m.mg.Send(sendCtx, message)
+	if err == nil {
+		logger.GetLogger().Infow("mailgun_access_email_sent",
+			"template", templateName,
+			"to", logger.MaskEmail(to),
+			"message_id", id,
+		)
+	}
+	return err
+}
+
+// SendAccessRequestReceived confirma al solicitante que su postulación llegó.
+func (m *MailgunMailer) SendAccessRequestReceived(ctx context.Context, data app.CenterAccessEmail) error {
+	return m.sendAccessTemplate(ctx, "access_request_received.html",
+		fmt.Sprintf("Recibimos tu solicitud de acceso - %s", data.CenterName),
+		data.To,
+		accessEmailData{
+			Name:       data.Name,
+			CenterName: data.CenterName,
+			TenantURL:  data.TenantURL,
+		},
+	)
+}
+
+// SendAccessRequestApproved avisa que el acceso fue aprobado.
+func (m *MailgunMailer) SendAccessRequestApproved(ctx context.Context, data app.CenterAccessDecisionEmail) error {
+	return m.sendAccessTemplate(ctx, "access_request_approved.html",
+		fmt.Sprintf("Tu acceso a %s fue aprobado", data.CenterName),
+		data.To,
+		accessEmailData{
+			Name:         data.Name,
+			CenterName:   data.CenterName,
+			TenantURL:    data.TenantURL,
+			ContactEmail: data.ContactEmail,
+		},
+	)
+}
+
+// SendAccessRequestRejected avisa el rechazo e incluye el motivo.
+func (m *MailgunMailer) SendAccessRequestRejected(ctx context.Context, data app.CenterAccessDecisionEmail) error {
+	return m.sendAccessTemplate(ctx, "access_request_rejected.html",
+		fmt.Sprintf("Solicitud de acceso a %s", data.CenterName),
+		data.To,
+		accessEmailData{
+			Name:         data.Name,
+			CenterName:   data.CenterName,
+			TenantURL:    data.TenantURL,
+			Reason:       data.Reason,
+			ContactEmail: data.ContactEmail,
+		},
+	)
+}
+
+// SendAccessVerificationCode envía el código de 6 dígitos para confirmar el
+// acceso de un solicitante aprobado.
+func (m *MailgunMailer) SendAccessVerificationCode(ctx context.Context, to, name, centerName, code string, expiresMinutes int) error {
+	return m.sendAccessTemplate(ctx, "access_verification_code.html",
+		fmt.Sprintf("Tu código de acceso - %s", centerName),
+		to,
+		accessEmailData{
+			Name:           name,
+			CenterName:     centerName,
+			Code:           code,
+			ExpiresMinutes: expiresMinutes,
+		},
+	)
+}

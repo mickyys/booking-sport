@@ -140,30 +140,33 @@ type SportCenter struct {
 	FeaturedUntil    *time.Time `bson:"featured_until,omitempty" json:"featured_until,omitempty"`
 	// Status lo gobierna el superadmin: vacío o "active" opera normal;
 	// "suspended" y "blocked" ocultan el centro y impiden nuevas reservas.
-	Status                string               `bson:"status,omitempty" json:"status,omitempty"`
-	StatusReason          string               `bson:"status_reason,omitempty" json:"status_reason,omitempty"`
-	StatusChangedAt       *time.Time           `bson:"status_changed_at,omitempty" json:"status_changed_at,omitempty"`
-	StatusChangedBy       string               `bson:"status_changed_by,omitempty" json:"-"`
-	Distance              float64              `bson:"distance,omitempty" json:"distance,omitempty"`
-	DistanceKm            float64              `bson:"distance_km,omitempty" json:"distance_km,omitempty"`
-	ImageURL              string               `bson:"image_url" json:"image_url"`
-	Services              []string             `bson:"services" json:"services"`
-	Contact               Contact              `bson:"contact" json:"contact"`
-	CourtsCount           int                  `bson:"courts_count" json:"courts"`
-	MercadoPago           *MercadoPagoConfig   `bson:"mercadopago,omitempty" json:"mp_user_id"`
-	CancellationHours     int                  `bson:"cancellation_hours" json:"cancellation_hours"`
-	RetentionPercent      int                  `bson:"retention_percent" json:"retention_percent"`
-	PartialPaymentEnabled bool                 `bson:"partial_payment_enabled" json:"partial_payment_enabled"`
-	PartialPaymentPercent int                  `bson:"partial_payment_percent" json:"partial_payment_percent"`
-	MarketplaceFeePercent int                  `bson:"marketplace_fee_percent" json:"marketplace_fee_percent"`
-	IsPrivate             bool                 `bson:"is_private" json:"is_private"`
-	Users                 []string             `bson:"users" json:"-"`
-	Subdomain             string               `bson:"subdomain,omitempty" json:"subdomain,omitempty"`
-	Domains               []string             `bson:"domains,omitempty" json:"domains,omitempty"`
-	Branding              *SportCenterBranding `bson:"branding,omitempty" json:"branding,omitempty"`
-	CreatedAt             time.Time            `bson:"created_at" json:"created_at"`
-	UpdatedAt             time.Time            `bson:"updated_at" json:"updated_at"`
-	Rut                   string               `bson:"rut" json:"rut"`
+	Status                string             `bson:"status,omitempty" json:"status,omitempty"`
+	StatusReason          string             `bson:"status_reason,omitempty" json:"status_reason,omitempty"`
+	StatusChangedAt       *time.Time         `bson:"status_changed_at,omitempty" json:"status_changed_at,omitempty"`
+	StatusChangedBy       string             `bson:"status_changed_by,omitempty" json:"-"`
+	Distance              float64            `bson:"distance,omitempty" json:"distance,omitempty"`
+	DistanceKm            float64            `bson:"distance_km,omitempty" json:"distance_km,omitempty"`
+	ImageURL              string             `bson:"image_url" json:"image_url"`
+	Services              []string           `bson:"services" json:"services"`
+	Contact               Contact            `bson:"contact" json:"contact"`
+	CourtsCount           int                `bson:"courts_count" json:"courts"`
+	MercadoPago           *MercadoPagoConfig `bson:"mercadopago,omitempty" json:"mp_user_id"`
+	CancellationHours     int                `bson:"cancellation_hours" json:"cancellation_hours"`
+	RetentionPercent      int                `bson:"retention_percent" json:"retention_percent"`
+	PartialPaymentEnabled bool               `bson:"partial_payment_enabled" json:"partial_payment_enabled"`
+	PartialPaymentPercent int                `bson:"partial_payment_percent" json:"partial_payment_percent"`
+	MarketplaceFeePercent int                `bson:"marketplace_fee_percent" json:"marketplace_fee_percent"`
+	IsPrivate             bool               `bson:"is_private" json:"is_private"`
+	// AccessForm configura la solicitud de acceso cuando el centro es privado.
+	// No se expone en el listado público; la ficha la devuelve saneada.
+	AccessForm *CenterAccessForm    `bson:"access_form,omitempty" json:"access_form,omitempty"`
+	Users      []string             `bson:"users" json:"-"`
+	Subdomain  string               `bson:"subdomain,omitempty" json:"subdomain,omitempty"`
+	Domains    []string             `bson:"domains,omitempty" json:"domains,omitempty"`
+	Branding   *SportCenterBranding `bson:"branding,omitempty" json:"branding,omitempty"`
+	CreatedAt  time.Time            `bson:"created_at" json:"created_at"`
+	UpdatedAt  time.Time            `bson:"updated_at" json:"updated_at"`
+	Rut        string               `bson:"rut" json:"rut"`
 	// GooglePlaceID identifica el recinto en Google Maps; se usa para mostrar
 	// calificación y reseñas en el detalle público del centro.
 	GooglePlaceID string `bson:"google_place_id,omitempty" json:"google_place_id,omitempty"`
@@ -789,6 +792,9 @@ type Booking struct {
 	// usan para cotizar y reservar, pero nunca se persisten en la reserva.
 	MemberToken  string `bson:"-" json:"member_token,omitempty"`
 	DiscountCode string `bson:"-" json:"discount_code,omitempty"`
+	// AccessToken acredita el acceso a un centro privado. Es transitorio: se
+	// valida al crear la reserva y nunca se persiste.
+	AccessToken string `bson:"-" json:"access_token,omitempty"`
 	// MemberID solo se acepta en el flujo administrativo (reserva creada por
 	// el organizador). El handler público lo ignora.
 	MemberID string `bson:"-" json:"member_id,omitempty"`

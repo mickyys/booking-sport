@@ -61,6 +61,10 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 		return err
 	}
 
+	if err := ensureCenterAccessIndexes(ctx, db); err != nil {
+		return err
+	}
+
 	log.Println("[MONGODB] All indexes created successfully")
 	return nil
 }
@@ -812,5 +816,69 @@ func ensureMembershipIndexes(ctx context.Context, db *mongo.Database) error {
 	}
 
 	log.Println("[MONGODB] membership indexes created")
+	return nil
+}
+
+// ensureCenterAccessIndexes crea los índices del acceso privado. El índice
+// único por centro + RUT es la garantía de que una persona tiene una sola
+// solicitud vigente.
+func ensureCenterAccessIndexes(ctx context.Context, db *mongo.Database) error {
+	requests := db.Collection("center_access_requests")
+	requestIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}, {Key: "rut", Value: 1}},
+			Options: options.Index().SetName("idx_center_access_requests_center_rut").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}, {Key: "status", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("idx_center_access_requests_center_status"),
+		},
+		{
+			Keys:    bson.D{{Key: "sport_center_id", Value: 1}, {Key: "email", Value: 1}},
+			Options: options.Index().SetName("idx_center_access_requests_center_email"),
+		},
+	}
+	if _, err := requests.Indexes().CreateMany(ctx, requestIndexes); err != nil {
+		log.Printf("[MONGODB] Error creating center_access_requests indexes: %v", err)
+		return err
+	}
+
+	verifications := db.Collection("center_access_verifications")
+	verificationIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "expires_at", Value: 1}},
+			Options: options.Index().SetName("idx_center_access_verifications_ttl").SetExpireAfterSeconds(0),
+		},
+		{
+			Keys:    bson.D{{Key: "request_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("idx_center_access_verifications_request"),
+		},
+	}
+	if _, err := verifications.Indexes().CreateMany(ctx, verificationIndexes); err != nil {
+		log.Printf("[MONGODB] Error creating center_access_verifications indexes: %v", err)
+		return err
+	}
+
+	tokens := db.Collection("center_access_tokens")
+	tokenIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "token_hash", Value: 1}},
+			Options: options.Index().SetName("idx_center_access_tokens_hash").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "expires_at", Value: 1}},
+			Options: options.Index().SetName("idx_center_access_tokens_ttl").SetExpireAfterSeconds(0),
+		},
+		{
+			Keys:    bson.D{{Key: "request_id", Value: 1}},
+			Options: options.Index().SetName("idx_center_access_tokens_request"),
+		},
+	}
+	if _, err := tokens.Indexes().CreateMany(ctx, tokenIndexes); err != nil {
+		log.Printf("[MONGODB] Error creating center_access_tokens indexes: %v", err)
+		return err
+	}
+
+	log.Println("[MONGODB] center access indexes created")
 	return nil
 }

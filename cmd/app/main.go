@@ -104,6 +104,7 @@ func main() {
 	userProfileRepo := mongo.NewUserProfileRepository(db)
 	inboxRepo := mongo.NewInboxRepository(db)
 	notificationDeliveryRepo := mongo.NewNotificationDeliveryRepository(db)
+	centerAccessRepo := mongo.NewCenterAccessRepository(db)
 
 	log.Infow("repositories_initialized")
 
@@ -143,6 +144,7 @@ func main() {
 	var bookingMailer app.Mailer
 	var facilityMailer app.FacilityMailer
 	var memberVerificationMailer app.MemberVerificationMailer
+	var centerAccessMailer app.CenterAccessMailer
 	mailgunAPIKey := os.Getenv("MAILGUN_API_KEY")
 	mailgunDomain := os.Getenv("MAILGUN_DOMAIN")
 	mailgunFrom := os.Getenv("MAILGUN_FROM")
@@ -162,6 +164,7 @@ func main() {
 		bookingMailer = mgMailer
 		facilityMailer = mgMailer
 		memberVerificationMailer = mgMailer
+		centerAccessMailer = mgMailer
 		log.Infow("mailgun_initialized",
 			"domain", mailgunDomain,
 			"from", logger.MaskEmail(mailgunFrom),
@@ -193,6 +196,8 @@ func main() {
 	membershipUC := app.NewMembershipUseCase(membershipRepo, sportCenterRepo)
 	discountUC := app.NewDiscountUseCase(discountRepo, sportCenterRepo)
 	memberVerificationUC := app.NewMemberVerificationService(membershipRepo, sportCenterRepo, memberVerificationMailer)
+	centerAccessUC := app.NewCenterAccessUseCase(centerAccessRepo, sportCenterRepo, centerAccessMailer)
+	bookingUC.SetAccessUseCase(centerAccessUC)
 	pricingService := app.NewPricingService(courtRepo, sportCenterRepo, spaceRepo, bookingResolver, membershipRepo, discountRepo)
 	bookingUC.SetPricingService(pricingService)
 
@@ -217,6 +222,7 @@ func main() {
 		cancelHealth()
 		bookingUC.SetOccupancyCoordinator(coordinator)
 		memberVerificationUC.SetLimiter(coordinator)
+		centerAccessUC.SetLimiter(coordinator)
 		// Modo por defecto de los centros sin occupancy_authority propio.
 		// "off" permite activar el coordinador centro por centro.
 		defaultMode, ok := app.ParseOccupancyMode(getEnv("BOOKING_OCCUPANCY_MODE", string(app.OccupancyAuthority)))
@@ -291,6 +297,7 @@ func main() {
 	}
 	scheduleUC.SetBookedDatesSource(facilityBookingStore)
 	facilityBookingUC := app.NewFacilityBookingUseCase(facilityBookingStore, spaceRepo, sportCenterRepo, scheduleUC, mercadopago.NewClient(getEnv("MP_ACCESS_TOKEN", "")))
+	facilityBookingUC.SetAccessUseCase(centerAccessUC)
 	if facilityMailer != nil {
 		facilityBookingUC.SetMailer(facilityMailer)
 	}
@@ -320,6 +327,7 @@ func main() {
 	accountHandler := infra.NewAccountHandler(auth0Mgmt, sportCenterUC)
 	bookingClaimHandler := infra.NewBookingClaimHandler(bookingRepo, auth0Mgmt)
 	inboxHandler := infra.NewInboxHandler(app.NewInboxUseCase(inboxRepo))
+	accessHandler := infra.NewAccessHandler(centerAccessUC, sportCenterRepo)
 
 	log.Infow("handlers_initialized")
 
@@ -411,6 +419,12 @@ func main() {
 	r.POST("/api/public/devices", bookingHandler.RegisterGuestDevice)
 	r.POST("/api/contact", contactHandler.Submit)
 
+	// Acceso a centros privados: solicitud, verificación por RUT y token.
+	r.POST("/api/sport-centers/slug/:slug/access/requests", accessHandler.SubmitRequest)
+	r.POST("/api/sport-centers/slug/:slug/access/verify/request", accessHandler.RequestVerification)
+	r.POST("/api/sport-centers/slug/:slug/access/verify/confirm", accessHandler.ConfirmVerification)
+	r.POST("/api/sport-centers/slug/:slug/access/validate", accessHandler.ValidateToken)
+
 	// Verificación de socios y cotización con descuentos (público, sin login)
 	r.POST("/api/members/verify/request", membershipHandler.RequestVerification)
 	r.POST("/api/members/verify/confirm", membershipHandler.ConfirmVerification)
@@ -428,6 +442,7 @@ func main() {
 	}
 	superAdminHandler := infra.NewSuperAdminHandler(superAdminRepo)
 	superAdminHandler.SetErrorLogRepository(errorLogRepo)
+	accessHandler.SetAuditRepository(superAdminRepo)
 
 	// Rutas Protegidas
 	api := r.Group("/api")
@@ -497,6 +512,15 @@ func main() {
 		api.POST("/admin/bookings/internal", bookingHandler.CreateInternalBooking)
 		api.POST("/admin/bookings/internal/batch", bookingHandler.CreateInternalBookingsBatch)
 
+		// Solicitudes de acceso de centros privados
+		api.GET("/admin/access/requests", accessHandler.ListRequests)
+		api.GET("/admin/access/stats", accessHandler.Stats)
+		api.POST("/admin/access/requests", accessHandler.CreateManual)
+		api.GET("/admin/access/requests/:id", accessHandler.GetRequest)
+		api.PATCH("/admin/access/requests/:id/status", accessHandler.SetRequestStatus)
+		api.GET("/admin/access/form", accessHandler.GetForm)
+		api.PUT("/admin/access/form", accessHandler.UpdateForm)
+
 		// Socios y códigos de descuento
 		api.GET("/admin/membership/plans", membershipHandler.ListPlans)
 		api.POST("/admin/membership/plans", membershipHandler.CreatePlan)
@@ -553,6 +577,7 @@ func main() {
 			sa.PATCH("/sport-centers/:id/settings", superAdminHandler.Audit("center.settings", "sport_center", "id"), sportCenterHandler.SuperAdminUpdateSettings)
 			sa.PUT("/sport-centers/:id/status", superAdminHandler.SetStatus)
 			sa.PUT("/sport-centers/:id/featured", superAdminHandler.SetFeatured)
+			sa.PUT("/sport-centers/:id/private", superAdminHandler.SetPrivate)
 			sa.GET("/sport-centers/:id/commercial", commercialHandler.AdminGet)
 			sa.PUT("/sport-centers/:id/commercial/mode", superAdminHandler.Audit("center.commercial_mode", "sport_center", "id"), commercialHandler.AdminSetMode)
 			sa.PUT("/sport-centers/:id/commercial/commission", superAdminHandler.Audit("center.commission", "sport_center", "id"), commercialHandler.AdminSetCommission)

@@ -152,6 +152,14 @@ func (h *SportCenterHandler) List(c *gin.Context) {
 		return
 	}
 
+	// El listado no necesita el formulario de acceso: solo la ficha lo expone.
+	if centers, ok := response.Data.([]domain.SportCenter); ok {
+		for i := range centers {
+			centers[i].AccessForm = nil
+		}
+		response.Data = centers
+	}
+
 	c.JSON(http.StatusOK, response)
 }
 
@@ -176,6 +184,16 @@ func (h *SportCenterHandler) GetBySlug(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Sport center not found"})
 		return
 	}
+	// El formulario de acceso solo se publica cuando el centro es privado y lo
+	// tiene habilitado. En centros públicos no hay nada que enviar.
+	centerCopy := *center
+	centerCopy.AccessForm = nil
+	if center.IsPrivate && center.AccessForm != nil && center.AccessForm.Enabled {
+		form := *center.AccessForm
+		form.Normalize()
+		centerCopy.AccessForm = &form
+	}
+	center = &centerCopy
 	cancellationPolicy := gin.H{
 		"hours":             center.CancellationHours,
 		"retention_percent": center.RetentionPercent,

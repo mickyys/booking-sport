@@ -31,6 +31,7 @@ var (
 	_ app.OccupancyImporter         = (*Coordinator)(nil)
 	_ app.GenerationPublisher       = (*Coordinator)(nil)
 	_ app.MemberVerificationLimiter = (*Coordinator)(nil)
+	_ app.CenterAccessLimiter       = (*Coordinator)(nil)
 )
 
 // Config for NewCoordinator.
