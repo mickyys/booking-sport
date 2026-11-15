@@ -225,6 +225,9 @@ func bookingFilter(f SuperAdminBookingFilter) bson.M {
 		q["$or"] = bson.A{
 			bson.M{"booking_code": rx}, bson.M{"guest_details.email": rx},
 			bson.M{"guest_details.name": rx}, bson.M{"user_id": rx},
+			// Reservas internas y ocurrencias recurrentes guardan el cliente
+			// solo en customer_name/customer_phone (sin guest_details).
+			bson.M{"customer_name": rx}, bson.M{"customer_phone": rx},
 		}
 	}
 	return q

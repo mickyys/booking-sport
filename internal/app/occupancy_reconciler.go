@@ -64,10 +64,7 @@ type OccupancyReconciler struct {
 
 // Run performs one reconciliation pass under a distributed lock.
 func (r *OccupancyReconciler) Run(ctx context.Context) (ReconcileReport, error) {
-	now := time.Now
-	if r.Now != nil {
-		now = r.Now
-	}
+	now := r.now
 	owner := primitive.NewObjectID().Hex()
 	if r.Locks != nil {
 		ok, err := r.Locks.TryAcquire(ctx, occupancyReconcileLockName, owner, 5*time.Minute, now())
@@ -140,9 +137,9 @@ func (r *OccupancyReconciler) Run(ctx context.Context) (ReconcileReport, error) 
 	return report, nil
 }
 
-// Loop runs Run every interval until ctx is cancelled.
+// Loop runs Run every interval until ctx is cancelled. Kept for the legacy
+// BOOKING_RECONCILE_INTERVAL override; new deployments use LoopSchedule.
 func (r *OccupancyReconciler) Loop(ctx context.Context, interval time.Duration) {
-	log := logger.FromContext(ctx)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -150,21 +147,60 @@ func (r *OccupancyReconciler) Loop(ctx context.Context, interval time.Duration) 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if snap := ShadowStats.Snapshot(); snap != (ShadowSnapshot{}) {
-				log.Infow("occupancy_shadow_stats",
-					"agree_free", snap.AgreeFree, "agree_conflict", snap.AgreeConflict,
-					"redis_conflict_mongo_free", snap.RedisConflictMongoFree,
-					"mongo_conflict_redis_free", snap.MongoConflictRedisFree,
-					"redis_errors", snap.RedisErrors, "stale_generation", snap.StaleGeneration)
-			}
-			report, err := r.Run(ctx)
-			if err != nil {
-				log.Errorw("occupancy_reconcile_failed", "error", err)
-				continue
-			}
-			if len(report) > 0 && (len(report) > 1 || report["ok"] == 0) {
-				log.Infow("occupancy_reconcile_done", "report", report.String())
-			}
+			r.runPass(ctx)
 		}
 	}
+}
+
+// LoopSchedule runs Run at every instant returned by next until ctx is
+// cancelled. next must return a time strictly after the given instant; this is
+// guaranteed by ReconcileSchedule.Next.
+func (r *OccupancyReconciler) LoopSchedule(ctx context.Context, next func(time.Time) time.Time) {
+	log := logger.FromContext(ctx)
+	for {
+		at := next(r.now())
+		wait := time.Until(at)
+		if wait < 0 {
+			wait = 0
+		}
+		log.Infow("occupancy_reconcile_scheduled",
+			"run_at", at.Format(time.RFC3339),
+			"in", wait.Round(time.Second))
+
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+			r.runPass(ctx)
+		}
+	}
+}
+
+// runPass logs shadow statistics and performs one reconciliation pass.
+func (r *OccupancyReconciler) runPass(ctx context.Context) {
+	log := logger.FromContext(ctx)
+	if snap := ShadowStats.Snapshot(); snap != (ShadowSnapshot{}) {
+		log.Infow("occupancy_shadow_stats",
+			"agree_free", snap.AgreeFree, "agree_conflict", snap.AgreeConflict,
+			"redis_conflict_mongo_free", snap.RedisConflictMongoFree,
+			"mongo_conflict_redis_free", snap.MongoConflictRedisFree,
+			"redis_errors", snap.RedisErrors, "stale_generation", snap.StaleGeneration)
+	}
+	report, err := r.Run(ctx)
+	if err != nil {
+		log.Errorw("occupancy_reconcile_failed", "error", err)
+		return
+	}
+	if len(report) > 0 && (len(report) > 1 || report["ok"] == 0) {
+		log.Infow("occupancy_reconcile_done", "report", report.String())
+	}
+}
+
+func (r *OccupancyReconciler) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
 }

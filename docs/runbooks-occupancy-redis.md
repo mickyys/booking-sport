@@ -5,9 +5,15 @@ fuente de verdad de las reservas. Con `BOOKING_REDIS_AUTHORITY=true` **ninguna
 escritura de reservas se degrada a MongoDB si Redis falla**: se rechaza.
 
 Variables: `REDIS_URL`, `REDIS_KEY_PREFIX`, `BOOKING_REDIS_AUTHORITY`,
-`BOOKING_OCCUPANCY_MODE`,
-`BOOKING_MAX_DURATION`, `BOOKING_RECONCILE_INTERVAL`. El token de Upstash vive
+`BOOKING_OCCUPANCY_MODE`, `BOOKING_MAX_DURATION`,
+`BOOKING_RECONCILE_SCHEDULE`, `BOOKING_RECONCILE_TZ`. El token de Upstash vive
 sólo en el gestor de secretos; en documentación se usa `<TOKEN>`.
+
+`BOOKING_RECONCILE_SCHEDULE` define las horas locales en que corre el
+reconciliador (por defecto `06:00,09:00-22:00`: una pasada a las 06:00 y luego
+cada hora entre las 09:00 y las 22:00). `BOOKING_RECONCILE_TZ` fija la zona
+(por defecto `America/Santiago`). `BOOKING_RECONCILE_INTERVAL` quedó obsoleto:
+si se define, se usa un intervalo fijo y se registra una advertencia.
 
 Comando de apoyo (siempre DRY_RUN salvo `APPLY=true`):
 
@@ -106,8 +112,12 @@ Las reservas **pendientes de pago** cuyo hold ya venció no se importan
 | `confirmed_but_held` | Reserva confirmada con ocupación aún en `held` | Revisar log `occupancy_divergence`; investigar el flujo de pago |
 | `inspect_error` | Redis no respondió para esa reserva | Reintentar; ver runbook 1 |
 
-El reconciliador corre cada `BOOKING_RECONCILE_INTERVAL` bajo el lock
+El reconciliador corre según `BOOKING_RECONCILE_SCHEDULE` (por defecto 06:00 y
+cada hora de 09:00 a 22:00, hora de `BOOKING_RECONCILE_TZ`) bajo el lock
 `occupancy-reconcile` (`job_locks`), por lo que varias instancias no se pisan.
+Fuera de esa ventana no hay barrido: un `committing` o una liberación fallida
+puede quedar pendiente hasta la pasada de las 06:00. Para forzarlo antes, usar
+`MODE=reconcile` del comando de apoyo.
 
 ## 7. Alertas recomendadas (pendiente de instrumentar)
 

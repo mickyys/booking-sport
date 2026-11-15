@@ -264,8 +264,8 @@ func (s *BookingBackedFacilityStore) createDay(ctx context.Context, b *domain.Bo
 		return err
 	}
 
-	// Pago online: se retiene el día mientras el cliente paga.
-	expires := now.Add(mpHoldTTL)
+	// Pago online: se retiene el día mientras el cliente paga (ventana + gracia).
+	expires := holdDeadline(now, now)
 	if b.LockExpiresAt != nil {
 		expires = *b.LockExpiresAt
 	}
@@ -295,7 +295,7 @@ func (s *BookingBackedFacilityStore) createDay(ctx context.Context, b *domain.Bo
 	}
 	b.HoldID = &hold.ID
 
-	if err := s.uc.holdOccupancy(ctx, b, mpHoldTTL); err != nil {
+	if err := s.uc.holdOccupancy(ctx, b, holdTTLUntil(expires)); err != nil {
 		_ = s.uc.holdRepo.Delete(ctx, hold.ID)
 		if isConflict(err) {
 			return domain.ErrBookingSlotTaken

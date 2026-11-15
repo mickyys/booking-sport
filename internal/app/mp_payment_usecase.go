@@ -269,7 +269,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 				Minutes:   booking.Minutes,
 				UserID:    effectiveUserID,
 				BookingID: existingBooking.ID,
-				ExpiresAt: time.Now().Add(mpHoldTTL),
+				ExpiresAt: holdDeadline(time.Now(), time.Now()),
 				CreatedAt: time.Now(),
 			}
 			claimed, err := uc.holdRepo.TryClaimSlot(ctx, newHold)
@@ -280,11 +280,19 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 			_ = uc.holdRepo.SetBookingID(ctx, hold.ID, existingBooking.ID)
 		}
 
+		// El bloqueo que se persiste incluye la gracia; el link de Mercado Pago
+		// vence antes, para no aceptar pagos sin horario reservado.
 		lockExpires := hold.ExpiresAt
+		payUntil := lockExpires.Add(-mpHoldGrace)
+		if !payUntil.After(time.Now()) {
+			return "", paymentWindowExpiredError(lockExpires, time.Now())
+		}
 		existingBooking.LockExpiresAt = &lockExpires
 		existingBooking.HoldID = &hold.ID
+		booking.LockExpiresAt = &lockExpires
+		booking.PaymentDeadline = &payUntil
 
-		if err := uc.holdOccupancy(ctx, existingBooking, mpHoldTTL); err != nil {
+		if err := uc.holdOccupancy(ctx, existingBooking, holdTTLUntil(lockExpires)); err != nil {
 			return "", err
 		}
 		uc.repo.Update(ctx, existingBooking)
@@ -312,7 +320,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 			FailureURL:      failureURL,
 			PendingURL:      pendingURL,
 			NotificationURL: notificationURL,
-			ExpirationDate:  &lockExpires,
+			ExpirationDate:  &payUntil,
 			MarketplaceFee:  marketplaceFeeFor(center, amountToPay),
 			Metadata:        buildPreferenceMetadata(existingBooking.BookingCode, court.Name, center.Name, center.ID.Hex(), existingBooking.Hour, existingBooking.Date, isPartial),
 		}
@@ -335,10 +343,16 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	}
 
 	lockExpires := hold.ExpiresAt
+	payUntil := lockExpires.Add(-mpHoldGrace)
+	if !payUntil.After(time.Now()) {
+		uc.holdRepo.Delete(ctx, hold.ID)
+		return "", paymentWindowExpiredError(lockExpires, time.Now())
+	}
 	booking.HoldID = &hold.ID
 	booking.LockExpiresAt = &lockExpires
+	booking.PaymentDeadline = &payUntil
 
-	if err := uc.holdOccupancy(ctx, booking, mpHoldTTL); err != nil {
+	if err := uc.holdOccupancy(ctx, booking, holdTTLUntil(lockExpires)); err != nil {
 		uc.holdRepo.Delete(ctx, hold.ID)
 		return "", err
 	}
@@ -379,7 +393,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		FailureURL:      failureURL,
 		PendingURL:      pendingURL,
 		NotificationURL: notificationURL,
-		ExpirationDate:  &lockExpires,
+		ExpirationDate:  &payUntil,
 		MarketplaceFee:  marketplaceFeeFor(center, amountToPay),
 		Metadata:        buildPreferenceMetadata(booking.BookingCode, court.Name, center.Name, center.ID.Hex(), booking.Hour, booking.Date, isPartial),
 	}

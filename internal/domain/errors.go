@@ -21,6 +21,9 @@ var ErrDiscountUnavailable = errors.New("discount no longer available")
 type AppError struct {
 	Message    string
 	StatusCode int
+	// Details viaja al cliente junto al mensaje (por ejemplo, cuándo se libera
+	// el horario). Es opcional.
+	Details map[string]any
 }
 
 func (e *AppError) Error() string {
@@ -29,6 +32,12 @@ func (e *AppError) Error() string {
 
 func NewConflictError(message string) *AppError {
 	return &AppError{Message: message, StatusCode: 409}
+}
+
+// NewConflictErrorWithDetails es un 409 con datos estructurados para que el
+// frontend no tenga que interpretar el texto.
+func NewConflictErrorWithDetails(message string, details map[string]any) *AppError {
+	return &AppError{Message: message, StatusCode: 409, Details: details}
 }
 
 func NewBadRequestError(message string) *AppError {

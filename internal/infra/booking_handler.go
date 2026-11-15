@@ -464,6 +464,7 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 			"pending_amount":       booking.PendingAmount,
 			"is_partial_payment":   booking.IsPartialPayment,
 			"partial_payment_paid": booking.PartialPaymentPaid,
+			"lock_expires_at":      booking.LockExpiresAt,
 		},
 		"hours_until_match": hoursUntilMatch,
 		"can_cancel":        canCancel,
@@ -948,9 +949,11 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"init_point":   initPoint,
-		"booking_code": input.Booking.BookingCode,
-		"confirmed":    initPoint == "",
+		"init_point":      initPoint,
+		"booking_code":    input.Booking.BookingCode,
+		"confirmed":       initPoint == "",
+		"pay_until":       input.Booking.PaymentDeadline,
+		"lock_expires_at": input.Booking.LockExpiresAt,
 	})
 }
 

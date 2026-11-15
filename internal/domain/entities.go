@@ -809,8 +809,11 @@ type Booking struct {
 	ModifiedAt         *time.Time            `bson:"modified_at,omitempty" json:"modified_at,omitempty"`
 	HoldID             *primitive.ObjectID   `bson:"hold_id,omitempty" json:"hold_id,omitempty"`
 	LockExpiresAt      *time.Time            `bson:"lock_expires_at,omitempty" json:"lock_expires_at,omitempty"`
-	Version            int                   `bson:"version" json:"version"`
-	ExpiredAt          *time.Time            `bson:"expired_at,omitempty" json:"expired_at,omitempty"`
+	// PaymentDeadline es transitorio: hasta cuándo acepta pagos el link de
+	// Mercado Pago (el bloqueo dura la gracia adicional). No se persiste.
+	PaymentDeadline *time.Time `bson:"-" json:"pay_until,omitempty"`
+	Version         int        `bson:"version" json:"version"`
+	ExpiredAt       *time.Time `bson:"expired_at,omitempty" json:"expired_at,omitempty"`
 	// SpaceCategory es la categoría del espacio al reservar ("" = cancha).
 	SpaceCategory SpaceCategory `bson:"space_category,omitempty" json:"space_category,omitempty"`
 	// Guests es la cantidad de personas (sedes/piscinas).
