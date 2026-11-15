@@ -347,7 +347,7 @@ func main() {
 			return true
 		},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Trace-ID"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Trace-ID", "X-View-Center-Id"},
 		ExposeHeaders:    []string{"Content-Length", "X-Trace-ID"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
@@ -447,6 +447,13 @@ func main() {
 	// Rutas Protegidas
 	api := r.Group("/api")
 	api.Use(authMiddleware)
+	// Superadmin: consulta de solo lectura del panel de un centro (X-View-Center-Id).
+	api.Use(middleware.SuperAdminViewAs(auth0Mgmt, sportCenterRepo, func(ctx context.Context, actorID, actorEmail, centerID, ip string) {
+		_ = superAdminRepo.WriteAudit(ctx, &mongo.AuditLog{
+			ActorID: actorID, ActorEmail: actorEmail, Action: "center.view_as",
+			EntityType: "sport_center", EntityID: centerID, IP: ip,
+		})
+	}))
 	{
 		// Registro de dispositivos para notificaciones
 		api.POST("/users/devices", bookingHandler.RegisterDevice)
