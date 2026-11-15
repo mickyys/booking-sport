@@ -256,6 +256,14 @@ func (h *SuperAdminHandler) ExportBookings(c *gin.Context) {
 		if b.GuestDetails != nil {
 			client = b.GuestDetails.Email
 		}
+		// Reservas internas y recurrentes no tienen guest_details: mostrar al
+		// menos el nombre (y el teléfono si no hay nombre).
+		if client == "" {
+			client = b.CustomerName
+		}
+		if client == "" {
+			client = b.CustomerPhone
+		}
 		date := b.LocalDate
 		if date == "" {
 			date = b.Date.Format("2006-01-02")
