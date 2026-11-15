@@ -580,6 +580,7 @@ func main() {
 			sa.PUT("/sport-centers/:id/private", superAdminHandler.SetPrivate)
 			sa.GET("/sport-centers/:id/commercial", commercialHandler.AdminGet)
 			sa.PUT("/sport-centers/:id/commercial/mode", superAdminHandler.Audit("center.commercial_mode", "sport_center", "id"), commercialHandler.AdminSetMode)
+			sa.GET("/sport-centers/:id/commercial/simulate", commercialHandler.AdminSimulate)
 			sa.PUT("/sport-centers/:id/commercial/commission", superAdminHandler.Audit("center.commission", "sport_center", "id"), commercialHandler.AdminSetCommission)
 			sa.POST("/sport-centers/:id/commercial/publish", superAdminHandler.Audit("center.publish", "sport_center", "id"), commercialHandler.AdminPublish)
 			sa.GET("/bookings", superAdminHandler.ListBookings)

@@ -159,3 +159,36 @@ func validateCommissionRate(v int) error {
 	}
 	return nil
 }
+
+// CommissionSimulation es el resultado de simular el cobro de una reserva.
+type CommissionSimulation struct {
+	Price          float64 `json:"price"`
+	Rate           int     `json:"rate"`
+	Surcharge      float64 `json:"surcharge"`
+	Total          float64 `json:"total"`
+	MPRate         float64 `json:"mp_rate"`
+	MPCost         float64 `json:"mp_cost"`
+	MarketplaceFee float64 `json:"marketplace_fee"`
+	CenterReceives float64 `json:"center_receives"`
+	PlatformNet    float64 `json:"platform_net"`
+	// BilledInSplit es false con conexión manual: no hay recargo ni split y la
+	// comisión se factura aparte (el desglose es solo referencial).
+	BilledInSplit bool `json:"billed_in_split"`
+	// BelowMPCost avisa que la comisión no cubre el costo de Mercado Pago.
+	BelowMPCost bool `json:"below_mp_cost"`
+}
+
+// SimulateCommission calcula el desglose con las mismas reglas que el cobro real.
+func SimulateCommission(center *domain.SportCenter, price float64, rate int) CommissionSimulation {
+	mpRate := mpEffectiveRate()
+	ch := computeSurchargeCharge(price, rate, mpRate)
+	sim := CommissionSimulation{
+		Price: price, Rate: rate, Surcharge: ch.Surcharge, Total: ch.Total,
+		MPRate: mpRate, MPCost: ch.MPCost, MarketplaceFee: ch.MarketplaceFee,
+		BilledInSplit: center != nil && center.MercadoPago.SupportsMarketplaceFee(),
+		BelowMPCost:   rate > 0 && float64(rate) <= mpRate,
+	}
+	sim.CenterReceives = ch.Total - ch.MPCost - ch.MarketplaceFee
+	sim.PlatformNet = ch.MarketplaceFee
+	return sim
+}

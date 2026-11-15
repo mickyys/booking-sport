@@ -3,6 +3,7 @@ package infra
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hamp/booking-sport/internal/app"
@@ -197,6 +198,35 @@ func (h *CommercialHandler) AdminSetCommission(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, v)
+}
+
+// AdminSimulate simula el cobro de una reserva: GET ?price=30000&rate=5.
+// `rate` es opcional (por defecto, la comisión efectiva del centro).
+func (h *CommercialHandler) AdminSimulate(c *gin.Context) {
+	id, ok := paramCenterID(c)
+	if !ok {
+		return
+	}
+	price, err := strconv.ParseFloat(c.Query("price"), 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "price inválido"})
+		return
+	}
+	var rate *int
+	if q := c.Query("rate"); q != "" {
+		v, err := strconv.Atoi(q)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "rate inválido"})
+			return
+		}
+		rate = &v
+	}
+	sim, err := h.useCase.Simulate(c.Request.Context(), id, price, rate)
+	if err != nil {
+		commercialError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, sim)
 }
 
 func (h *CommercialHandler) AdminPublish(c *gin.Context) {

@@ -305,6 +305,27 @@ func cloneCommercial(c *domain.Commercial) *domain.Commercial {
 
 func intRef(v int) *int { return &v }
 
+// Simulate calcula el cobro de una reserva de `price` para el centro. Con
+// rate nil usa la comisión efectiva actual del centro.
+func (uc *CommercialUseCase) Simulate(ctx context.Context, centerID primitive.ObjectID, price float64, rate *int) (*CommissionSimulation, error) {
+	c, err := uc.center(ctx, centerID)
+	if err != nil {
+		return nil, err
+	}
+	if price <= 0 || price > 100000000 {
+		return nil, domain.NewBadRequestError("el precio debe ser mayor a 0")
+	}
+	r := centerCommissionRate(c)
+	if rate != nil {
+		if *rate < 0 || *rate > 100 {
+			return nil, domain.NewBadRequestError("la comisión debe estar entre 0 y 100")
+		}
+		r = *rate
+	}
+	sim := SimulateCommission(c, price, r)
+	return &sim, nil
+}
+
 // SetCommission fija (o, con value nil, restablece al default) la comisión de
 // un centro PAY_ONLINE. Solo superadmin. Las reservas históricas conservan la
 // comisión con la que se cobraron.

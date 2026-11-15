@@ -157,3 +157,17 @@ func TestValidateCommissionRate(t *testing.T) {
 		}
 	}
 }
+
+func TestSimulateCommission(t *testing.T) {
+	sim := SimulateCommission(oauthCenter(5), 30000, 5)
+	if sim.Total != 31500 || sim.MPCost != 1196 || sim.MarketplaceFee != 304 || sim.CenterReceives != 30000 || sim.PlatformNet != 304 {
+		t.Fatalf("simulación inesperada: %+v", sim)
+	}
+	if !sim.BilledInSplit || sim.BelowMPCost {
+		t.Fatalf("flags: %+v", sim)
+	}
+	low := SimulateCommission(&domain.SportCenter{}, 30000, 3)
+	if low.BilledInSplit || !low.BelowMPCost {
+		t.Fatalf("flags low: %+v", low)
+	}
+}
