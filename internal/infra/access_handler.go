@@ -166,27 +166,52 @@ func (h *AccessHandler) ValidateToken(c *gin.Context) {
 
 // --- Administrador del centro ---
 
+// accessFilterFromQuery arma el filtro de la bandeja a partir del query string.
+func accessFilterFromQuery(c *gin.Context, centerID primitive.ObjectID) app.CenterAccessRequestFilter {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	filter := app.CenterAccessRequestFilter{
+		CenterID: centerID,
+		Status:   strings.TrimSpace(c.Query("status")),
+		Query:    strings.TrimSpace(c.Query("q")),
+		Page:     page,
+		Limit:    limit,
+		Sort:     strings.TrimSpace(c.Query("sort")),
+		Desc:     c.DefaultQuery("dir", "desc") != "asc",
+	}
+	loc := domain.GetSantiagoLocation()
+	if from, err := time.ParseInLocation("2006-01-02", c.Query("from"), loc); err == nil {
+		filter.From = &from
+	}
+	if to, err := time.ParseInLocation("2006-01-02", c.Query("to"), loc); err == nil {
+		end := to.AddDate(0, 0, 1)
+		filter.To = &end
+	}
+	return filter
+}
+
 // ListRequests lista las solicitudes del centro.
 func (h *AccessHandler) ListRequests(c *gin.Context) {
 	center, ok := h.adminCenter(c)
 	if !ok {
 		return
 	}
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-	filter := app.CenterAccessRequestFilter{
-		CenterID: center.ID,
-		Status:   strings.TrimSpace(c.Query("status")),
-		Query:    strings.TrimSpace(c.Query("q")),
-		Page:     page,
-		Limit:    limit,
-	}
+	filter := accessFilterFromQuery(c, center.ID)
 	items, total, err := h.useCase.ListRequests(c.Request.Context(), filter)
 	if err != nil {
 		c.JSON(errorStatusCode(err), gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items, "total": total, "page": page, "limit": limit})
+	limit := filter.Limit
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+	page := filter.Page
+	if page < 1 {
+		page = 1
+	}
+	totalPages := int((total + int64(limit) - 1) / int64(limit))
+	c.JSON(http.StatusOK, gin.H{"items": items, "total": total, "page": page, "limit": limit, "total_pages": totalPages})
 }
 
 // Stats devuelve los contadores por estado.

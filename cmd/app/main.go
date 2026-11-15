@@ -515,6 +515,11 @@ func main() {
 		// Solicitudes de acceso de centros privados
 		api.GET("/admin/access/requests", accessHandler.ListRequests)
 		api.GET("/admin/access/stats", accessHandler.Stats)
+		api.GET("/admin/access/requests/export", accessHandler.ExportRequests)
+		api.POST("/admin/access/requests/bulk-status", accessHandler.BulkSetStatus)
+		api.POST("/admin/access/requests/:id/resend", accessHandler.ResendApproval)
+		api.GET("/admin/access/import/template", accessHandler.ImportTemplate)
+		api.POST("/admin/access/import", accessHandler.ImportRequests)
 		api.POST("/admin/access/requests", accessHandler.CreateManual)
 		api.GET("/admin/access/requests/:id", accessHandler.GetRequest)
 		api.PATCH("/admin/access/requests/:id/status", accessHandler.SetRequestStatus)

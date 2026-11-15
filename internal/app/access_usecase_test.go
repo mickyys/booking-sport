@@ -60,8 +60,14 @@ func (r *memAccessRepo) FindRequestByID(_ context.Context, id primitive.ObjectID
 	}
 	return nil, domain.ErrNotFound
 }
-func (r *memAccessRepo) ListRequests(context.Context, CenterAccessRequestFilter) ([]domain.CenterAccessRequest, int64, error) {
-	return nil, 0, nil
+func (r *memAccessRepo) ListRequests(_ context.Context, f CenterAccessRequestFilter) ([]domain.CenterAccessRequest, int64, error) {
+	out := []domain.CenterAccessRequest{}
+	for _, q := range r.requests {
+		if q.SportCenterID == f.CenterID && (f.Status == "" || q.Status == f.Status) {
+			out = append(out, *q)
+		}
+	}
+	return out, int64(len(out)), nil
 }
 func (r *memAccessRepo) CountRequestsByStatus(context.Context, primitive.ObjectID) (map[string]int64, error) {
 	return nil, nil
@@ -234,5 +240,62 @@ func TestAccessFormNormalize(t *testing.T) {
 	}
 	if _, err := normalizeAccessForm(&domain.CenterAccessForm{Fields: []domain.CenterAccessField{{Label: "L", Type: "select"}}}); err == nil {
 		t.Fatal("select sin opciones debe fallar")
+	}
+}
+
+func TestAccessBulkStatus(t *testing.T) {
+	uc, center, _ := newAccessFixture(t)
+	ctx := context.Background()
+	var ids []primitive.ObjectID
+	for _, rut := range []string{"12.345.678-5", "11.111.111-1"} {
+		req, err := uc.SubmitRequest(ctx, center.ID, CenterAccessRequestInput{RUT: rut, Email: "a@b.cl", Answers: map[string]string{"rama": "A"}}, "1.1.1.1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, req.ID)
+	}
+
+	if _, err := uc.BulkSetStatus(ctx, center.ID, ids, nil, domain.CenterAccessStatusRejected, "", "u", "u@x"); err == nil {
+		t.Fatal("rechazo múltiple sin motivo debe fallar")
+	}
+	res, err := uc.BulkSetStatus(ctx, center.ID, ids, nil, domain.CenterAccessStatusApproved, "", "u", "u@x")
+	if err != nil || res.Updated != 2 || len(res.Failed) != 0 {
+		t.Fatalf("approve res=%+v err=%v", res, err)
+	}
+	// Aprobar de nuevo es una transición inválida: se informa por solicitud.
+	res, err = uc.BulkSetStatus(ctx, center.ID, ids, nil, domain.CenterAccessStatusApproved, "", "u", "u@x")
+	if err != nil || res.Updated != 0 || len(res.Failed) != 2 {
+		t.Fatalf("re-approve res=%+v err=%v", res, err)
+	}
+	// Con filtro, las que no aplican se omiten.
+	res, err = uc.BulkSetStatus(ctx, center.ID, nil, &CenterAccessRequestFilter{}, domain.CenterAccessStatusRevoked, "baja del club", "u", "u@x")
+	if err != nil || res.Updated != 2 || res.Skipped != 0 {
+		t.Fatalf("revoke res=%+v err=%v", res, err)
+	}
+	res, _ = uc.BulkSetStatus(ctx, center.ID, nil, &CenterAccessRequestFilter{}, domain.CenterAccessStatusRevoked, "baja del club", "u", "u@x")
+	if res.Updated != 0 || res.Skipped != 2 {
+		t.Fatalf("revoke 2 res=%+v", res)
+	}
+}
+
+func TestAccessImportRequests(t *testing.T) {
+	uc, center, _ := newAccessFixture(t)
+	ctx := context.Background()
+	rows := []AccessImportRow{
+		{Line: 2, RUT: "12.345.678-5", Email: "a@b.cl", Name: "Ana"},
+		{Line: 3, RUT: "1", Email: "a@b.cl"},
+		{Line: 4, RUT: "12345678-5", Email: "c@d.cl"},
+	}
+	dry, err := uc.ImportRequests(ctx, center.ID, "u", "u@x", rows, true)
+	if err != nil || dry.Valid != 1 || len(dry.Errors) != 2 || dry.Imported != 0 {
+		t.Fatalf("dry=%+v err=%v", dry, err)
+	}
+	res, err := uc.ImportRequests(ctx, center.ID, "u", "u@x", rows, false)
+	if err != nil || res.Imported != 1 {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+	again, _ := uc.ImportRequests(ctx, center.ID, "u", "u@x", rows[:1], false)
+	if again.Imported != 0 || len(again.Errors) != 1 {
+		t.Fatalf("again=%+v", again)
 	}
 }

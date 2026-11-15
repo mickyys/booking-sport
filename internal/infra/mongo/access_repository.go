@@ -87,27 +87,54 @@ func (r *CenterAccessRepository) ListRequests(ctx context.Context, filter domain
 	}
 	if term := strings.TrimSpace(filter.Query); term != "" {
 		rx := bson.M{"$regex": regexp.QuoteMeta(term), "$options": "i"}
-		query["$or"] = bson.A{
-			bson.M{"rut": rx},
+		or := bson.A{
 			bson.M{"email": rx},
 			bson.M{"name": rx},
 		}
+		// El RUT se guarda sin puntos ni guion: se busca con el término limpio.
+		cleaned := strings.NewReplacer(".", "", "-", "", " ", "").Replace(term)
+		if cleaned != "" {
+			or = append(or, bson.M{"rut": bson.M{"$regex": regexp.QuoteMeta(cleaned), "$options": "i"}})
+		}
+		query["$or"] = or
+	}
+	if filter.From != nil || filter.To != nil {
+		created := bson.M{}
+		if filter.From != nil {
+			created["$gte"] = *filter.From
+		}
+		if filter.To != nil {
+			created["$lt"] = *filter.To
+		}
+		query["created_at"] = created
 	}
 	total, err := r.requests.CountDocuments(ctx, query)
 	if err != nil {
 		return nil, 0, err
 	}
-	page, limit := filter.Page, filter.Limit
-	if page < 1 {
-		page = 1
+	sortField := "created_at"
+	switch filter.Sort {
+	case "name", "rut", "email", "status", "decided_at":
+		sortField = filter.Sort
 	}
-	if limit < 1 || limit > 100 {
-		limit = 20
+	dir := 1
+	if filter.Desc {
+		dir = -1
 	}
-	cur, err := r.requests.Find(ctx, query, options.Find().
-		SetSort(bson.D{{Key: "created_at", Value: -1}}).
-		SetSkip(int64((page-1)*limit)).
-		SetLimit(int64(limit)))
+	findOpts := options.Find().SetSort(bson.D{{Key: sortField, Value: dir}, {Key: "_id", Value: dir}})
+	if filter.All {
+		findOpts.SetLimit(domain.CenterAccessMaxAll)
+	} else {
+		page, limit := filter.Page, filter.Limit
+		if page < 1 {
+			page = 1
+		}
+		if limit < 1 || limit > 100 {
+			limit = 20
+		}
+		findOpts.SetSkip(int64((page - 1) * limit)).SetLimit(int64(limit))
+	}
+	cur, err := r.requests.Find(ctx, query, findOpts)
 	if err != nil {
 		return nil, 0, err
 	}

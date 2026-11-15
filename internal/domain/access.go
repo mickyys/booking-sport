@@ -125,7 +125,18 @@ type CenterAccessRequestFilter struct {
 	Query    string
 	Page     int
 	Limit    int
+	Sort     string
+	Desc     bool
+	From     *time.Time
+	To       *time.Time
+	// All ignora la paginación (exportación y acciones sobre el filtro),
+	// con un tope de CenterAccessMaxAll registros.
+	All bool
 }
+
+// CenterAccessMaxAll es el máximo de solicitudes que procesa una operación
+// que abarca todo el filtro.
+const CenterAccessMaxAll = 5000
 
 // CenterAccessVerification es un código de un solo uso enviado al correo de
 // una solicitud aprobada.
