@@ -462,7 +462,7 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 			"updated_at":           booking.UpdatedAt,
 			"paid_amount":          booking.PaidAmount,
 			"pending_amount":       booking.PendingAmount,
-			"service_fee_amount":   bookingServiceFee(booking),
+			"service_fee_amount":   booking.EffectiveServiceFee(center),
 			"is_partial_payment":   booking.IsPartialPayment,
 			"partial_payment_paid": booking.PartialPaymentPaid,
 			"lock_expires_at":      booking.LockExpiresAt,
@@ -634,7 +634,7 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 			"updated_at":           booking.UpdatedAt,
 			"paid_amount":          booking.PaidAmount,
 			"pending_amount":       booking.PendingAmount,
-			"service_fee_amount":   bookingServiceFee(booking),
+			"service_fee_amount":   booking.EffectiveServiceFee(center),
 			"is_partial_payment":   booking.IsPartialPayment,
 			"partial_payment_paid": booking.PartialPaymentPaid,
 			"mp_status":            booking.MPStatus,
@@ -1661,13 +1661,4 @@ func (h *BookingHandler) TestPush(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, result)
-}
-
-// bookingServiceFee es el cargo por servicio que el cliente pagó online sobre
-// el precio de la reserva (0 si no hubo).
-func bookingServiceFee(b *domain.Booking) float64 {
-	if b == nil || b.PaymentInfo == nil {
-		return 0
-	}
-	return b.PaymentInfo.ServiceFeeAmount
 }

@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"math"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -1075,4 +1076,29 @@ type InboxMessage struct {
 	DedupeKey string             `bson:"dedupe_key,omitempty" json:"-"`
 	ReadAt    *time.Time         `bson:"read_at,omitempty" json:"read_at,omitempty"`
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
+}
+
+// ServiceFeeSince es el instante desde el cual el cargo por servicio se suma al
+// precio en los cobros de Mercado Pago (pagos anteriores no lo tienen).
+var ServiceFeeSince = time.Date(2026, time.November, 15, 5, 5, 0, 0, time.UTC)
+
+// EffectiveServiceFee devuelve el cargo por servicio que pagó el cliente. Usa el
+// valor guardado y, si falta (pagos previos al registro del cargo), lo deriva de
+// lo pagado y la comisión guardada. Sólo aplica a centros con conexión OAuth.
+func (b *Booking) EffectiveServiceFee(center *SportCenter) float64 {
+	if b == nil || b.PaymentInfo == nil {
+		return 0
+	}
+	if b.PaymentInfo.ServiceFeeAmount > 0 {
+		return b.PaymentInfo.ServiceFeeAmount
+	}
+	rate := b.PaymentInfo.CommissionRate
+	if rate <= 0 || rate > 100 || b.PaidAmount <= 0 || b.MPPaymentID == "" ||
+		b.Status != BookingStatusConfirmed || b.CreatedAt.Before(ServiceFeeSince) {
+		return 0
+	}
+	if center == nil || !center.MercadoPago.SupportsMarketplaceFee() {
+		return 0
+	}
+	return math.Round(b.PaidAmount * float64(rate) / 100)
 }

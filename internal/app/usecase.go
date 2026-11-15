@@ -477,6 +477,7 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 	loc := domain.GetSantiagoLocation()
 	searchDate := domain.SantiagoCivilDate(date)
 	dayOfWeek := int(searchDate.Weekday())
+	feeCenter, _ := uc.repo.FindByID(ctx, centerID)
 
 	// Las consultas son independientes entre sí. Se lanzan en paralelo para
 	// pagar una sola vez la latencia de la base de datos en lugar de sumar
@@ -687,9 +688,7 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 						sch.IsPartialPayment = b.IsPartialPayment
 						sch.PaidAmount = b.PaidAmount
 						sch.PendingAmount = b.PendingAmount
-						if b.PaymentInfo != nil {
-							sch.ServiceFeeAmount = b.PaymentInfo.ServiceFeeAmount
-						}
+						sch.ServiceFeeAmount = b.EffectiveServiceFee(feeCenter)
 						sch.PartialPaymentPaid = b.PartialPaymentPaid
 						break
 					}
@@ -791,6 +790,7 @@ func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, c
 	loc := domain.GetSantiagoLocation()
 	searchDate := domain.SantiagoCivilDate(date)
 	dayOfWeek := int(searchDate.Weekday())
+	feeCenter, _ := uc.repo.FindByID(ctx, centerID)
 
 	var courts []domain.Court
 	var allBookings []domain.Booking
@@ -1039,9 +1039,7 @@ func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, c
 				sch.IsPartialPayment = b.IsPartialPayment
 				sch.PaidAmount = b.PaidAmount
 				sch.PendingAmount = b.PendingAmount
-				if b.PaymentInfo != nil {
-					sch.ServiceFeeAmount = b.PaymentInfo.ServiceFeeAmount
-				}
+				sch.ServiceFeeAmount = b.EffectiveServiceFee(feeCenter)
 				sch.PartialPaymentPaid = b.PartialPaymentPaid
 				sch.DurationMinutes = b.DurationMinutes
 				if sch.DurationMinutes <= 0 {
