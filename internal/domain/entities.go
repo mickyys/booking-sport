@@ -677,6 +677,7 @@ type BookingSummary struct {
 	FinalPrice         float64            `bson:"final_price" json:"final_price"`
 	PaidAmount         float64            `bson:"paid_amount" json:"paid_amount"`
 	PendingAmount      float64            `bson:"pending_amount" json:"pending_amount"`
+	ServiceFeeAmount   float64            `bson:"service_fee_amount" json:"service_fee_amount"`
 	IsPartialPayment   bool               `bson:"is_partial_payment" json:"is_partial_payment"`
 	PartialPaymentPaid bool               `bson:"partial_payment_paid" json:"partial_payment_paid"`
 	PaymentMethod      string             `bson:"payment_method" json:"payment_method"`
@@ -862,6 +863,9 @@ type PaymentInfo struct {
 	// MPFeeAmount es la comisión real que Mercado Pago cobró por este pago
 	// (fee_details.mercadopago_fee), para contrastarla con la tarifa estimada.
 	MPFeeAmount float64 `bson:"mp_fee_amount,omitempty" json:"mp_fee_amount,omitempty"`
+	// ServiceFeeAmount es el cargo por servicio que el cliente pagó sobre el
+	// precio de la reserva (total cobrado − monto base).
+	ServiceFeeAmount float64 `bson:"service_fee_amount,omitempty" json:"service_fee_amount,omitempty"`
 }
 
 type MockPaymentResult struct {

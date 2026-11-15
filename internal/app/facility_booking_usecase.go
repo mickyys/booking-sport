@@ -55,6 +55,7 @@ type FacilityConfirmationEmail struct {
 	Total         float64
 	Paid          float64
 	Pending       float64
+	ServiceFee    float64
 	PaymentMethod string
 }
 

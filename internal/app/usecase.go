@@ -351,6 +351,7 @@ type EnrichedCourtSchedule struct {
 	// Información de pago parcial
 	PaidAmount            float64 `json:"paid_amount,omitempty"`
 	PendingAmount         float64 `json:"pending_amount,omitempty"`
+	ServiceFeeAmount      float64 `json:"service_fee_amount,omitempty"`
 	IsPartialPayment      bool    `json:"is_partial_payment"`
 	PartialPaymentPaid    bool    `json:"partial_payment_paid"`
 	PartialPaymentEnabled *bool   `json:"partial_payment_enabled,omitempty"`
@@ -686,6 +687,9 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 						sch.IsPartialPayment = b.IsPartialPayment
 						sch.PaidAmount = b.PaidAmount
 						sch.PendingAmount = b.PendingAmount
+						if b.PaymentInfo != nil {
+							sch.ServiceFeeAmount = b.PaymentInfo.ServiceFeeAmount
+						}
 						sch.PartialPaymentPaid = b.PartialPaymentPaid
 						break
 					}
@@ -1035,6 +1039,9 @@ func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, c
 				sch.IsPartialPayment = b.IsPartialPayment
 				sch.PaidAmount = b.PaidAmount
 				sch.PendingAmount = b.PendingAmount
+				if b.PaymentInfo != nil {
+					sch.ServiceFeeAmount = b.PaymentInfo.ServiceFeeAmount
+				}
 				sch.PartialPaymentPaid = b.PartialPaymentPaid
 				sch.DurationMinutes = b.DurationMinutes
 				if sch.DurationMinutes <= 0 {

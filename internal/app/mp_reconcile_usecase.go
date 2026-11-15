@@ -31,13 +31,19 @@ type PaymentReconcileResult struct {
 	HasPayment        bool                 `json:"has_payment"`
 	PaidAmount        float64              `json:"paid_amount"`
 	PendingAmount     float64              `json:"pending_amount"`
+	ServiceFeeAmount  float64              `json:"service_fee_amount,omitempty"`
 	EmailSent         bool                 `json:"email_sent"`
 	Refunded          bool                 `json:"refunded,omitempty"`
 	LastPaymentSyncAt *time.Time           `json:"last_payment_sync_at,omitempty"`
 }
 
 func newReconcileResult(b *domain.Booking) *PaymentReconcileResult {
+	var serviceFee float64
+	if b.PaymentInfo != nil {
+		serviceFee = b.PaymentInfo.ServiceFeeAmount
+	}
 	return &PaymentReconcileResult{
+		ServiceFeeAmount:  serviceFee,
 		BookingCode:       b.BookingCode,
 		BookingStatus:     b.Status,
 		MPStatus:          b.MPStatus,
@@ -188,6 +194,9 @@ func (uc *BookingUseCase) applyApprovedPayment(ctx context.Context, store Paymen
 		paymentInfo.CommissionRate = rate
 		paymentInfo.CommissionAmount = commissionFee(paidAmount, rate)
 		paymentInfo.MPFeeAmount = mercadoPagoFee(pay)
+		if fee := pay.TransactionAmount - paidAmount; fee > 0 {
+			paymentInfo.ServiceFeeAmount = fee
+		}
 	}
 
 	claimPending := pendingAmount
@@ -217,6 +226,7 @@ func (uc *BookingUseCase) applyApprovedPayment(ctx context.Context, store Paymen
 	booking.PaymentInfo = paymentInfo
 	res.BookingStatus = next
 	res.PaidAmount = paidAmount
+	res.ServiceFeeAmount = paymentInfo.ServiceFeeAmount
 	res.PendingAmount = claimPending
 	res.HasPayment = true
 
