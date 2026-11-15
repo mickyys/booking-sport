@@ -25,6 +25,10 @@ type ErrorContext struct {
 	BookingCode   string
 	SportCenterID string
 	CourtID       string
+	CourtName     string
+	BookingDate   string
+	StartTime     string
+	EndTime       string
 	MPPaymentID   string
 	UserID        string
 	UserEmail     string
@@ -70,6 +74,28 @@ func sanitizeErrorText(s string) string {
 	return s
 }
 
+// conflictDetail agrega cancha, fecha y horario al mensaje guardado de un
+// conflicto (409). El usuario sigue viendo el mensaje original.
+func conflictDetail(status int, ec ErrorContext) string {
+	if status != http.StatusConflict {
+		return ""
+	}
+	var parts []string
+	if ec.CourtName != "" {
+		parts = append(parts, ec.CourtName)
+	}
+	if ec.BookingDate != "" {
+		parts = append(parts, ec.BookingDate)
+	}
+	if ec.StartTime != "" && ec.EndTime != "" {
+		parts = append(parts, ec.StartTime+"–"+ec.EndTime)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, ", ") + ")"
+}
+
 func newTrackingID() string {
 	b := make([]byte, trackingIDLength)
 	_, _ = rand.Read(b)
@@ -90,7 +116,7 @@ func (r *ErrorRecorder) Record(c *gin.Context, operation string, err error, stat
 	entry := &domain.BookingErrorLog{
 		TraceID:          logger.GetTraceID(c.Request.Context()),
 		Operation:        operation,
-		Message:          sanitizeErrorText(err.Error()),
+		Message:          sanitizeErrorText(err.Error() + conflictDetail(status, ec)),
 		HTTPStatus:       status,
 		UserID:           ec.UserID,
 		UserEmail:        ec.UserEmail,
@@ -100,6 +126,10 @@ func (r *ErrorRecorder) Record(c *gin.Context, operation string, err error, stat
 		BookingCode:      ec.BookingCode,
 		SportCenterID:    ec.SportCenterID,
 		CourtID:          ec.CourtID,
+		CourtName:        ec.CourtName,
+		BookingDate:      ec.BookingDate,
+		StartTime:        ec.StartTime,
+		EndTime:          ec.EndTime,
 		MPPaymentID:      ec.MPPaymentID,
 		ProviderResponse: sanitizeErrorText(ec.Provider),
 		Method:           c.Request.Method,

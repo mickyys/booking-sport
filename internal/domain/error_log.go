@@ -34,6 +34,10 @@ type BookingErrorLog struct {
 	BookingCode      string             `bson:"booking_code,omitempty" json:"booking_code,omitempty"`
 	SportCenterID    string             `bson:"sport_center_id,omitempty" json:"sport_center_id,omitempty"`
 	CourtID          string             `bson:"court_id,omitempty" json:"court_id,omitempty"`
+	CourtName        string             `bson:"court_name,omitempty" json:"court_name,omitempty"`
+	BookingDate      string             `bson:"booking_date,omitempty" json:"booking_date,omitempty"`
+	StartTime        string             `bson:"start_time,omitempty" json:"start_time,omitempty"`
+	EndTime          string             `bson:"end_time,omitempty" json:"end_time,omitempty"`
 	MPPaymentID      string             `bson:"mp_payment_id,omitempty" json:"mp_payment_id,omitempty"`
 	Method           string             `bson:"method,omitempty" json:"method,omitempty"`
 	Path             string             `bson:"path,omitempty" json:"path,omitempty"`

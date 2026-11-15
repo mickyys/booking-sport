@@ -144,6 +144,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		}
 	}
 
+	booking.CourtName = court.Name
 	if err := uc.checkConfirmedIntervalConflict(ctx, booking, minutes); err != nil {
 		return "", err
 	}
