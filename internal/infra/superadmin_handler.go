@@ -294,7 +294,7 @@ func (h *SuperAdminHandler) ExportBookings(c *gin.Context) {
 	c.Header("Content-Type", "text/csv; charset=utf-8")
 	c.Header("Content-Disposition", `attachment; filename="reservas.csv"`)
 	w := csv.NewWriter(c.Writer)
-	_ = w.Write([]string{"codigo", "centro", "cancha", "fecha", "hora", "estado", "metodo_pago", "precio_final", "pagado", "pendiente", "cliente"})
+	_ = w.Write([]string{"codigo", "centro", "cancha", "fecha", "hora", "estado", "metodo_pago", "precio_final", "pagado", "pendiente", "cliente", "comision_mp", "comision_reservaloya"})
 	for _, b := range items {
 		client := b.UserID
 		if b.GuestDetails != nil {
@@ -312,11 +312,16 @@ func (h *SuperAdminHandler) ExportBookings(c *gin.Context) {
 		if date == "" {
 			date = b.Date.Format("2006-01-02")
 		}
+		var mpFee, commission float64
+		if b.PaymentInfo != nil {
+			mpFee, commission = b.PaymentInfo.MPFeeAmount, b.PaymentInfo.CommissionAmount
+		}
 		_ = w.Write([]string{
 			csvSafe(b.BookingCode), csvSafe(b.SportCenterName), csvSafe(b.CourtName), date,
 			fmt.Sprintf("%02d:%02d", b.Hour, b.Minutes), string(b.Status), csvSafe(b.PaymentMethod),
 			strconv.FormatFloat(b.ChargedPrice(), 'f', 0, 64), strconv.FormatFloat(b.PaidAmount, 'f', 0, 64),
 			strconv.FormatFloat(b.PendingAmount, 'f', 0, 64), csvSafe(client),
+			strconv.FormatFloat(mpFee, 'f', 0, 64), strconv.FormatFloat(commission, 'f', 0, 64),
 		})
 	}
 	w.Flush()
