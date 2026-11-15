@@ -34,6 +34,7 @@ func (h *FacilityBookingHandler) Create(c *gin.Context) {
 		CustomerPhone string   `json:"customer_phone"`
 		PaymentMethod string   `json:"payment_method"`
 		Partial       bool     `json:"partial"`
+		AccessToken   string   `json:"access_token"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -54,6 +55,7 @@ func (h *FacilityBookingHandler) Create(c *gin.Context) {
 		CustomerPhone: body.CustomerPhone,
 		PaymentMethod: body.PaymentMethod,
 		Partial:       body.Partial,
+		AccessToken:   body.AccessToken,
 	})
 	if err != nil {
 		status := errorStatusCode(err)

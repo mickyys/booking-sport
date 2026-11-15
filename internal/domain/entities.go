@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"math"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -140,30 +141,36 @@ type SportCenter struct {
 	FeaturedUntil    *time.Time `bson:"featured_until,omitempty" json:"featured_until,omitempty"`
 	// Status lo gobierna el superadmin: vacío o "active" opera normal;
 	// "suspended" y "blocked" ocultan el centro y impiden nuevas reservas.
-	Status                string               `bson:"status,omitempty" json:"status,omitempty"`
-	StatusReason          string               `bson:"status_reason,omitempty" json:"status_reason,omitempty"`
-	StatusChangedAt       *time.Time           `bson:"status_changed_at,omitempty" json:"status_changed_at,omitempty"`
-	StatusChangedBy       string               `bson:"status_changed_by,omitempty" json:"-"`
-	Distance              float64              `bson:"distance,omitempty" json:"distance,omitempty"`
-	DistanceKm            float64              `bson:"distance_km,omitempty" json:"distance_km,omitempty"`
-	ImageURL              string               `bson:"image_url" json:"image_url"`
-	Services              []string             `bson:"services" json:"services"`
-	Contact               Contact              `bson:"contact" json:"contact"`
-	CourtsCount           int                  `bson:"courts_count" json:"courts"`
-	MercadoPago           *MercadoPagoConfig   `bson:"mercadopago,omitempty" json:"mp_user_id"`
-	CancellationHours     int                  `bson:"cancellation_hours" json:"cancellation_hours"`
-	RetentionPercent      int                  `bson:"retention_percent" json:"retention_percent"`
-	PartialPaymentEnabled bool                 `bson:"partial_payment_enabled" json:"partial_payment_enabled"`
-	PartialPaymentPercent int                  `bson:"partial_payment_percent" json:"partial_payment_percent"`
-	MarketplaceFeePercent int                  `bson:"marketplace_fee_percent" json:"marketplace_fee_percent"`
-	IsPrivate             bool                 `bson:"is_private" json:"is_private"`
-	Users                 []string             `bson:"users" json:"-"`
-	Subdomain             string               `bson:"subdomain,omitempty" json:"subdomain,omitempty"`
-	Domains               []string             `bson:"domains,omitempty" json:"domains,omitempty"`
-	Branding              *SportCenterBranding `bson:"branding,omitempty" json:"branding,omitempty"`
-	CreatedAt             time.Time            `bson:"created_at" json:"created_at"`
-	UpdatedAt             time.Time            `bson:"updated_at" json:"updated_at"`
-	Rut                   string               `bson:"rut" json:"rut"`
+	Status                string             `bson:"status,omitempty" json:"status,omitempty"`
+	StatusReason          string             `bson:"status_reason,omitempty" json:"status_reason,omitempty"`
+	StatusChangedAt       *time.Time         `bson:"status_changed_at,omitempty" json:"status_changed_at,omitempty"`
+	StatusChangedBy       string             `bson:"status_changed_by,omitempty" json:"-"`
+	Distance              float64            `bson:"distance,omitempty" json:"distance,omitempty"`
+	DistanceKm            float64            `bson:"distance_km,omitempty" json:"distance_km,omitempty"`
+	ImageURL              string             `bson:"image_url" json:"image_url"`
+	Services              []string           `bson:"services" json:"services"`
+	Contact               Contact            `bson:"contact" json:"contact"`
+	CourtsCount           int                `bson:"courts_count" json:"courts"`
+	MercadoPago           *MercadoPagoConfig `bson:"mercadopago,omitempty" json:"mp_user_id"`
+	CancellationHours     int                `bson:"cancellation_hours" json:"cancellation_hours"`
+	RetentionPercent      int                `bson:"retention_percent" json:"retention_percent"`
+	PartialPaymentEnabled bool               `bson:"partial_payment_enabled" json:"partial_payment_enabled"`
+	PartialPaymentPercent int                `bson:"partial_payment_percent" json:"partial_payment_percent"`
+	MarketplaceFeePercent int                `bson:"marketplace_fee_percent" json:"marketplace_fee_percent"`
+	// ServiceFeePercent es el cargo por servicio (%) que ve el cliente al pagar
+	// online. Se calcula al responder; no se persiste.
+	ServiceFeePercent int  `bson:"-" json:"service_fee_percent"`
+	IsPrivate         bool `bson:"is_private" json:"is_private"`
+	// AccessForm configura la solicitud de acceso cuando el centro es privado.
+	// No se expone en el listado público; la ficha la devuelve saneada.
+	AccessForm *CenterAccessForm    `bson:"access_form,omitempty" json:"access_form,omitempty"`
+	Users      []string             `bson:"users" json:"-"`
+	Subdomain  string               `bson:"subdomain,omitempty" json:"subdomain,omitempty"`
+	Domains    []string             `bson:"domains,omitempty" json:"domains,omitempty"`
+	Branding   *SportCenterBranding `bson:"branding,omitempty" json:"branding,omitempty"`
+	CreatedAt  time.Time            `bson:"created_at" json:"created_at"`
+	UpdatedAt  time.Time            `bson:"updated_at" json:"updated_at"`
+	Rut        string               `bson:"rut" json:"rut"`
 	// GooglePlaceID identifica el recinto en Google Maps; se usa para mostrar
 	// calificación y reseñas en el detalle público del centro.
 	GooglePlaceID string `bson:"google_place_id,omitempty" json:"google_place_id,omitempty"`
@@ -671,6 +678,7 @@ type BookingSummary struct {
 	FinalPrice         float64            `bson:"final_price" json:"final_price"`
 	PaidAmount         float64            `bson:"paid_amount" json:"paid_amount"`
 	PendingAmount      float64            `bson:"pending_amount" json:"pending_amount"`
+	ServiceFeeAmount   float64            `bson:"service_fee_amount" json:"service_fee_amount"`
 	IsPartialPayment   bool               `bson:"is_partial_payment" json:"is_partial_payment"`
 	PartialPaymentPaid bool               `bson:"partial_payment_paid" json:"partial_payment_paid"`
 	PaymentMethod      string             `bson:"payment_method" json:"payment_method"`
@@ -789,6 +797,9 @@ type Booking struct {
 	// usan para cotizar y reservar, pero nunca se persisten en la reserva.
 	MemberToken  string `bson:"-" json:"member_token,omitempty"`
 	DiscountCode string `bson:"-" json:"discount_code,omitempty"`
+	// AccessToken acredita el acceso a un centro privado. Es transitorio: se
+	// valida al crear la reserva y nunca se persiste.
+	AccessToken string `bson:"-" json:"access_token,omitempty"`
 	// MemberID solo se acepta en el flujo administrativo (reserva creada por
 	// el organizador). El handler público lo ignora.
 	MemberID string `bson:"-" json:"member_id,omitempty"`
@@ -850,6 +861,12 @@ type PaymentInfo struct {
 	// recalcula si el centro cambia su porcentaje.
 	CommissionRate   int     `bson:"commission_rate,omitempty" json:"commission_rate,omitempty"`
 	CommissionAmount float64 `bson:"commission_amount,omitempty" json:"commission_amount,omitempty"`
+	// MPFeeAmount es la comisión real que Mercado Pago cobró por este pago
+	// (fee_details.mercadopago_fee), para contrastarla con la tarifa estimada.
+	MPFeeAmount float64 `bson:"mp_fee_amount,omitempty" json:"mp_fee_amount,omitempty"`
+	// ServiceFeeAmount es el cargo por servicio que el cliente pagó sobre el
+	// precio de la reserva (total cobrado − monto base).
+	ServiceFeeAmount float64 `bson:"service_fee_amount,omitempty" json:"service_fee_amount,omitempty"`
 }
 
 type MockPaymentResult struct {
@@ -1059,4 +1076,29 @@ type InboxMessage struct {
 	DedupeKey string             `bson:"dedupe_key,omitempty" json:"-"`
 	ReadAt    *time.Time         `bson:"read_at,omitempty" json:"read_at,omitempty"`
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
+}
+
+// ServiceFeeSince es el instante desde el cual el cargo por servicio se suma al
+// precio en los cobros de Mercado Pago (pagos anteriores no lo tienen).
+var ServiceFeeSince = time.Date(2026, time.November, 15, 5, 5, 0, 0, time.UTC)
+
+// EffectiveServiceFee devuelve el cargo por servicio que pagó el cliente. Usa el
+// valor guardado y, si falta (pagos previos al registro del cargo), lo deriva de
+// lo pagado y la comisión guardada. Sólo aplica a centros con conexión OAuth.
+func (b *Booking) EffectiveServiceFee(center *SportCenter) float64 {
+	if b == nil || b.PaymentInfo == nil {
+		return 0
+	}
+	if b.PaymentInfo.ServiceFeeAmount > 0 {
+		return b.PaymentInfo.ServiceFeeAmount
+	}
+	rate := b.PaymentInfo.CommissionRate
+	if rate <= 0 || rate > 100 || b.PaidAmount <= 0 || b.MPPaymentID == "" ||
+		b.Status != BookingStatusConfirmed || b.CreatedAt.Before(ServiceFeeSince) {
+		return 0
+	}
+	if center == nil || !center.MercadoPago.SupportsMarketplaceFee() {
+		return 0
+	}
+	return math.Round(b.PaidAmount * float64(rate) / 100)
 }

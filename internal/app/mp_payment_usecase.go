@@ -144,6 +144,7 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		}
 	}
 
+	booking.CourtName = court.Name
 	if err := uc.checkConfirmedIntervalConflict(ctx, booking, minutes); err != nil {
 		return "", err
 	}
@@ -151,6 +152,11 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
 	if err != nil {
 		return "", fmt.Errorf("sport center not found: %w", err)
+	}
+	if uc.access != nil {
+		if err := uc.access.EnsureBookingAccess(ctx, center, booking.AccessToken, booking.AdminSource); err != nil {
+			return "", err
+		}
 	}
 
 	// La modalidad "solo reservas" desactiva explícitamente el cobro online.
@@ -297,8 +303,6 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		}
 		uc.repo.Update(ctx, existingBooking)
 
-		client := mercadopago.NewClient(center.MercadoPago.AccessToken)
-
 		notificationURL := os.Getenv("URL_MP_WEBHOOK")
 		successURL, failureURL, pendingURL := mpBackURLs(ctx, existingBooking.BookingCode)
 
@@ -321,11 +325,10 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 			PendingURL:      pendingURL,
 			NotificationURL: notificationURL,
 			ExpirationDate:  &payUntil,
-			MarketplaceFee:  marketplaceFeeFor(center, amountToPay),
 			Metadata:        buildPreferenceMetadata(existingBooking.BookingCode, court.Name, center.Name, center.ID.Hex(), existingBooking.Hour, existingBooking.Date, isPartial),
 		}
 
-		result, err := client.CreatePreference(ctx, prefInput)
+		result, _, err := createSurchargePreference(ctx, center, amountToPay, prefInput)
 		if err != nil {
 			return "", fmt.Errorf("error creating mercadopago preference: %w", err)
 		}
@@ -370,8 +373,6 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 
 	hold.BookingID = booking.ID
 	_ = uc.holdRepo.SetBookingID(ctx, hold.ID, booking.ID)
-	client := mercadopago.NewClient(center.MercadoPago.AccessToken)
-
 	notificationURL := os.Getenv("URL_MP_WEBHOOK")
 	successURL, failureURL, pendingURL := mpBackURLs(ctx, booking.BookingCode)
 
@@ -394,11 +395,10 @@ func (uc *BookingUseCase) CreateMercadoPagoPayment(ctx context.Context, booking 
 		PendingURL:      pendingURL,
 		NotificationURL: notificationURL,
 		ExpirationDate:  &payUntil,
-		MarketplaceFee:  marketplaceFeeFor(center, amountToPay),
 		Metadata:        buildPreferenceMetadata(booking.BookingCode, court.Name, center.Name, center.ID.Hex(), booking.Hour, booking.Date, isPartial),
 	}
 
-	result, err := client.CreatePreference(ctx, prefInput)
+	result, _, err := createSurchargePreference(ctx, center, amountToPay, prefInput)
 	if err != nil {
 		return "", fmt.Errorf("error creating mercadopago preference: %w", err)
 	}

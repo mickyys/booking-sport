@@ -47,3 +47,28 @@ func NewBadRequestError(message string) *AppError {
 func NewNotFoundError(message string) *AppError {
 	return &AppError{Message: message, StatusCode: 404}
 }
+
+func NewForbiddenError(message string) *AppError {
+	return &AppError{Message: message, StatusCode: 403}
+}
+
+// NewAccessRequiredError indica que el centro es privado y falta el token de
+// acceso. El `code` permite que la web abra el flujo de solicitud sin depender
+// del texto del mensaje.
+func NewAccessRequiredError() *AppError {
+	return &AppError{
+		Message:    "este centro es privado; necesitas acceso aprobado para reservar",
+		StatusCode: 403,
+		Details:    map[string]any{"code": "ACCESS_REQUIRED"},
+	}
+}
+
+// NewAccessInvalidError indica que el token existe pero no es válido, expiró o
+// fue revocado.
+func NewAccessInvalidError() *AppError {
+	return &AppError{
+		Message:    "tu acceso a este centro expiró o fue revocado; verifica tu RUT nuevamente",
+		StatusCode: 403,
+		Details:    map[string]any{"code": "ACCESS_INVALID"},
+	}
+}

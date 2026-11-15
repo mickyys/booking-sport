@@ -70,6 +70,7 @@ func (r *BookingRepository) FindByUserIDAndStatusPaged(ctx context.Context, user
 			"retention_percent":    bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
 			"paid_amount":          bson.M{"$ifNull": []interface{}{"$paid_amount", 0}},
 			"pending_amount":       bson.M{"$ifNull": []interface{}{"$pending_amount", "$price"}},
+			"service_fee_amount":   serviceFeeExpr(),
 			"is_partial_payment":   bson.M{"$ifNull": []interface{}{"$is_partial_payment", false}},
 			"partial_payment_paid": bson.M{"$ifNull": []interface{}{"$partial_payment_paid", false}},
 		}}},
@@ -91,6 +92,7 @@ func (r *BookingRepository) FindByUserIDAndStatusPaged(ctx context.Context, user
 			"retention_percent":    1,
 			"paid_amount":          1,
 			"pending_amount":       1,
+			"service_fee_amount":   1,
 			"is_partial_payment":   1,
 			"partial_payment_paid": 1,
 		}}},
@@ -560,6 +562,7 @@ func (r *BookingRepository) FindByUserIDPaged(ctx context.Context, userID string
 			"retention_percent":    bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
 			"paid_amount":          bson.M{"$ifNull": []interface{}{"$paid_amount", 0}},
 			"pending_amount":       bson.M{"$ifNull": []interface{}{"$pending_amount", "$price"}},
+			"service_fee_amount":   serviceFeeExpr(),
 			"is_partial_payment":   bson.M{"$ifNull": []interface{}{"$is_partial_payment", false}},
 			"partial_payment_paid": bson.M{"$ifNull": []interface{}{"$partial_payment_paid", false}},
 		}}},
@@ -584,6 +587,7 @@ func (r *BookingRepository) FindByUserIDPaged(ctx context.Context, userID string
 			"retention_percent":    1,
 			"paid_amount":          1,
 			"pending_amount":       1,
+			"service_fee_amount":   1,
 			"is_partial_payment":   1,
 			"partial_payment_paid": 1,
 		}}},
@@ -1009,6 +1013,7 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 			"retention_percent":    bson.M{"$ifNull": []interface{}{"$sport_center_info.retention_percent", 10}},
 			"paid_amount":          bson.M{"$ifNull": []interface{}{"$paid_amount", 0}},
 			"pending_amount":       bson.M{"$ifNull": []interface{}{"$pending_amount", "$price"}},
+			"service_fee_amount":   serviceFeeExpr(),
 			"is_partial_payment":   bson.M{"$ifNull": []interface{}{"$is_partial_payment", false}},
 			"partial_payment_paid": bson.M{"$ifNull": []interface{}{"$partial_payment_paid", false}},
 		}}},
@@ -1036,6 +1041,7 @@ func (r *BookingRepository) GetDashboardData(ctx context.Context, sportCenterIDs
 			"retention_percent":    1,
 			"paid_amount":          1,
 			"pending_amount":       1,
+			"service_fee_amount":   1,
 			"is_partial_payment":   1,
 			"partial_payment_paid": 1,
 			"created_at":           1,
@@ -1492,4 +1498,42 @@ func (r *BookingRepository) FindConfirmedWithUserBetween(ctx context.Context, fr
 		}
 	}
 	return out, nil
+}
+
+// serviceFeeExpr calcula el cargo por servicio de una reserva. Usa el valor
+// guardado y, si falta (pagos previos al registro del cargo), lo deriva de
+// paid_amount × commission_rate para reservas confirmadas de Mercado Pago en
+// centros OAuth. Requiere el $lookup sport_center_info.
+func serviceFeeExpr() bson.M {
+	mp := "$sport_center_info.mercadopago"
+	isOAuth := bson.M{"$or": []interface{}{
+		bson.M{"$eq": []interface{}{bson.M{"$ifNull": []interface{}{mp + ".connection_type", ""}}, "oauth"}},
+		bson.M{"$and": []interface{}{
+			bson.M{"$ne": []interface{}{bson.M{"$ifNull": []interface{}{mp + ".connection_type", ""}}, "manual"}},
+			bson.M{"$or": []interface{}{
+				bson.M{"$ne": []interface{}{bson.M{"$ifNull": []interface{}{mp + ".refresh_token", ""}}, ""}},
+				bson.M{"$ne": []interface{}{bson.M{"$ifNull": []interface{}{mp + ".connected_at", nil}}, nil}},
+			}},
+		}},
+	}}
+	rate := bson.M{"$ifNull": []interface{}{"$payment_info.commission_rate", 0}}
+	derived := bson.M{"$cond": []interface{}{
+		bson.M{"$and": []interface{}{
+			bson.M{"$gt": []interface{}{rate, 0}},
+			bson.M{"$gt": []interface{}{bson.M{"$ifNull": []interface{}{"$paid_amount", 0}}, 0}},
+			bson.M{"$eq": []interface{}{"$status", "confirmed"}},
+			bson.M{"$ne": []interface{}{bson.M{"$ifNull": []interface{}{"$mp_payment_id", ""}}, ""}},
+			bson.M{"$gte": []interface{}{"$created_at", domain.ServiceFeeSince}},
+			isOAuth,
+		}},
+		bson.M{"$round": []interface{}{bson.M{"$divide": []interface{}{
+			bson.M{"$multiply": []interface{}{"$paid_amount", rate}}, 100,
+		}}, 0}},
+		0,
+	}}
+	return bson.M{"$cond": []interface{}{
+		bson.M{"$gt": []interface{}{bson.M{"$ifNull": []interface{}{"$payment_info.service_fee_amount", 0}}, 0}},
+		"$payment_info.service_fee_amount",
+		derived,
+	}}
 }

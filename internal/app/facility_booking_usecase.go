@@ -55,6 +55,7 @@ type FacilityConfirmationEmail struct {
 	Total         float64
 	Paid          float64
 	Pending       float64
+	ServiceFee    float64
 	PaymentMethod string
 }
 
@@ -71,8 +72,14 @@ type FacilityBookingUseCase struct {
 	schedule   *ScheduleUseCase
 	mpClient   *mercadopago.Client
 	mailer     FacilityMailer
+	access     *CenterAccessUseCase
 	async      func(func())
 	now        func() time.Time
+}
+
+// SetAccessUseCase inyecta la validación de acceso para centros privados.
+func (uc *FacilityBookingUseCase) SetAccessUseCase(access *CenterAccessUseCase) {
+	uc.access = access
 }
 
 func NewFacilityBookingUseCase(
@@ -146,15 +153,21 @@ type CreateFacilityBookingInput struct {
 	PaymentMethod string
 	// Partial solicita pagar solo el abono configurado por el centro.
 	Partial bool
+	// AccessToken es obligatorio en centros privados.
+	AccessToken string
 }
 
 type FacilityBookingResult struct {
-	BookingCode string                   `json:"booking_code"`
-	Status      domain.BookingStatus     `json:"status"`
-	InitPoint   string                   `json:"init_point,omitempty"`
-	Total       float64                  `json:"total"`
-	AmountToPay float64                  `json:"amount_to_pay"`
-	Bookings    []domain.FacilityBooking `json:"bookings"`
+	BookingCode string               `json:"booking_code"`
+	Status      domain.BookingStatus `json:"status"`
+	InitPoint   string               `json:"init_point,omitempty"`
+	Total       float64              `json:"total"`
+	AmountToPay float64              `json:"amount_to_pay"`
+	// ServiceFee es el cargo por servicio sumado al monto a pagar; TotalToPay
+	// es lo que efectivamente paga el cliente (AmountToPay + ServiceFee).
+	ServiceFee float64                  `json:"service_fee"`
+	TotalToPay float64                  `json:"total_to_pay"`
+	Bookings   []domain.FacilityBooking `json:"bookings"`
 }
 
 // normalizeFacilityGuests valida la cantidad de personas declarada. El máximo
@@ -260,6 +273,11 @@ func (uc *FacilityBookingUseCase) Create(ctx context.Context, in CreateFacilityB
 	if err != nil {
 		return nil, domain.NewNotFoundError("centro no encontrado")
 	}
+	if uc.access != nil {
+		if err := uc.access.EnsureBookingAccess(ctx, center, in.AccessToken, false); err != nil {
+			return nil, err
+		}
+	}
 	method, err := resolveFacilityPaymentMethod(center, in.PaymentMethod)
 	if err != nil {
 		return nil, err
@@ -364,12 +382,14 @@ func (uc *FacilityBookingUseCase) Create(ctx context.Context, in CreateFacilityB
 	}
 
 	if method == FacilityPaymentOnline {
-		initPoint, prefID, err := uc.createPreference(ctx, center, space, docs, amountToPay, isPartial, expiresAt)
+		initPoint, prefID, charge, err := uc.createPreference(ctx, center, space, docs, amountToPay, isPartial, expiresAt)
 		if err != nil {
 			_ = uc.repo.CancelByCode(ctx, code, "system", domain.BookingStatusCancelled)
 			return nil, err
 		}
 		result.InitPoint = initPoint
+		result.ServiceFee = charge.Surcharge
+		result.TotalToPay = charge.Total
 		_ = uc.repo.SetPreference(ctx, code, prefID)
 	} else {
 		result.AmountToPay = 0
@@ -394,9 +414,8 @@ func (uc *FacilityBookingUseCase) createPreference(
 	amountToPay float64,
 	isPartial bool,
 	expiresAt *time.Time,
-) (string, string, error) {
+) (string, string, SurchargeCharge, error) {
 	first := docs[0]
-	client := mercadopago.NewClient(center.MercadoPago.AccessToken)
 
 	urlFrontend := os.Getenv("URL_FRONTEND")
 	notificationURL := os.Getenv("URL_MP_WEBHOOK")
@@ -415,9 +434,8 @@ func (uc *FacilityBookingUseCase) createPreference(
 		dates = append(dates, d.LocalDate)
 	}
 
-	result, err := client.CreatePreference(ctx, mercadopago.PreferenceInput{
+	result, charge, err := createSurchargePreference(ctx, center, amountToPay, mercadopago.PreferenceInput{
 		Title:           title,
-		Amount:          amountToPay,
 		Email:           first.CustomerEmail,
 		PayerName:       payerName,
 		PayerSurname:    payerSurname,
@@ -427,7 +445,6 @@ func (uc *FacilityBookingUseCase) createPreference(
 		PendingURL:      successURL,
 		NotificationURL: notificationURL,
 		ExpirationDate:  expiresAt,
-		MarketplaceFee:  marketplaceFeeFor(center, amountToPay),
 		Metadata: map[string]any{
 			"booking_code": first.BookingCode,
 			"space":        space.Name,
@@ -439,9 +456,9 @@ func (uc *FacilityBookingUseCase) createPreference(
 		},
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("error creating mercadopago preference: %w", err)
+		return "", "", charge, fmt.Errorf("error creating mercadopago preference: %w", err)
 	}
-	return result.InitPoint, result.ID, nil
+	return result.InitPoint, result.ID, charge, nil
 }
 
 // FacilityPaymentOptions describe cómo puede pagar el cliente una reserva de
@@ -454,6 +471,8 @@ type FacilityPaymentOptions struct {
 	PartialPercent int     `json:"partial_percent"`
 	PricePerDay    float64 `json:"price_per_day"`
 	Capacity       int     `json:"capacity"`
+	// ServiceFeePercent es el cargo por servicio (%) que se suma al pago online.
+	ServiceFeePercent int `json:"service_fee_percent"`
 }
 
 func (uc *FacilityBookingUseCase) PaymentOptions(ctx context.Context, spaceID primitive.ObjectID) (*FacilityPaymentOptions, error) {
@@ -471,6 +490,8 @@ func (uc *FacilityBookingUseCase) PaymentOptions(ctx context.Context, spaceID pr
 		Venue:       center.PaymentMode != PaymentModePayOnline,
 		PricePerDay: space.PricePerDay,
 		Capacity:    space.Capacity,
+
+		ServiceFeePercent: ServiceFeePercent(center),
 	}
 	if center.PartialPaymentEnabled {
 		opts.PartialEnabled = true
@@ -559,7 +580,11 @@ func (uc *FacilityBookingUseCase) HandlePaymentNotification(ctx context.Context,
 				"booking_code", code, "payment_id", paymentID)
 			return true, nil
 		}
-		paidPerDay := payment.TransactionAmount / float64(len(docs))
+		paidBase := payment.TransactionAmount
+		if center, cerr := uc.centerRepo.FindByID(ctx, docs[0].SportCenterID); cerr == nil {
+			paidBase = baseFromGross(center, paidBase)
+		}
+		paidPerDay := paidBase / float64(len(docs))
 		if err := uc.repo.Confirm(ctx, code, paidPerDay); err != nil {
 			return true, err
 		}
@@ -602,5 +627,45 @@ func (uc *FacilityBookingUseCase) CancelByAdmin(ctx context.Context, id primitiv
 	if !centerOwnsUser(center, userID) {
 		return &domain.AppError{Message: "no autorizado", StatusCode: 403}
 	}
+	if err := uc.refundFacilityBooking(ctx, center, booking); err != nil {
+		return err
+	}
 	return uc.repo.CancelByID(ctx, id, "admin")
+}
+
+// refundFacilityBooking devuelve en Mercado Pago lo pagado por un día. El
+// cliente pagó el precio más el cargo por servicio, así que se devuelve
+// también la parte proporcional del recargo. Si el pago cubre solo este día
+// el reembolso es total; si no, parcial por el monto del día.
+func (uc *FacilityBookingUseCase) refundFacilityBooking(ctx context.Context, center *domain.SportCenter, b *domain.FacilityBooking) error {
+	if b.PaymentMethod != FacilityPaymentOnline || b.MPPaymentID == "" || b.PaidAmount <= 0 || !b.IsActive() {
+		return nil
+	}
+	if center.MercadoPago == nil || center.MercadoPago.AccessToken == "" {
+		return fmt.Errorf("mercadopago not configured for center %s, cannot process refund", center.Name)
+	}
+	paymentID, err := strconv.Atoi(b.MPPaymentID)
+	if err != nil {
+		return fmt.Errorf("invalid mp_payment_id '%s': %w", b.MPPaymentID, err)
+	}
+
+	activeDays := 0
+	if group, gerr := uc.repo.FindByCode(ctx, b.BookingCode); gerr == nil {
+		for i := range group {
+			if group[i].IsActive() {
+				activeDays++
+			}
+		}
+	}
+
+	client := newMPClient(center.MercadoPago.AccessToken)
+	if activeDays <= 1 {
+		_, err = client.CreateRefund(ctx, paymentID)
+	} else {
+		_, err = client.CreatePartialRefund(ctx, paymentID, grossFromBase(center, b.PaidAmount))
+	}
+	if err != nil {
+		return fmt.Errorf("error processing mercadopago refund: %w", err)
+	}
+	return nil
 }

@@ -54,6 +54,19 @@ func bookingErrorContext(b *domain.Booking) ErrorContext {
 	if b.CourtID.IsZero() {
 		ec.CourtID = ""
 	}
+	ec.CourtName = b.CourtName
+	if !b.Date.IsZero() {
+		loc := domain.GetSantiagoLocation()
+		if b.Timezone != "" {
+			if l, err := domain.LoadTimezone(b.Timezone); err == nil {
+				loc = l
+			}
+		}
+		start := b.StartInstant().In(loc)
+		ec.BookingDate = start.Format("02-01-2006")
+		ec.StartTime = start.Format("15:04")
+		ec.EndTime = b.EndInstant().In(loc).Format("15:04")
+	}
 	if b.GuestDetails != nil {
 		ec.UserName = b.GuestDetails.Name
 		ec.UserEmail = b.GuestDetails.Email
@@ -462,6 +475,7 @@ func (h *BookingHandler) GetBookingDetail(c *gin.Context) {
 			"updated_at":           booking.UpdatedAt,
 			"paid_amount":          booking.PaidAmount,
 			"pending_amount":       booking.PendingAmount,
+			"service_fee_amount":   booking.EffectiveServiceFee(center),
 			"is_partial_payment":   booking.IsPartialPayment,
 			"partial_payment_paid": booking.PartialPaymentPaid,
 			"lock_expires_at":      booking.LockExpiresAt,
@@ -633,6 +647,7 @@ func (h *BookingHandler) GetByBookingCode(c *gin.Context) {
 			"updated_at":           booking.UpdatedAt,
 			"paid_amount":          booking.PaidAmount,
 			"pending_amount":       booking.PendingAmount,
+			"service_fee_amount":   booking.EffectiveServiceFee(center),
 			"is_partial_payment":   booking.IsPartialPayment,
 			"partial_payment_paid": booking.PartialPaymentPaid,
 			"mp_status":            booking.MPStatus,

@@ -32,6 +32,7 @@ type SuperAdminCenterFilter struct {
 	PaymentMode string
 	City        string
 	Featured    *bool
+	Private     *bool
 	Onboarding  string
 }
 
@@ -100,6 +101,13 @@ func centerFilter(f SuperAdminCenterFilter) bson.M {
 			q["is_featured"] = bson.M{"$ne": true}
 		}
 	}
+	if f.Private != nil {
+		if *f.Private {
+			q["is_private"] = true
+		} else {
+			q["is_private"] = bson.M{"$ne": true}
+		}
+	}
 	if f.Onboarding == "pending" {
 		// Los centros legacy (campo vacío) no están pendientes de onboarding.
 		q["onboarding_status"] = "pending"
@@ -136,6 +144,7 @@ type CenterStats struct {
 	Blocked   int64 `json:"blocked"`
 	Featured  int64 `json:"featured"`
 	PayOnline int64 `json:"pay_online"`
+	Private   int64 `json:"private"`
 }
 
 func (r *SuperAdminRepository) CenterStats(ctx context.Context) (*CenterStats, error) {
@@ -155,6 +164,7 @@ func (r *SuperAdminRepository) CenterStats(ctx context.Context) (*CenterStats, e
 		Blocked:   count(bson.M{"status": domain.SportCenterStatusBlocked}),
 		Featured:  count(bson.M{"is_featured": true}),
 		PayOnline: count(payOnlineQ),
+		Private:   count(bson.M{"is_private": true}),
 	}, nil
 }
 
@@ -193,6 +203,22 @@ func (r *SuperAdminRepository) SetFeatured(ctx context.Context, id primitive.Obj
 		update["$unset"] = bson.M{"featured_until": ""}
 	}
 	res, err := r.centers.UpdateOne(ctx, bson.M{"_id": id}, update)
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return mongodb.ErrNoDocuments
+	}
+	return nil
+}
+
+// SetPrivate activa o desactiva el carácter privado de un centro. El motivo
+// queda en la auditoría que escribe el handler.
+func (r *SuperAdminRepository) SetPrivate(ctx context.Context, id primitive.ObjectID, isPrivate bool, reason, actor string) error {
+	res, err := r.centers.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
+		"is_private": isPrivate,
+		"updated_at": time.Now(),
+	}})
 	if err != nil {
 		return err
 	}

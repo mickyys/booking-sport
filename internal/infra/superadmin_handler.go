@@ -80,6 +80,10 @@ func (h *SuperAdminHandler) ListCenters(c *gin.Context) {
 		b := v == "true"
 		f.Featured = &b
 	}
+	if v := c.Query("private"); v != "" {
+		b := v == "true"
+		f.Private = &b
+	}
 	items, total, err := h.repo.ListCenters(c.Request.Context(), f, page, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -153,6 +157,46 @@ func (h *SuperAdminHandler) SetStatus(c *gin.Context) {
 	}
 	h.writeAudit(c, "center.status", "sport_center", id.Hex(), reason, map[string]interface{}{"status": body.Status})
 	c.JSON(http.StatusOK, gin.H{"status": body.Status})
+}
+
+// SetPrivate activa o desactiva el acceso restringido del centro.
+func (h *SuperAdminHandler) SetPrivate(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	var body struct {
+		IsPrivate *bool  `json:"is_private"`
+		Reason    string `json:"reason"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if body.IsPrivate == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "is_private es obligatorio"})
+		return
+	}
+	reason := strings.TrimSpace(body.Reason)
+	if *body.IsPrivate && len(reason) < 5 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "el motivo es obligatorio para marcar un centro como privado (mínimo 5 caracteres)"})
+		return
+	}
+	actor, _ := c.Get("user_id")
+	actorID, _ := actor.(string)
+	if err := h.repo.SetPrivate(c.Request.Context(), id, *body.IsPrivate, reason, actorID); err != nil {
+		if errors.Is(err, mongodb.ErrNoDocuments) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "center not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	h.writeAudit(c, "center.private", "sport_center", id.Hex(), reason, map[string]interface{}{
+		"is_private": *body.IsPrivate,
+	})
+	c.JSON(http.StatusOK, gin.H{"is_private": *body.IsPrivate})
 }
 
 func (h *SuperAdminHandler) SetFeatured(c *gin.Context) {
@@ -250,7 +294,7 @@ func (h *SuperAdminHandler) ExportBookings(c *gin.Context) {
 	c.Header("Content-Type", "text/csv; charset=utf-8")
 	c.Header("Content-Disposition", `attachment; filename="reservas.csv"`)
 	w := csv.NewWriter(c.Writer)
-	_ = w.Write([]string{"codigo", "centro", "cancha", "fecha", "hora", "estado", "metodo_pago", "precio_final", "pagado", "pendiente", "cliente"})
+	_ = w.Write([]string{"codigo", "centro", "cancha", "fecha", "hora", "estado", "metodo_pago", "precio_final", "pagado", "pendiente", "cliente", "comision_mp", "comision_reservaloya"})
 	for _, b := range items {
 		client := b.UserID
 		if b.GuestDetails != nil {
@@ -268,11 +312,16 @@ func (h *SuperAdminHandler) ExportBookings(c *gin.Context) {
 		if date == "" {
 			date = b.Date.Format("2006-01-02")
 		}
+		var mpFee, commission float64
+		if b.PaymentInfo != nil {
+			mpFee, commission = b.PaymentInfo.MPFeeAmount, b.PaymentInfo.CommissionAmount
+		}
 		_ = w.Write([]string{
 			csvSafe(b.BookingCode), csvSafe(b.SportCenterName), csvSafe(b.CourtName), date,
 			fmt.Sprintf("%02d:%02d", b.Hour, b.Minutes), string(b.Status), csvSafe(b.PaymentMethod),
 			strconv.FormatFloat(b.ChargedPrice(), 'f', 0, 64), strconv.FormatFloat(b.PaidAmount, 'f', 0, 64),
 			strconv.FormatFloat(b.PendingAmount, 'f', 0, 64), csvSafe(client),
+			strconv.FormatFloat(mpFee, 'f', 0, 64), strconv.FormatFloat(commission, 'f', 0, 64),
 		})
 	}
 	w.Flush()

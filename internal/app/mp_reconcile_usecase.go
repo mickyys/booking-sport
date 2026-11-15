@@ -31,13 +31,19 @@ type PaymentReconcileResult struct {
 	HasPayment        bool                 `json:"has_payment"`
 	PaidAmount        float64              `json:"paid_amount"`
 	PendingAmount     float64              `json:"pending_amount"`
+	ServiceFeeAmount  float64              `json:"service_fee_amount,omitempty"`
 	EmailSent         bool                 `json:"email_sent"`
 	Refunded          bool                 `json:"refunded,omitempty"`
 	LastPaymentSyncAt *time.Time           `json:"last_payment_sync_at,omitempty"`
 }
 
 func newReconcileResult(b *domain.Booking) *PaymentReconcileResult {
+	var serviceFee float64
+	if b.PaymentInfo != nil {
+		serviceFee = b.PaymentInfo.ServiceFeeAmount
+	}
 	return &PaymentReconcileResult{
+		ServiceFeeAmount:  serviceFee,
 		BookingCode:       b.BookingCode,
 		BookingStatus:     b.Status,
 		MPStatus:          b.MPStatus,
@@ -140,7 +146,7 @@ func (uc *BookingUseCase) applyApprovedPayment(ctx context.Context, store Paymen
 	paymentIDStr := strconv.Itoa(pay.ID)
 
 	charged := booking.ChargedPrice()
-	paidAmount := pay.TransactionAmount
+	paidAmount := baseFromGross(center, pay.TransactionAmount)
 	pendingAmount := charged - paidAmount
 	if pendingAmount < 0 {
 		pendingAmount = 0
@@ -187,6 +193,10 @@ func (uc *BookingUseCase) applyApprovedPayment(ctx context.Context, store Paymen
 		rate := centerCommissionRate(center)
 		paymentInfo.CommissionRate = rate
 		paymentInfo.CommissionAmount = commissionFee(paidAmount, rate)
+		paymentInfo.MPFeeAmount = mercadoPagoFee(pay)
+		if fee := pay.TransactionAmount - paidAmount; fee > 0 {
+			paymentInfo.ServiceFeeAmount = fee
+		}
 	}
 
 	claimPending := pendingAmount
@@ -216,6 +226,7 @@ func (uc *BookingUseCase) applyApprovedPayment(ctx context.Context, store Paymen
 	booking.PaymentInfo = paymentInfo
 	res.BookingStatus = next
 	res.PaidAmount = paidAmount
+	res.ServiceFeeAmount = paymentInfo.ServiceFeeAmount
 	res.PendingAmount = claimPending
 	res.HasPayment = true
 
@@ -456,4 +467,17 @@ func (uc *BookingUseCase) RunPaymentReconcileLoop(ctx context.Context, locks Job
 			}
 		}
 	}
+}
+
+// mercadoPagoFee suma la comisión de procesamiento que Mercado Pago cobró por
+// el pago. Es el valor real; la tarifa configurada (MP_EFFECTIVE_RATE) es solo
+// una estimación para calcular el marketplace_fee.
+func mercadoPagoFee(pay *payment.Response) float64 {
+	var total float64
+	for _, f := range pay.FeeDetails {
+		if f.Type == "mercadopago_fee" {
+			total += f.Amount
+		}
+	}
+	return total
 }

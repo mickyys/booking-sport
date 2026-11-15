@@ -392,7 +392,29 @@ func (r *SportCenterRepository) FindByUserID(ctx context.Context, userID string)
 }
 
 func (r *SportCenterRepository) Update(ctx context.Context, center *domain.SportCenter) error {
+	// El reemplazo completo no debe borrar la configuración del formulario de
+	// acceso si el llamador no la incluyó (por ejemplo, el PUT del superadmin).
+	if center.AccessForm == nil {
+		var existing struct {
+			AccessForm *domain.CenterAccessForm `bson:"access_form"`
+		}
+		err := r.collection.FindOne(ctx, bson.M{"_id": center.ID},
+			options.FindOne().SetProjection(bson.M{"access_form": 1})).Decode(&existing)
+		if err == nil {
+			center.AccessForm = existing.AccessForm
+		}
+	}
 	_, err := r.collection.ReplaceOne(ctx, bson.M{"_id": center.ID}, center)
+	return err
+}
+
+// UpdateAccessForm guarda solo la configuración del formulario de acceso, sin
+// reemplazar el resto del documento del centro.
+func (r *SportCenterRepository) UpdateAccessForm(ctx context.Context, id primitive.ObjectID, form *domain.CenterAccessForm) error {
+	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
+		"access_form": form,
+		"updated_at":  time.Now(),
+	}})
 	return err
 }
 

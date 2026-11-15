@@ -351,6 +351,7 @@ type EnrichedCourtSchedule struct {
 	// Información de pago parcial
 	PaidAmount            float64 `json:"paid_amount,omitempty"`
 	PendingAmount         float64 `json:"pending_amount,omitempty"`
+	ServiceFeeAmount      float64 `json:"service_fee_amount,omitempty"`
 	IsPartialPayment      bool    `json:"is_partial_payment"`
 	PartialPaymentPaid    bool    `json:"partial_payment_paid"`
 	PartialPaymentEnabled *bool   `json:"partial_payment_enabled,omitempty"`
@@ -373,7 +374,14 @@ func (uc *SportCenterUseCase) FindByID(ctx context.Context, id primitive.ObjectI
 }
 
 func (uc *SportCenterUseCase) FindBySlug(ctx context.Context, slug string) (*domain.SportCenter, error) {
-	return uc.repo.FindBySlug(ctx, slug)
+	center, err := uc.repo.FindBySlug(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+	if center != nil {
+		center.ServiceFeePercent = ServiceFeePercent(center)
+	}
+	return center, nil
 }
 
 // googlePlaceIDUpdater es opcional para no ampliar SportCenterRepository.
@@ -399,6 +407,11 @@ func (uc *SportCenterUseCase) UpdateGooglePlaceID(ctx context.Context, id primit
 }
 
 func (uc *SportCenterUseCase) UpdateSettings(ctx context.Context, id primitive.ObjectID, slug *string, cancellationHours *int, retentionPercent *int, partialPaymentEnabled *bool, partialPaymentPercent *int, imageURL *string, marketplaceFeePercent *int, branding *domain.SportCenterBranding, address *string, city *string, coordinates *domain.Coordinates, paymentMode *string) error {
+	if marketplaceFeePercent != nil {
+		if err := validateCommissionRate(*marketplaceFeePercent); err != nil {
+			return err
+		}
+	}
 	if paymentMode != nil && !isValidPaymentMode(*paymentMode) {
 		return ErrInvalidPaymentMode
 	}
@@ -464,6 +477,7 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 	loc := domain.GetSantiagoLocation()
 	searchDate := domain.SantiagoCivilDate(date)
 	dayOfWeek := int(searchDate.Weekday())
+	feeCenter, _ := uc.repo.FindByID(ctx, centerID)
 
 	// Las consultas son independientes entre sí. Se lanzan en paralelo para
 	// pagar una sola vez la latencia de la base de datos en lugar de sumar
@@ -674,6 +688,7 @@ func (uc *SportCenterUseCase) GetSportCenterSchedules(ctx context.Context, cente
 						sch.IsPartialPayment = b.IsPartialPayment
 						sch.PaidAmount = b.PaidAmount
 						sch.PendingAmount = b.PendingAmount
+						sch.ServiceFeeAmount = b.EffectiveServiceFee(feeCenter)
 						sch.PartialPaymentPaid = b.PartialPaymentPaid
 						break
 					}
@@ -775,6 +790,7 @@ func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, c
 	loc := domain.GetSantiagoLocation()
 	searchDate := domain.SantiagoCivilDate(date)
 	dayOfWeek := int(searchDate.Weekday())
+	feeCenter, _ := uc.repo.FindByID(ctx, centerID)
 
 	var courts []domain.Court
 	var allBookings []domain.Booking
@@ -1023,6 +1039,7 @@ func (uc *SportCenterUseCase) schedulesWithDetailsForDate(ctx context.Context, c
 				sch.IsPartialPayment = b.IsPartialPayment
 				sch.PaidAmount = b.PaidAmount
 				sch.PendingAmount = b.PendingAmount
+				sch.ServiceFeeAmount = b.EffectiveServiceFee(feeCenter)
 				sch.PartialPaymentPaid = b.PartialPaymentPaid
 				sch.DurationMinutes = b.DurationMinutes
 				if sch.DurationMinutes <= 0 {
@@ -1517,6 +1534,10 @@ func (uc *SportCenterUseCase) ListSportCentersPaged(ctx context.Context, page, l
 	// Asegurar que centers sea un array vacío si es nil para el JSON
 	if centers == nil {
 		centers = []domain.SportCenter{}
+	}
+
+	for i := range centers {
+		centers[i].ServiceFeePercent = ServiceFeePercent(&centers[i])
 	}
 
 	totalPages := int((total + int64(limit) - 1) / int64(limit))

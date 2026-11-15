@@ -83,3 +83,26 @@ func TestWelcomeEmailHTML_CuentaExistente(t *testing.T) {
 		t.Error("HTML no debe incluir nota de expiración para cuentas existentes")
 	}
 }
+
+func TestBookingEmailsRender(t *testing.T) {
+	conf, err := renderBookingEmail(bookingConfirmationTemplate, bookingEmailData{
+		CustomerName: "Ana", CenterName: "Centro", BookingCode: "ABC", SpaceLabel: "Cancha", SpaceName: "C1",
+		Date: "01-01-2027", Hour: "10:00 hrs", Price: "$30.000", ServiceFee: "$1.500", TotalPaid: "$31.500",
+		CancelURL: "https://x/booking/cancel?code=ABC",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"$30.000", "Cargo por servicio", "$1.500", "$31.500", "ReservaloYA"} {
+		if !strings.Contains(conf, want) {
+			t.Errorf("confirmación sin %q", want)
+		}
+	}
+	if strings.Contains(conf, "Saldo pendiente") {
+		t.Error("no debe mostrar saldo pendiente")
+	}
+	canc, err := renderBookingEmail(bookingCancellationTemplate, bookingEmailData{BookingCode: "ABC", Price: "$30.000"})
+	if err != nil || !strings.Contains(canc, "cancelada") {
+		t.Fatalf("cancelación inválida: %v", err)
+	}
+}

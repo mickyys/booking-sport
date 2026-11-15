@@ -44,6 +44,7 @@ type BookingUseCase struct {
 	mpClient                 *mercadopago.Client
 	scheduleResolver         *ScheduleResolver
 	pricing                  *PricingService
+	access                   *CenterAccessUseCase
 	occupancy                OccupancyCoordinator
 	occupancyDefault         OccupancyMode
 	policyMu                 sync.Mutex
@@ -60,6 +61,11 @@ func (uc *BookingUseCase) SetScheduleResolver(resolver *ScheduleResolver) {
 // Sin él se mantiene el comportamiento anterior (precio lista).
 func (uc *BookingUseCase) SetPricingService(pricing *PricingService) {
 	uc.pricing = pricing
+}
+
+// SetAccessUseCase inyecta la validación de acceso para centros privados.
+func (uc *BookingUseCase) SetAccessUseCase(access *CenterAccessUseCase) {
+	uc.access = access
 }
 
 // SetPushService inyecta el dispatcher de notificaciones. Sin él la bandeja
@@ -1236,6 +1242,11 @@ func (uc *BookingUseCase) CreateInternalBooking(ctx context.Context, booking *do
 	center, err := uc.centerRepo.FindByID(ctx, court.SportCenterID)
 	if err != nil {
 		return fmt.Errorf("sport center not found: %w", err)
+	}
+	if uc.access != nil {
+		if err := uc.access.EnsureBookingAccess(ctx, center, booking.AccessToken, booking.AdminSource); err != nil {
+			return err
+		}
 	}
 
 	loc := domain.GetSantiagoLocation()
