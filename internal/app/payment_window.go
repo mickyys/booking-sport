@@ -126,6 +126,16 @@ func paymentWindowExpiredError(lockEnd, now time.Time) *domain.AppError {
 		details)
 }
 
+// slotConfirmedError es el 409 que ve el usuario cuando el horario ya tiene una
+// reserva confirmada. El código estable permite que el frontend muestre un
+// mensaje claro sin interpretar el texto.
+func slotConfirmedError() *domain.AppError {
+	return domain.NewConflictErrorWithDetails(
+		"este horario ya fue confirmado por otra persona",
+		map[string]any{"code": "slot_confirmed"},
+	)
+}
+
 // holdTTLUntil devuelve el TTL a usar al renovar el bloqueo en el coordinador
 // de ocupación. Si el vencimiento ya pasó usa la ventana por defecto: la
 // confirmación de pago volverá a intentar adquirir el horario.
