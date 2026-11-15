@@ -619,6 +619,8 @@ var memberVerificationFS embed.FS
 var memberVerificationTemplate = template.Must(template.ParseFS(memberVerificationFS, "templates/member_verification.html"))
 
 type memberVerificationTemplateData struct {
+	LogoURL        string
+	HomeURL        string
 	CenterName     string
 	Name           string
 	Code           string
@@ -641,6 +643,8 @@ func (m *MailgunMailer) SendMemberVerificationCode(ctx context.Context, to, name
 
 	var body bytes.Buffer
 	if err := memberVerificationTemplate.Execute(&body, memberVerificationTemplateData{
+		LogoURL:        logoReservaloYA,
+		HomeURL:        frontendHomeURL(),
 		CenterName:     centerName,
 		Name:           name,
 		Code:           code,
@@ -671,6 +675,8 @@ var accessTemplates = template.Must(template.ParseFS(
 ))
 
 type accessEmailData struct {
+	LogoURL        string
+	HomeURL        string
 	Name           string
 	CenterName     string
 	TenantURL      string
@@ -685,6 +691,8 @@ func (m *MailgunMailer) sendAccessTemplate(ctx context.Context, templateName, su
 	if to == "" {
 		return fmt.Errorf("no recipient email for %s", templateName)
 	}
+	data.LogoURL = logoReservaloYA
+	data.HomeURL = frontendHomeURL()
 	if data.Name == "" {
 		data.Name = "solicitante"
 	}
@@ -770,4 +778,12 @@ func (m *MailgunMailer) SendAccessVerificationCode(ctx context.Context, to, name
 			ExpiresMinutes: expiresMinutes,
 		},
 	)
+}
+
+func frontendHomeURL() string {
+	homeURL := strings.TrimRight(os.Getenv("URL_FRONTEND"), "/")
+	if homeURL == "" {
+		homeURL = "http://localhost:3000"
+	}
+	return homeURL
 }
