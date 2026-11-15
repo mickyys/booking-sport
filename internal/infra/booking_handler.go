@@ -943,7 +943,12 @@ func (h *BookingHandler) CreateMercadoPagoPayment(c *gin.Context) {
 			"error", err,
 		)
 		status := errorStatusCode(err)
-		trackingID := h.errs.Record(c, domain.ErrOpPaymentCreate, err, status, bookingErrorContext(&input.Booking))
+		// Los conflictos (409) son esperables y no generan código de
+		// seguimiento: mostrarlo haría parecer un fallo del servidor.
+		trackingID := ""
+		if status >= http.StatusInternalServerError {
+			trackingID = h.errs.Record(c, domain.ErrOpPaymentCreate, err, status, bookingErrorContext(&input.Booking))
+		}
 		c.JSON(status, errorBody(err, trackingID))
 		return
 	}

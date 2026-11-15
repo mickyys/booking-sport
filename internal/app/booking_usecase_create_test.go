@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +61,19 @@ func assertErrorContains(t *testing.T, err error, substr string) {
 	}
 	if !strings.Contains(err.Error(), substr) {
 		t.Fatalf("expected error containing %q, got %q", substr, err.Error())
+	}
+}
+
+// assertSlotConfirmedCode verifica que el conflicto traiga el código estable
+// que usa el frontend para mostrar el aviso de horario ya reservado.
+func assertSlotConfirmedCode(t *testing.T, err error) {
+	t.Helper()
+	var appErr *domain.AppError
+	if !errors.As(err, &appErr) {
+		t.Fatalf("expected *domain.AppError, got %T", err)
+	}
+	if got := appErr.Details["code"]; got != "slot_confirmed" {
+		t.Fatalf("expected code slot_confirmed, got %v", got)
 	}
 }
 
@@ -220,10 +234,43 @@ func TestCreate_RejectsConfirmedConflict(t *testing.T) {
 		Hour:    10,
 		Date:    time.Now().AddDate(0, 0, 2),
 	})
-	assertErrorContains(t, err, "ya existe una reserva confirmada")
+	assertErrorContains(t, err, "ya fue confirmado")
+	assertSlotConfirmedCode(t, err)
 	if len(bookingRepo.Created) != 0 {
 		t.Errorf("expected no booking to be created, got %d", len(bookingRepo.Created))
 	}
+}
+
+// TestCheckConfirmedIntervalConflict_ReturnsStableCode cubre el caso de carrera
+// del segundo usuario: el solapamiento con una reserva confirmada debe traer el
+// código que usa el frontend para avisar que el horario ya fue reservado.
+func TestCheckConfirmedIntervalConflict_ReturnsStableCode(t *testing.T) {
+	courtID := newObjectID()
+	court := &domain.Court{ID: courtID, SportCenterID: newObjectID(), Name: "Cancha 1"}
+
+	bookingRepo := &mockBookingRepoForCreate{
+		mockBookingRepoForHold: &mockBookingRepoForHold{
+			FindOccupancyFn: func(ctx context.Context, cID primitive.ObjectID, startUTC, endUTC time.Time, exclude *primitive.ObjectID) ([]domain.Booking, error) {
+				return []domain.Booking{{
+					ID:      newObjectID(),
+					CourtID: cID,
+					Status:  domain.BookingStatusConfirmed,
+					EndsAt:  endUTC,
+				}}, nil
+			},
+		},
+	}
+	uc := newCreateBookingUseCase(court, bookingRepo, &mockSlotHoldRepo{})
+
+	err := uc.checkConfirmedIntervalConflict(context.Background(), &domain.Booking{
+		CourtID: courtID,
+		Date:    time.Now().AddDate(0, 0, 2),
+		Hour:    10,
+		Minutes: 0,
+	}, 60)
+
+	assertErrorContains(t, err, "ya fue confirmado")
+	assertSlotConfirmedCode(t, err)
 }
 
 func TestCreateInternalBooking_SetsPresentialPaymentMethod(t *testing.T) {

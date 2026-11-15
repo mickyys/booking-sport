@@ -1165,7 +1165,7 @@ func (uc *BookingUseCase) checkConfirmedIntervalConflict(ctx context.Context, bo
 	for _, b := range conflicts {
 		if b.Status == domain.BookingStatusConfirmed {
 			uc.shadowCompareMongoConflict(ctx, booking)
-			return domain.NewConflictError("ya existe una reserva confirmada que se superpone con este horario")
+			return slotConfirmedError()
 		}
 	}
 	return nil
@@ -1634,7 +1634,7 @@ func (uc *BookingUseCase) Create(ctx context.Context, booking *domain.Booking) e
 	}
 	if conflicting != nil {
 		uc.shadowCompareMongoConflict(ctx, booking)
-		return domain.NewConflictError("ya existe una reserva confirmada para este horario")
+		return slotConfirmedError()
 	}
 
 	activeHold, _ := uc.holdRepo.FindBySlot(ctx, booking.CourtID, booking.Date, booking.Hour, booking.Minutes)
